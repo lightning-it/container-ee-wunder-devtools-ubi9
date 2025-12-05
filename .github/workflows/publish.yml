@@ -1,5 +1,5 @@
 ---
-name: Build and publish container-wunder
+name: Build and publish container-wunder-devtools-ee
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/container-wunder
+          images: ghcr.io/${{ github.repository_owner }}/container-wunder-devtools-ee
           tags: |
             type=ref,event=branch
             type=ref,event=tag
