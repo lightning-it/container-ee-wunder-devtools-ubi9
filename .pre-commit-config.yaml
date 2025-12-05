@@ -1,0 +1,37 @@
+---
+repos:
+  # Basic hygiene hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+
+  # YAML linting (GitHub Actions, evtl. andere YAMLs)
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        files: \.(yml|yaml)$
+
+  # Dockerfile linting via hadolint
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint-docker
+        name: hadolint (Docker)
+        files: ^(Dockerfile|Containerfile)$
+        args:
+          - "--ignore"
+          - "DL3041"
+
+  - repo: local
+    hooks:
+      - id: local-docker-build
+        name: local docker build (container-wunder-devtools-ee)
+        language: system
+        entry: bash -lc 'docker build -t container-wunder-devtools-ee-local .'
+        pass_filenames: false

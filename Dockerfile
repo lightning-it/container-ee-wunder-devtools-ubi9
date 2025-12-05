@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/ubi
+FROM registry.access.redhat.com/ubi9/ubi:9.7
 
 LABEL maintainer="Lightning IT"
 LABEL org.opencontainers.image.title="container-wunder-devtools-ee"
@@ -14,6 +14,7 @@ USER 0
 # Base tools + Python for Ansible
 RUN dnf -y update && \
     dnf -y install \
+      bash \
       git \
       ca-certificates \
       tar \
@@ -28,11 +29,10 @@ RUN dnf -y update && \
 # Ansible & Lint-Tools #
 ########################
 
-# Ansible Core, ansible-lint, yamllint
-RUN pip3 install --no-cache-dir \
-      "ansible-core>=2.16,<2.17" \
-      "ansible-lint>=24.0.0" \
-      "yamllint>=1.35.0"
+COPY requirements.txt /tmp/requirements.txt
+
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && \
+    rm /tmp/requirements.txt
 
 ########################
 # Terraform Toolchain  #
@@ -69,5 +69,5 @@ WORKDIR /workspace
 RUN useradd -m wunder && chown -R wunder /workspace
 USER wunder
 
-# Default entrypoint: shell 
+# Default entrypoint: shell
 ENTRYPOINT ["/bin/bash"]
