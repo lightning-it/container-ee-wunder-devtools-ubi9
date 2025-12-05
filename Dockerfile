@@ -14,14 +14,11 @@ USER 0
 # Base tools + Python for Ansible
 RUN dnf -y update && \
     dnf -y install \
-      bash \
-      curl \
       git \
       ca-certificates \
       tar \
       unzip \
       which \
-      procps-ng \
       python3 \
       python3-pip && \
     dnf clean all && \
