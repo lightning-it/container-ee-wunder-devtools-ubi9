@@ -1,0 +1,14 @@
+# Docker artefacts
+*.log
+*.tmp
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# Python / Node etc. (if you later add scripts)
+__pycache__/
+node_modules/
+dist/
+build/
