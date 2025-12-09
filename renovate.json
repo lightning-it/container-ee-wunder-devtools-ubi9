@@ -68,8 +68,8 @@
     {
       "customType": "regex",
       "description": "Terraform version pins in Dockerfile",
-      "fileMatch": [
-        "Dockerfile"
+      "managerFilePatterns": [
+        "/Dockerfile/"
       ],
       "matchStrings": [
         "TF_VERSION=(?<currentValue>[0-9.]+)"
@@ -81,8 +81,8 @@
     {
       "customType": "regex",
       "description": "TFLint version pins in Dockerfile",
-      "fileMatch": [
-        "Dockerfile"
+      "managerFilePatterns": [
+        "/Dockerfile/"
       ],
       "matchStrings": [
         "TFLINT_VERSION=(?<currentValue>[0-9.]+)"
@@ -93,8 +93,8 @@
     {
       "customType": "regex",
       "description": "terraform-docs version pins in Dockerfile",
-      "fileMatch": [
-        "Dockerfile"
+      "managerFilePatterns": [
+        "/Dockerfile/"
       ],
       "matchStrings": [
         "TF_DOCS_VERSION=(?<currentValue>[0-9.]+)"
