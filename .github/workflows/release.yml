@@ -35,6 +35,8 @@ jobs:
       contents: write       # required to create tags, commits, releases
       issues: write         # optional, for release notes references
       pull-requests: write  # optional, for release notes references
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       # Checkout with full history for semantic-release
       - name: Checkout
@@ -65,6 +67,8 @@ jobs:
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       # Checkout with full history to let semantic-release inspect tags/commits
       - name: Checkout
@@ -85,6 +89,4 @@ jobs:
 
       # Run semantic-release in dry-run mode (no tags, no releases, no commits)
       - name: Run semantic-release (dry run)
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: npx semantic-release --dry-run --no-ci
