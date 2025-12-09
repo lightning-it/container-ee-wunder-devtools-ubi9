@@ -1,44 +1,73 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": [
+    "config:recommended"
+  ],
   "dependencyDashboard": true,
   "timezone": "UTC",
-  "schedule": ["before 6am on monday"],
-  "labels": ["dependencies"],
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
   "packageRules": [
     {
-      "matchManagers": ["dockerfile"],
+      "matchManagers": [
+        "dockerfile"
+      ],
       "groupName": "Base image and Terraform tooling"
     },
     {
-      "matchManagers": ["pip_requirements"],
+      "matchManagers": [
+        "pip_requirements"
+      ],
       "groupName": "Python tools"
     },
     {
-      "matchManagers": ["pip_requirements"],
-      "matchPackageNames": ["ansible-core"],
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "matchPackageNames": [
+        "ansible-core"
+      ],
       "allowedVersions": ">=2.15.13 <2.16.0"
     }
   ],
-  "regexManagers": [
+  "customManagers": [
     {
+      "customType": "regex",
       "description": "Terraform version pins in Dockerfile",
-      "fileMatch": ["Dockerfile"],
-      "matchStrings": ["TF_VERSION=(?<currentValue>[0-9.]+)"],
+      "managerFilePatterns": [
+        "/Dockerfile/"
+      ],
+      "matchStrings": [
+        "TF_VERSION=(?<currentValue>[0-9.]+)"
+      ],
       "datasourceTemplate": "hashicorp",
       "packageNameTemplate": "terraform"
     },
     {
+      "customType": "regex",
       "description": "TFLint version pins in Dockerfile",
-      "fileMatch": ["Dockerfile"],
-      "matchStrings": ["TFLINT_VERSION=(?<currentValue>[0-9.]+)"],
+      "managerFilePatterns": [
+        "/Dockerfile/"
+      ],
+      "matchStrings": [
+        "TFLINT_VERSION=(?<currentValue>[0-9.]+)"
+      ],
       "datasourceTemplate": "github-tags",
       "packageNameTemplate": "terraform-linters/tflint"
     },
     {
+      "customType": "regex",
       "description": "terraform-docs version pins in Dockerfile",
-      "fileMatch": ["Dockerfile"],
-      "matchStrings": ["TF_DOCS_VERSION=(?<currentValue>[0-9.]+)"],
+      "managerFilePatterns": [
+        "/Dockerfile/"
+      ],
+      "matchStrings": [
+        "TF_DOCS_VERSION=(?<currentValue>[0-9.]+)"
+      ],
       "datasourceTemplate": "github-tags",
       "packageNameTemplate": "terraform-docs/terraform-docs"
     }
