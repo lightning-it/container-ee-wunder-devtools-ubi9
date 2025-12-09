@@ -37,6 +37,13 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && \
     rm /tmp/requirements.txt
 
+# Node-based tooling (semantic-release, renovate, etc.)
+COPY package.json package-lock.json /tmp/node-src/
+WORKDIR /tmp/node-src
+RUN npm ci && \
+    npm cache clean --force && \
+    rm -rf /tmp/node-src
+
 ########################
 # Terraform Toolchain  #
 ########################
