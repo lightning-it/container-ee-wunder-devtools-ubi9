@@ -54,7 +54,7 @@ jobs:
       # Run semantic-release (real release)
       - name: Run semantic-release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDABOT_TOKEN }}
         run: npx semantic-release
 
   # Dry-run job: checks semantic-release config on pull requests
@@ -86,5 +86,5 @@ jobs:
       # Run semantic-release in dry-run mode (no tags, no releases, no commits)
       - name: Run semantic-release (dry run)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEPENDABOT_TOKEN }}
         run: npx semantic-release --dry-run --no-ci
