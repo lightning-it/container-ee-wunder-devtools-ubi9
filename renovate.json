@@ -8,17 +8,34 @@
   "packageRules": [
     {
       "matchManagers": ["dockerfile"],
-      "groupName": "Base image and Terraform tooling",
-      "matchFilePatterns": ["Dockerfile"],
-      "matchStrings": [
-        "TF_VERSION=(?<currentValue>[0-9.]+)",
-        "TFLINT_VERSION=(?<currentValue>[0-9.]+)",
-        "TF_DOCS_VERSION=(?<currentValue>[0-9.]+)"
-      ]
+      "groupName": "Base image and Terraform tooling"
     },
     {
       "matchManagers": ["pip_requirements"],
       "groupName": "Python tools"
+    }
+  ],
+  "regexManagers": [
+    {
+      "description": "Terraform version pins in Dockerfile",
+      "fileMatch": ["Dockerfile"],
+      "matchStrings": ["TF_VERSION=(?<currentValue>[0-9.]+)"],
+      "datasourceTemplate": "hashicorp",
+      "packageNameTemplate": "terraform"
+    },
+    {
+      "description": "TFLint version pins in Dockerfile",
+      "fileMatch": ["Dockerfile"],
+      "matchStrings": ["TFLINT_VERSION=(?<currentValue>[0-9.]+)"],
+      "datasourceTemplate": "github-tags",
+      "packageNameTemplate": "terraform-linters/tflint"
+    },
+    {
+      "description": "terraform-docs version pins in Dockerfile",
+      "fileMatch": ["Dockerfile"],
+      "matchStrings": ["TF_DOCS_VERSION=(?<currentValue>[0-9.]+)"],
+      "datasourceTemplate": "github-tags",
+      "packageNameTemplate": "terraform-docs/terraform-docs"
     }
   ]
 }

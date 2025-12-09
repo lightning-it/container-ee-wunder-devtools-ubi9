@@ -35,3 +35,16 @@ repos:
         language: system
         entry: bash -lc 'docker build -t container-wunder-devtools-ee-local .'
         pass_filenames: false
+
+  - repo: local
+    hooks:
+      - id: renovate-config-validate
+        name: renovate-config-validator
+        language: system
+        pass_filenames: false
+        files: ^renovate\.json$
+        entry: >
+          bash -lc 'docker run --rm
+          -v "$PWD":/repo -w /repo
+          renovate/renovate:latest
+          renovate-config-validator'

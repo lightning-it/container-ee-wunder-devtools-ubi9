@@ -11,8 +11,9 @@ LABEL org.opencontainers.image.source="https://github.com/lightning-it/container
 
 USER 0
 
-# Base tools + Python for Ansible
+# Base tools + Python for Ansible + Node for renovate validation
 RUN dnf -y update && \
+    dnf -y module enable nodejs:18 && \
     dnf -y install \
       bash \
       git \
@@ -21,7 +22,9 @@ RUN dnf -y update && \
       unzip \
       which \
       python3 \
-      python3-pip && \
+      python3-pip \
+      nodejs \
+      npm && \
     dnf clean all && \
     rm -rf /var/cache/dnf
 
