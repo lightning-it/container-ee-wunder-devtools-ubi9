@@ -1,8 +1,8 @@
-FROM registry.access.redhat.com/ubi9/ubi:9.7
+FROM registry.access.redhat.com/ubi9/ubi:9.7-1764794285
 
 LABEL maintainer="Lightning IT"
 LABEL org.opencontainers.image.title="container-wunder-devtools-ee"
-LABEL org.opencontainers.image.description="Shared development tools container for local and CI workflows (Ansible + Terraform)."
+LABEL org.opencontainers.image.description="Shared development tools container for local and CI workflows."
 LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-wunder-devtools-ee"
 
 ########################

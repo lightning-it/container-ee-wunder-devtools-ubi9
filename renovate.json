@@ -1,6 +1,24 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
+  "extends": ["config:recommended"],
+  "dependencyDashboard": true,
+  "timezone": "UTC",
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "matchManagers": ["dockerfile"],
+      "groupName": "Base image and Terraform tooling",
+      "matchFilePatterns": ["Dockerfile"],
+      "matchStrings": [
+        "TF_VERSION=(?<currentValue>[0-9.]+)",
+        "TFLINT_VERSION=(?<currentValue>[0-9.]+)",
+        "TF_DOCS_VERSION=(?<currentValue>[0-9.]+)"
+      ]
+    },
+    {
+      "matchManagers": ["pip_requirements"],
+      "groupName": "Python tools"
+    }
   ]
 }
