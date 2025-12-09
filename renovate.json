@@ -32,6 +32,36 @@
         "ansible-core"
       ],
       "allowedVersions": ">=2.15.13 <2.16.0"
+    },
+    {
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "matchPackageNames": [
+        "ansible-lint"
+      ],
+      "allowedVersions": "<7"
+    },
+    {
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "matchPackageNames": [
+        "molecule",
+        "molecule-plugins"
+      ],
+      "allowedVersions": "<6.1",
+      "rangeStrategy": "pin"
+    },
+    {
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "matchPackageNames": [
+        "docker"
+      ],
+      "allowedVersions": "^6.1",
+      "rangeStrategy": "pin"
     }
   ],
   "customManagers": [
