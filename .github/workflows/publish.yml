@@ -22,7 +22,7 @@ jobs:
       - name: yamllint
         run: |
           python -m pip install --no-cache-dir yamllint
-          yamllint .github renovate.json
+          yamllint .github
 
   build-and-push:
     runs-on: ubuntu-latest

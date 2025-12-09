@@ -14,8 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       # 1) Checkout repository
       - name: Checkout
@@ -23,7 +21,9 @@ jobs:
 
       # 2) Run yamllint on workflows and renovate
       - name: yamllint
-        run: python -m pip install --no-cache-dir yamllint && yamllint .github renovate.json
+        run: |
+          python -m pip install --no-cache-dir yamllint
+          yamllint .github
 
   # Real release job: only runs on push to main
   release:
@@ -53,16 +53,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Debug tokens
-        run: |
-          echo "GH_TOKEN: ${GH_TOKEN:-<unset>}"
-          echo "GITHUB_TOKEN: ${GITHUB_TOKEN:-<unset>}"
-          env | grep -E 'GITHUB|GH_' || true
-
       # Run semantic-release (real release)
       - name: Run semantic-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.DEPENDABOT_TOKEN }}
         run: npx semantic-release
 
   # Dry-run job: checks semantic-release config on pull requests
@@ -94,5 +86,5 @@ jobs:
       # Run semantic-release in dry-run mode (no tags, no releases, no commits)
       - name: Run semantic-release (dry run)
         env:
-          GITHUB_TOKEN: ${{ secrets.DEPENDABOT_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: npx semantic-release --dry-run --no-ci
