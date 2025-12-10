@@ -74,6 +74,27 @@ RUN curl -sSLo /tmp/terraform-docs.tar.gz \
     && rm /tmp/terraform-docs.tar.gz
 
 ########################
+# Docker CLI + Compose #
+########################
+
+ENV DOCKER_CLI_VERSION=26.1.3
+ENV DOCKER_COMPOSE_VERSION=2.29.2
+
+# Docker CLI
+RUN curl -sSLo /tmp/docker.tgz \
+      "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
+    && tar -xzf /tmp/docker.tgz -C /tmp docker/docker \
+    && mv /tmp/docker/docker /usr/local/bin/docker \
+    && chmod +x /usr/local/bin/docker \
+    && rm -rf /tmp/docker.tgz /tmp/docker
+
+# Docker Compose plugin
+RUN mkdir -p /usr/local/lib/docker/cli-plugins && \
+    curl -sSLo /usr/local/lib/docker/cli-plugins/docker-compose \
+      "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-x86_64" && \
+    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+########################
 # User & Workdir       #
 ########################
 

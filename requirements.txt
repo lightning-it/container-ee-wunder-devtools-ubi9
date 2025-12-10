@@ -1,6 +1,10 @@
 ansible-core==2.15.13
 ansible-lint==6.22.2
 yamllint>=1.35.0
+
+# Molecule + Plugins
 molecule==6.0.3
-molecule-plugins[docker,delegated]==23.5.3
+molecule-plugins[docker]==23.5.3
+
+# Docker-Python-Client (für community.docker usw.)
 docker==6.1.3
