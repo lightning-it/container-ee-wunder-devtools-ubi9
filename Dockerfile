@@ -66,7 +66,7 @@ RUN curl -sSLo /tmp/tflint.zip \
     && rm /tmp/tflint.zip
 
 # terraform-docs
-ENV TF_DOCS_VERSION=0.20.0
+ENV TF_DOCS_VERSION=0.21.0
 RUN curl -sSLo /tmp/terraform-docs.tar.gz \
       "https://github.com/terraform-docs/terraform-docs/releases/download/v${TF_DOCS_VERSION}/terraform-docs-v${TF_DOCS_VERSION}-linux-amd64.tar.gz" \
     && tar -xzf /tmp/terraform-docs.tar.gz -C /usr/local/bin terraform-docs \
