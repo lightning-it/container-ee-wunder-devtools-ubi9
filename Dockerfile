@@ -105,7 +105,8 @@ WORKDIR /workspace
 # Create user + ensure writable HOME + Ansible temp dirs
 RUN useradd -m wunder && \
     mkdir -p /home/wunder/.ansible/tmp /tmp/ansible/tmp && \
-    chown -R wunder:wunder /workspace /home/wunder /tmp/ansible
+    chown -R wunder:wunder /workspace /home/wunder && \
+    chmod 1777 /tmp/ansible /tmp/ansible/tmp
 
 # Ensure Ansible uses writable locations
 ENV HOME=/home/wunder
