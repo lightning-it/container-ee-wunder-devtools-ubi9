@@ -14,3 +14,6 @@ docker==6.1.3
 # requests 2.32.x can cause "Not supported URL scheme http+docker"
 # → explicitly pin to 2.31.0 for stable behavior.
 requests==2.31.0
+
+# Ansible community.vmware collection dependency
+pyvmomi==9.0.0.0
