@@ -103,5 +103,5 @@ WORKDIR /workspace
 RUN useradd -m wunder && chown -R wunder /workspace
 USER wunder
 
-# Default entrypoint: shell
-ENTRYPOINT ["/bin/bash"]
+# Default
+CMD ["/bin/bash"]
