@@ -42,8 +42,10 @@ WORKDIR /opt/devtools
 COPY package.json package-lock.json ./
 RUN npm ci && \
     npm cache clean --force
+
 # Expose renovate CLI in PATH for convenience
 RUN ln -sf /opt/devtools/node_modules/.bin/renovate /usr/local/bin/renovate
+
 # Make npm-installed CLIs available in PATH
 ENV PATH="/opt/devtools/node_modules/.bin:${PATH}"
 
@@ -100,7 +102,16 @@ RUN mkdir -p /usr/local/lib/docker/cli-plugins && \
 
 WORKDIR /workspace
 
-RUN useradd -m wunder && chown -R wunder /workspace
+# Create user + ensure writable HOME + Ansible temp dirs
+RUN useradd -m wunder && \
+    mkdir -p /home/wunder/.ansible/tmp /tmp/ansible/tmp && \
+    chown -R wunder:wunder /workspace /home/wunder /tmp/ansible
+
+# Ensure Ansible uses writable locations
+ENV HOME=/home/wunder
+ENV ANSIBLE_LOCAL_TEMP=/tmp/ansible/tmp
+ENV ANSIBLE_REMOTE_TEMP=/tmp/ansible/tmp
+
 USER wunder
 
 # Default
