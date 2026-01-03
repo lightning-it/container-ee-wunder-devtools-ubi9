@@ -1,0 +1,96 @@
+# yamllint disable rule:truthy
+---
+name: Container Build & Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & push image to Quay.io
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY: quay.io
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate Quay variables/secrets
+        shell: bash
+        env:
+          QUAY_NAMESPACE: ${{ vars.QUAY_NAMESPACE }}
+          QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+          QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          fail=0
+
+          if [ -z "${QUAY_NAMESPACE:-}" ]; then
+            echo "::error::Missing required org/repo variable: vars.QUAY_NAMESPACE"
+            fail=1
+          fi
+
+          if [ -z "${QUAY_USERNAME:-}" ]; then
+            echo "::error::Missing required secret: secrets.QUAY_USERNAME"
+            fail=1
+          fi
+
+          if [ -z "${QUAY_PASSWORD:-}" ]; then
+            echo "::error::Missing required secret: secrets.QUAY_PASSWORD"
+            fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo "Quay configuration present (namespace + credentials)."
+
+      - name: Compute image name + tag (strip "container-" prefix)
+        shell: bash
+        env:
+          QUAY_NAMESPACE: ${{ vars.QUAY_NAMESPACE }}
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY#*/}"
+          image_repo="${repo#container-}"
+
+          # Always use vars.QUAY_NAMESPACE (validated above)
+          image_name="${REGISTRY}/${QUAY_NAMESPACE}/${image_repo}"
+          tag="${{ github.event.release.tag_name }}"
+
+          echo "IMAGE_NAME=${image_name}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${tag}" >> "$GITHUB_ENV"
+
+          echo "Using IMAGE_NAME=${image_name}"
+          echo "Using RELEASE_TAG=${tag}"
+
+      - name: Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Quay.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Build and push image (amd64 + arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
+            ${{ env.IMAGE_NAME }}:latest

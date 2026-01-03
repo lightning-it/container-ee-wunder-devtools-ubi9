@@ -1,6 +1,8 @@
 ---
 repos:
+  # -------------------------------------------------------------------
   # Basic hygiene hooks
+  # -------------------------------------------------------------------
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
@@ -10,40 +12,101 @@ repos:
       - id: check-added-large-files
       - id: check-merge-conflict
 
-  # YAML linting (GitHub Actions, evtl. andere YAMLs)
+  # -------------------------------------------------------------------
+  # yamllint (via wunder-devtools-ee)
+  # -------------------------------------------------------------------
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.35.1
     hooks:
       - id: yamllint
         files: \.(yml|yaml)$
 
-  # Dockerfile linting via hadolint
+  # -------------------------------------------------------------------
+  # hadolint (Dockerfile/Containerfile)
+  # -------------------------------------------------------------------
   - repo: https://github.com/hadolint/hadolint
     rev: v2.12.0
     hooks:
       - id: hadolint-docker
-        name: hadolint (Docker)
+        name: hadolint (Dockerfile/Containerfile)
         files: ^(Dockerfile|Containerfile)$
         args:
           - "--ignore"
           - "DL3041"
 
+  # -------------------------------------------------------------------
+  # actionlint (GitHub Actions workflows)
+  # -------------------------------------------------------------------
   - repo: local
     hooks:
-      - id: local-docker-build
-        name: local docker build (container-wunder-devtools-ee)
+      - id: actionlint
+        name: actionlint (GitHub Actions)
         language: system
-        entry: bash -lc 'docker build -t container-wunder-devtools-ee-local .'
         pass_filenames: false
+        files: ^\.github/workflows/.*\.ya?ml$
+        entry: >-
+          bash -lc 'docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest'
 
+  # -------------------------------------------------------------------
+  # container build (only when build inputs changed)
+  # -------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: container-build
+        name: container build (local)
+        language: system
+        pass_filenames: false
+        files: ^(Dockerfile|Containerfile|\.dockerignore|requirements\.txt|package\.json|package-lock\.json)$
+        entry: >-
+          bash -lc '
+            set -euo pipefail
+            IMAGE="local/${PWD##*/}:precommit"
+
+            if docker buildx version >/dev/null 2>&1; then
+              echo "Using buildx..."
+              docker buildx build --load -t "$IMAGE" -f Dockerfile .
+            else
+              echo "Using docker build..."
+              docker build -t "$IMAGE" -f Dockerfile .
+            fi
+
+            echo "Built $IMAGE"
+          '
+
+  # -------------------------------------------------------------------
+  # container smoke test (catches missing tools early)
+  # -------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: container-smoke
+        name: container smoke test (ansible/cli)
+        language: system
+        pass_filenames: false
+        files: ^(Dockerfile|Containerfile|\.dockerignore|requirements\.txt|package\.json|package-lock\.json)$
+        entry: >-
+          bash -lc '
+            set -euo pipefail
+            IMAGE="local/${PWD##*/}:precommit"
+
+            if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+              docker build -t "$IMAGE" -f Dockerfile .
+            fi
+
+            docker run --rm "$IMAGE" bash -lc "ansible --version"
+            docker run --rm "$IMAGE" bash -lc "ansible-galaxy --version"
+          '
+
+  # -------------------------------------------------------------------
+  # renovate config linting (renovate-config-validator)
+  # -------------------------------------------------------------------
   - repo: local
     hooks:
       - id: renovate-config-validate
-        name: renovate-config-validator
+        name: renovate config linting (renovate-config-validator)
         language: system
         pass_filenames: false
-        files: ^renovate\.json$
-        entry: >
+        files: ^renovate(\.json|-container\.json)$
+        entry: >-
           bash -lc 'docker run --rm
           -v "$PWD":/repo -w /repo
           renovate/renovate:latest
