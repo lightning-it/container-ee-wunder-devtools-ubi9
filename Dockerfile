@@ -54,7 +54,7 @@ ENV PATH="/opt/devtools/node_modules/.bin:${PATH}"
 ########################
 
 # Terraform
-ENV TF_VERSION=1.6.6
+ENV TF_VERSION=1.14.3
 RUN curl -sSLo /tmp/terraform.zip \
       "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip" \
     && unzip /tmp/terraform.zip -d /usr/local/bin \
