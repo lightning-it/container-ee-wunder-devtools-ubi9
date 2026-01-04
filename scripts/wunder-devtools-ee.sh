@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="${WUNDER_DEVTOOLS_EE_IMAGE:-ghcr.io/lightning-it/wunder-devtools-ee:v1.1.7}"
+IMAGE="quay.io/l-it/wunder-devtools-ee:v1.1.8"
 CONTAINER_HOME="${CONTAINER_HOME:-/tmp/wunder}"
 HOST_HOME_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/wunder-devtools-ee/home"
 
@@ -74,7 +74,7 @@ fi
 docker run --rm \
   --entrypoint "" \
   "${DOCKER_ARGS[@]}" \
-  ${ANSIBLE_COLLECTIONS_PATHS:+-e ANSIBLE_COLLECTIONS_PATHS} \
+  ${ANSIBLE_COLLECTIONS_PATH:+-e ANSIBLE_COLLECTIONS_PATH} \
   ${ANSIBLE_ROLES_PATH:+-e ANSIBLE_ROLES_PATH} \
   ${ANSIBLE_CORE_VERSION:+-e ANSIBLE_CORE_VERSION} \
   ${ANSIBLE_LINT_VERSION:+-e ANSIBLE_LINT_VERSION} \
