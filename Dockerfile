@@ -1,119 +1,111 @@
-FROM registry.access.redhat.com/ubi9/ubi:9.7-1766364927
+FROM registry.access.redhat.com/ubi9/python-311@sha256:5d65a1eaea4728d261c4766bd5b37713f539774eb0484b888610553b71c0d8c8 AS tools
 
 LABEL maintainer="Lightning IT"
-LABEL org.opencontainers.image.title="container-wunder-devtools-ee"
-LABEL org.opencontainers.image.description="Shared development tools container for local and CI workflows."
+LABEL org.opencontainers.image.title="wunder-devtools-ee"
+LABEL org.opencontainers.image.description="Devtools Execution Environment (UBI 9) for Wunder automation: ansible-lint, yamllint, molecule (docker), and supporting CLI tooling for local + CI workflows."
 LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-wunder-devtools-ee"
 
-########################
-# Base tools & Python  #
-########################
+ARG TARGETARCH
+ARG TF_VERSION=1.14.3
+ARG TFLINT_VERSION=0.60.0
+ARG TF_DOCS_VERSION=0.21.0
+ARG DOCKER_CLI_VERSION=26.1.3
+ARG DOCKER_COMPOSE_VERSION=2.29.2
 
+# hadolint ignore=DL3002
 USER 0
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Base tools + Python for Ansible + Node for renovate validation
 RUN dnf -y update && \
-    dnf -y module enable nodejs:20 && \
-    dnf -y install \
-      bash \
-      git \
-      ca-certificates \
-      tar \
-      unzip \
-      which \
-      python3 \
-      python3-pip \
-      nodejs \
-      npm && \
-    dnf clean all && \
-    rm -rf /var/cache/dnf
+    dnf -y install --allowerasing ca-certificates curl unzip tar && \
+    dnf clean all && rm -rf /var/cache/yum
 
-########################
-# Ansible & Lint-Tools #
-########################
-
-COPY requirements.txt /tmp/requirements.txt
-
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && \
-    rm /tmp/requirements.txt
-
-# Node-based tooling (semantic-release, renovate, etc.)
-WORKDIR /opt/devtools
-COPY package.json package-lock.json ./
-RUN npm ci && \
-    npm cache clean --force
-
-# Expose renovate CLI in PATH for convenience
-RUN ln -sf /opt/devtools/node_modules/.bin/renovate /usr/local/bin/renovate
-
-# Make npm-installed CLIs available in PATH
-ENV PATH="/opt/devtools/node_modules/.bin:${PATH}"
-
-########################
-# Terraform Toolchain  #
-########################
+# Map docker arch naming
+RUN case "${TARGETARCH}" in \
+      amd64)  export ARCH=amd64   DOCKER_ARCH=x86_64  ;; \
+      arm64)  export ARCH=arm64   DOCKER_ARCH=aarch64 ;; \
+      *) echo "Unsupported TARGETARCH=${TARGETARCH}" && exit 1 ;; \
+    esac && \
+    echo "ARCH=${ARCH} DOCKER_ARCH=${DOCKER_ARCH}" > /tmp/arch.env
 
 # Terraform
-ENV TF_VERSION=1.14.3
-RUN curl -sSLo /tmp/terraform.zip \
-      "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip" \
-    && unzip /tmp/terraform.zip -d /usr/local/bin \
-    && rm /tmp/terraform.zip
+RUN source /tmp/arch.env && \
+    curl -fsSLo /tmp/terraform.zip \
+      "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${ARCH}.zip" && \
+    unzip -q /tmp/terraform.zip -d /usr/local/bin && \
+    rm -f /tmp/terraform.zip
 
 # TFLint
-ENV TFLINT_VERSION=0.60.0
-RUN curl -sSLo /tmp/tflint.zip \
-      "https://github.com/terraform-linters/tflint/releases/download/v${TFLINT_VERSION}/tflint_linux_amd64.zip" \
-    && unzip /tmp/tflint.zip -d /usr/local/bin \
-    && rm /tmp/tflint.zip
+RUN source /tmp/arch.env && \
+    curl -fsSLo /tmp/tflint.zip \
+      "https://github.com/terraform-linters/tflint/releases/download/v${TFLINT_VERSION}/tflint_linux_${ARCH}.zip" && \
+    unzip -q /tmp/tflint.zip -d /usr/local/bin && \
+    rm -f /tmp/tflint.zip
 
 # terraform-docs
-ENV TF_DOCS_VERSION=0.21.0
-RUN curl -sSLo /tmp/terraform-docs.tar.gz \
-      "https://github.com/terraform-docs/terraform-docs/releases/download/v${TF_DOCS_VERSION}/terraform-docs-v${TF_DOCS_VERSION}-linux-amd64.tar.gz" \
-    && tar -xzf /tmp/terraform-docs.tar.gz -C /usr/local/bin terraform-docs \
-    && chmod +x /usr/local/bin/terraform-docs \
-    && rm /tmp/terraform-docs.tar.gz
+RUN source /tmp/arch.env && \
+    curl -fsSLo /tmp/terraform-docs.tar.gz \
+      "https://github.com/terraform-docs/terraform-docs/releases/download/v${TF_DOCS_VERSION}/terraform-docs-v${TF_DOCS_VERSION}-linux-${ARCH}.tar.gz" && \
+    tar -xzf /tmp/terraform-docs.tar.gz -C /usr/local/bin terraform-docs && \
+    chmod +x /usr/local/bin/terraform-docs && \
+    rm -f /tmp/terraform-docs.tar.gz
 
-########################
-# Docker CLI + Compose #
-########################
-
-ENV DOCKER_CLI_VERSION=26.1.3
-ENV DOCKER_COMPOSE_VERSION=2.29.2
-
-# Docker CLI
-RUN curl -sSLo /tmp/docker.tgz \
-      "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
-    && tar -xzf /tmp/docker.tgz -C /tmp docker/docker \
-    && mv /tmp/docker/docker /usr/local/bin/docker \
-    && chmod +x /usr/local/bin/docker \
-    && rm -rf /tmp/docker.tgz /tmp/docker
-
-# Docker Compose plugin
-RUN mkdir -p /usr/local/lib/docker/cli-plugins && \
-    curl -sSLo /usr/local/lib/docker/cli-plugins/docker-compose \
-      "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-x86_64" && \
+# Docker CLI + Compose plugin
+RUN source /tmp/arch.env && \
+    curl -fsSLo /tmp/docker.tgz \
+      "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz" && \
+    tar -xzf /tmp/docker.tgz -C /tmp docker/docker && \
+    mv /tmp/docker/docker /usr/local/bin/docker && \
+    chmod +x /usr/local/bin/docker && \
+    rm -rf /tmp/docker.tgz /tmp/docker && \
+    mkdir -p /usr/local/lib/docker/cli-plugins && \
+    curl -fsSLo /usr/local/lib/docker/cli-plugins/docker-compose \
+      "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${DOCKER_ARCH}" && \
     chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-########################
-# User & Workdir       #
-########################
+
+FROM registry.access.redhat.com/ubi9/python-311@sha256:5d65a1eaea4728d261c4766bd5b37713f539774eb0484b888610553b71c0d8c8
+
+LABEL maintainer="Lightning IT"
+LABEL org.opencontainers.image.title="ee-wunder-ansible-ubi9"
+LABEL org.opencontainers.image.description="Ansible Execution Environment (UBI 9) for Wunder automation."
+LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-ee-wunder-ansible-ubi9"
+
+ARG ANSIBLE_CORE_VERSION=2.18.12
+ARG PIP_VERSION=25.3
+
+USER 0
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Base tools you *actually* need at runtime
+RUN dnf -y update && \
+    dnf -y install --allowerasing \
+      bash git openssh-clients rsync which findutils ca-certificates && \
+    dnf clean all && rm -rf /var/cache/yum
+
+# Copy toolchain from builder (no curl/unzip in final image)
+COPY --from=tools /usr/local/bin/terraform /usr/local/bin/terraform
+COPY --from=tools /usr/local/bin/tflint /usr/local/bin/tflint
+COPY --from=tools /usr/local/bin/terraform-docs /usr/local/bin/terraform-docs
+COPY --from=tools /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=tools /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+
+# Python deps: this *is* the right place for pip
+COPY requirements.txt /tmp/requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
+    python -m pip install --no-cache-dir -r /tmp/requirements.txt && \
+    rm -f /tmp/requirements.txt && \
+    ansible --version && ansible-galaxy --version
 
 WORKDIR /workspace
-
-# Create user + ensure writable HOME + Ansible temp dirs
 RUN useradd -m wunder && \
     mkdir -p /home/wunder/.ansible/tmp /tmp/ansible/tmp && \
     chown -R wunder:wunder /workspace /home/wunder && \
     chmod 1777 /tmp/ansible /tmp/ansible/tmp
 
-# Ensure Ansible uses writable locations
-ENV HOME=/home/wunder
-ENV ANSIBLE_LOCAL_TEMP=/tmp/ansible/tmp
-ENV ANSIBLE_REMOTE_TEMP=/tmp/ansible/tmp
+ENV HOME=/home/wunder \
+    ANSIBLE_LOCAL_TEMP=/tmp/ansible/tmp \
+    ANSIBLE_REMOTE_TEMP=/tmp/ansible/tmp
 
 USER wunder
-
-# Default
 CMD ["/bin/bash"]
