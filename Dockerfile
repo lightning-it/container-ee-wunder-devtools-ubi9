@@ -1,9 +1,9 @@
 FROM registry.access.redhat.com/ubi9/python-311@sha256:1f731d98ef65bf4c68875cc8908d750eed27ceac1fb5fc2fb969f7f2a0baee6d AS tools
 
 LABEL maintainer="Lightning IT"
-LABEL org.opencontainers.image.title="container-ee-wunder-devtools-ubi9"
+LABEL org.opencontainers.image.title="ee-wunder-devtools-ubi9"
 LABEL org.opencontainers.image.description="Devtools Execution Environment (UBI 9) for Wunder automation: ansible-lint, yamllint, molecule (docker), and supporting CLI tooling for local + CI workflows."
-LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-container-ee-wunder-devtools-ubi9"
+LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-ee-wunder-devtools-ubi9"
 
 ARG TARGETARCH
 ARG TF_VERSION=1.14.3
