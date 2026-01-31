@@ -52,14 +52,13 @@ RUN source /tmp/arch.env && \
 
 # Docker CLI + Compose plugin
 RUN source /tmp/arch.env && \
-    curl -fsSLo /tmp/docker.tgz \
+    curl -fsSL --retry 5 --retry-connrefused --retry-delay 2 -o /tmp/docker.tgz \
       "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz" && \
-    tar -xzf /tmp/docker.tgz -C /tmp docker/docker && \
-    mv /tmp/docker/docker /usr/local/bin/docker && \
-    chmod +x /usr/local/bin/docker && \
+    tar -xzf /tmp/docker.tgz -C /tmp && \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker && \
     rm -rf /tmp/docker.tgz /tmp/docker && \
     mkdir -p /usr/local/lib/docker/cli-plugins && \
-    curl -fsSLo /usr/local/lib/docker/cli-plugins/docker-compose \
+    curl -fsSL --retry 5 --retry-connrefused --retry-delay 2 -o /usr/local/lib/docker/cli-plugins/docker-compose \
       "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${DOCKER_ARCH}" && \
     chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
