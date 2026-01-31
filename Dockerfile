@@ -9,15 +9,15 @@ ARG TARGETARCH
 ARG TF_VERSION=1.14.3
 ARG TFLINT_VERSION=0.60.0
 ARG TF_DOCS_VERSION=0.21.0
-ARG DOCKER_CLI_VERSION=26.1.3
-ARG DOCKER_COMPOSE_VERSION=2.29.2
 
 # hadolint ignore=DL3002
 USER 0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN dnf -y update && \
-    dnf -y install --allowerasing ca-certificates curl unzip tar && \
+    dnf -y install --allowerasing ca-certificates curl unzip tar dnf-plugins-core && \
+    curl -fsSL https://download.docker.com/linux/centos/docker-ce.repo -o /etc/yum.repos.d/docker-ce.repo && \
+    dnf -y install docker-ce-cli docker-compose-plugin && \
     dnf clean all && rm -rf /var/cache/yum
 
 # Map docker arch naming
@@ -50,18 +50,16 @@ RUN source /tmp/arch.env && \
     chmod +x /usr/local/bin/terraform-docs && \
     rm -f /tmp/terraform-docs.tar.gz
 
-# Docker CLI + Compose plugin
-RUN source /tmp/arch.env && \
-    curl -fsSL --retry 5 --retry-connrefused --retry-delay 2 -o /tmp/docker.tgz \
-      "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz" && \
-    tar -xzf /tmp/docker.tgz -C /tmp && \
-    install -m 0755 /tmp/docker/docker /usr/local/bin/docker && \
-    rm -rf /tmp/docker.tgz /tmp/docker && \
+# Docker CLI + Compose plugin (from Docker repo)
+RUN install -m 0755 /usr/bin/docker /usr/local/bin/docker && \
     mkdir -p /usr/local/lib/docker/cli-plugins && \
-    curl -fsSL --retry 5 --retry-connrefused --retry-delay 2 -o /usr/local/lib/docker/cli-plugins/docker-compose \
-      "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${DOCKER_ARCH}" && \
-    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-
+    if [ -x /usr/libexec/docker/cli-plugins/docker-compose ]; then \
+      install -m 0755 /usr/libexec/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose; \
+    elif [ -x /usr/lib/docker/cli-plugins/docker-compose ]; then \
+      install -m 0755 /usr/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose; \
+    else \
+      echo "docker-compose plugin not found" >&2; exit 1; \
+    fi
 
 FROM registry.access.redhat.com/ubi9/python-311@sha256:1f731d98ef65bf4c68875cc8908d750eed27ceac1fb5fc2fb969f7f2a0baee6d
 
