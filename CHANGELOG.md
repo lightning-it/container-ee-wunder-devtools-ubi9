@@ -1,3 +1,9 @@
+## [1.2.6](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.2.5...v1.2.6) (2026-01-31)
+
+### Bug Fixes
+
+* update image title and source in Dockerfile for consistency; update image version in script ([#63](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/63)) ([8d9fd52](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/8d9fd5209545f02c39288ec37a21773a9811dece))
+
 ## [1.2.5](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.2.4...v1.2.5) (2026-01-31)
 
 ### Bug Fixes
