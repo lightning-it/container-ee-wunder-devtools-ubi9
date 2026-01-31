@@ -1,3 +1,17 @@
+## [1.2.2](https://github.com/lightning-it/container-wunder-devtools-ee/compare/v1.2.1...v1.2.2) (2026-01-31)
+
+### Bug Fixes
+
+* new release ([#58](https://github.com/lightning-it/container-wunder-devtools-ee/issues/58)) ([d93b84e](https://github.com/lightning-it/container-wunder-devtools-ee/commit/d93b84e1912bf0b970b10f357bcb4ecae7cfd3ed))
+
+## [1.2.1](https://github.com/lightning-it/container-wunder-devtools-ee/compare/v1.2.0...v1.2.1) (2026-01-31)
+
+### Bug Fixes
+
+* new release ([#56](https://github.com/lightning-it/container-wunder-devtools-ee/issues/56)) ([80436bb](https://github.com/lightning-it/container-wunder-devtools-ee/commit/80436bbb6265ebe07d569e1f53e9e9e0bf4f9c79))
+* new release ([#57](https://github.com/lightning-it/container-wunder-devtools-ee/issues/57)) ([8f33cb0](https://github.com/lightning-it/container-wunder-devtools-ee/commit/8f33cb0f742d7396eca4ce8addd93e47d07ca7d5))
+* streamline Docker command formatting in README ([#55](https://github.com/lightning-it/container-wunder-devtools-ee/issues/55)) ([7452110](https://github.com/lightning-it/container-wunder-devtools-ee/commit/7452110f14535916a1ee17383d9d1a80be1d0bea))
+
 ## [1.2.0](https://github.com/lightning-it/container-wunder-devtools-ee/compare/v1.1.8...v1.2.0) (2026-01-04)
 
 ### Features

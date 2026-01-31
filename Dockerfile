@@ -50,16 +50,18 @@ RUN source /tmp/arch.env && \
     chmod +x /usr/local/bin/terraform-docs && \
     rm -f /tmp/terraform-docs.tar.gz
 
-# Docker CLI + Compose plugin (from Docker repo)
-RUN install -m 0755 /usr/bin/docker /usr/local/bin/docker && \
+# Docker CLI + Compose plugin
+RUN source /tmp/arch.env && \
+    curl -fsSL --retry 5 --retry-connrefused --retry-delay 2 -o /tmp/docker.tgz \
+      "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz" && \
+    tar -xzf /tmp/docker.tgz -C /tmp && \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker && \
+    rm -rf /tmp/docker.tgz /tmp/docker && \
     mkdir -p /usr/local/lib/docker/cli-plugins && \
-    if [ -x /usr/libexec/docker/cli-plugins/docker-compose ]; then \
-      install -m 0755 /usr/libexec/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose; \
-    elif [ -x /usr/lib/docker/cli-plugins/docker-compose ]; then \
-      install -m 0755 /usr/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose; \
-    else \
-      echo "docker-compose plugin not found" >&2; exit 1; \
-    fi
+    curl -fsSL --retry 5 --retry-connrefused --retry-delay 2 -o /usr/local/lib/docker/cli-plugins/docker-compose \
+      "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${DOCKER_ARCH}" && \
+    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
 
 FROM registry.access.redhat.com/ubi9/python-311@sha256:1f731d98ef65bf4c68875cc8908d750eed27ceac1fb5fc2fb969f7f2a0baee6d
 
