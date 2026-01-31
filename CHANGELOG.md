@@ -1,3 +1,9 @@
+## [1.2.2](https://github.com/lightning-it/container-wunder-devtools-ee/compare/v1.2.1...v1.2.2) (2026-01-31)
+
+### Bug Fixes
+
+* new release ([#58](https://github.com/lightning-it/container-wunder-devtools-ee/issues/58)) ([d93b84e](https://github.com/lightning-it/container-wunder-devtools-ee/commit/d93b84e1912bf0b970b10f357bcb4ecae7cfd3ed))
+
 ## [1.2.1](https://github.com/lightning-it/container-wunder-devtools-ee/compare/v1.2.0...v1.2.1) (2026-01-31)
 
 ### Bug Fixes
