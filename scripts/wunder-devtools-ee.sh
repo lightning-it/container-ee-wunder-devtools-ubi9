@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LOCAL_IMAGE="local/${PWD##*/}:precommit"
-DEFAULT_IMAGE="quay.io/${WUNDER_DEVTOOLS_REGISTRY_NAMESPACE:-l-it}/wunder-devtools-ee:latest"
-IMAGE="${WUNDER_DEVTOOLS_IMAGE:-}"
-
-if [ -z "$IMAGE" ]; then
-  if docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1; then
-    IMAGE="$LOCAL_IMAGE"
-  else
-    IMAGE="$DEFAULT_IMAGE"
-  fi
-fi
+IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.2.6"
 CONTAINER_HOME="${CONTAINER_HOME:-/tmp/wunder}"
 HOST_HOME_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/wunder-devtools-ee/home"
 
