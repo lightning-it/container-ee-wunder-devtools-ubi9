@@ -43,31 +43,31 @@ Use it as a stable execution environment for:
 ### Start an interactive shell
 
 ```bash
-docker run --rm -it   -v "$PWD":/workspace   -w /workspace   quay.io/l-it/container-wunder-devtools-ee:main
+docker run --rm -it -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main
 ```
 
 ### Run Ansible commands
 
 ```bash
-docker run --rm   -v "$PWD":/workspace   -w /workspace   quay.io/l-it/container-wunder-devtools-ee:main   ansible-lint
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main ansible-lint
 ```
 
 ```bash
-docker run --rm   -v "$PWD":/workspace   -w /workspace   quay.io/l-it/container-wunder-devtools-ee:main   ansible-playbook -i inventories/dev/hosts.yml playbooks/site.yml
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main ansible-playbook -i inventories/dev/hosts.yml playbooks/site.yml
 ```
 
 ### Run Terraform tooling
 
 ```bash
-docker run --rm   -v "$PWD":/workspace   -w /workspace   quay.io/l-it/container-wunder-devtools-ee:main   terraform fmt -recursive
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main terraform fmt -recursive
 ```
 
 ```bash
-docker run --rm   -v "$PWD":/workspace   -w /workspace   quay.io/l-it/container-wunder-devtools-ee:main   tflint --recursive
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main tflint --recursive
 ```
 
 ```bash
-docker run --rm   -v "$PWD":/workspace   -w /workspace   quay.io/l-it/container-wunder-devtools-ee:main   terraform-docs markdown table --output-file README.md --output-mode replace .
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main terraform-docs markdown table --output-file README.md --output-mode replace .
 ```
 
 ---
