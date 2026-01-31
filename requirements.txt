@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Python requirements for wunder-devtools-ee
+# Python requirements for container-ee-wunder-devtools-ubi9
 #
 # Purpose:
 # - Run collection CI tooling inside a container:
