@@ -1,3 +1,9 @@
+## [1.2.4](https://github.com/lightning-it/container-wunder-devtools-ee/compare/v1.2.3...v1.2.4) (2026-01-31)
+
+### Bug Fixes
+
+* update ansible-core to version 2.18.13 for reproducibility ([#61](https://github.com/lightning-it/container-wunder-devtools-ee/issues/61)) ([cd6906b](https://github.com/lightning-it/container-wunder-devtools-ee/commit/cd6906b192eb448201d1be4c53c308fda387a381))
+
 ## [1.2.3](https://github.com/lightning-it/container-wunder-devtools-ee/compare/v1.2.2...v1.2.3) (2026-01-31)
 
 ### Bug Fixes
