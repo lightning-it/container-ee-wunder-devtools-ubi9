@@ -9,15 +9,15 @@ ARG TARGETARCH
 ARG TF_VERSION=1.14.3
 ARG TFLINT_VERSION=0.60.0
 ARG TF_DOCS_VERSION=0.21.0
-ARG DOCKER_CLI_VERSION=26.1.3
-ARG DOCKER_COMPOSE_VERSION=2.29.2
 
 # hadolint ignore=DL3002
 USER 0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN dnf -y update && \
-    dnf -y install --allowerasing ca-certificates curl unzip tar && \
+    dnf -y install --allowerasing ca-certificates curl unzip tar dnf-plugins-core && \
+    curl -fsSL https://download.docker.com/linux/centos/docker-ce.repo -o /etc/yum.repos.d/docker-ce.repo && \
+    dnf -y install docker-ce-cli docker-compose-plugin && \
     dnf clean all && rm -rf /var/cache/yum
 
 # Map docker arch naming
