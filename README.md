@@ -1,4 +1,4 @@
-# container-wunder-devtools-ee
+# container-container-ee-wunder-devtools-ubi9
 
 Shared development tools container for local and CI workflows.
 
@@ -19,7 +19,7 @@ Use it as a stable execution environment for:
 - CI pipelines
 - Integration tests (e.g. against local Keycloak containers)
 
-> Image: `quay.io/l-it/container-wunder-devtools-ee:<tag>`
+> Image: `quay.io/l-it/container-container-ee-wunder-devtools-ubi9:<tag>`
 
 ---
 
@@ -43,31 +43,31 @@ Use it as a stable execution environment for:
 ### Start an interactive shell
 
 ```bash
-docker run --rm -it -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main
+docker run --rm -it -v "$PWD":/workspace -w /workspace quay.io/l-it/container-container-ee-wunder-devtools-ubi9:main
 ```
 
 ### Run Ansible commands
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main ansible-lint
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-container-ee-wunder-devtools-ubi9:main ansible-lint
 ```
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main ansible-playbook -i inventories/dev/hosts.yml playbooks/site.yml
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-container-ee-wunder-devtools-ubi9:main ansible-playbook -i inventories/dev/hosts.yml playbooks/site.yml
 ```
 
 ### Run Terraform tooling
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main terraform fmt -recursive
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-container-ee-wunder-devtools-ubi9:main terraform fmt -recursive
 ```
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main tflint --recursive
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-container-ee-wunder-devtools-ubi9:main tflint --recursive
 ```
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-wunder-devtools-ee:main terraform-docs markdown table --output-file README.md --output-mode replace .
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/container-container-ee-wunder-devtools-ubi9:main terraform-docs markdown table --output-file README.md --output-mode replace .
 ```
 
 ---
@@ -80,7 +80,7 @@ In your repositories you can add a small helper script, e.g. `scripts/wunder-dev
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="quay.io/l-it/container-wunder-devtools-ee:main"
+IMAGE="quay.io/l-it/container-container-ee-wunder-devtools-ubi9:main"
 
 docker run --rm \
   --entrypoint "" \
@@ -106,5 +106,5 @@ A typical GitHub Actions workflow builds and publishes the image to GHCR on ever
 push to `main` and for tags starting with `v`. The resulting image is available as:
 
 ```text
-quay.io/l-it/container-wunder-devtools-ee:<tag>
+quay.io/l-it/container-container-ee-wunder-devtools-ubi9:<tag>
 ```
