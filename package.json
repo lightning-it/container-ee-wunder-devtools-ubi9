@@ -1,5 +1,5 @@
 {
-  "packageManager": "npm@11.6.0",
+  "packageManager": "npm@11.10.0",
   "devDependencies": {
     "semantic-release": "^25.0.0",
     "@semantic-release/commit-analyzer": "^13.0.1",
