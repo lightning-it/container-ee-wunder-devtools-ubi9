@@ -1,3 +1,9 @@
+## [1.2.8](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.2.7...v1.2.8) (2026-02-16)
+
+### Bug Fixes
+
+* update repository name in README and requirements files for consistency ([#76](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/76)) ([466cc32](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/466cc3271128b8c47dde3e8a6938ffe4bf82d77a))
+
 ## [1.2.7](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.2.6...v1.2.7) (2026-01-31)
 
 ### Bug Fixes
