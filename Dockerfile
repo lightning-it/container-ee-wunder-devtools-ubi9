@@ -6,7 +6,7 @@ LABEL org.opencontainers.image.description="Devtools Execution Environment (UBI 
 LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-ee-wunder-devtools-ubi9"
 
 ARG TARGETARCH
-ARG TF_VERSION=1.14.3
+ARG TF_VERSION=1.14.5
 ARG TFLINT_VERSION=0.61.0
 ARG TF_DOCS_VERSION=0.21.0
 
