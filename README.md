@@ -12,6 +12,7 @@ development. It is based on **Red Hat UBI 9** and includes:
 - Terraform CLI
 - TFLint
 - terraform-docs
+- Helm CLI
 
 Use it as a stable execution environment for:
 
@@ -35,6 +36,7 @@ Use it as a stable execution environment for:
   - `terraform`
   - `tflint`
   - `terraform-docs`
+  - `helm`
 - Non-root default user (`wunder`)
 - Default working directory `/workspace`
 
@@ -72,6 +74,24 @@ docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtoo
 docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:main terraform-docs markdown table --output-file README.md --output-mode replace .
 ```
 
+### Run Helm commands
+
+Check Helm CLI:
+
+```bash
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:main helm version --short
+```
+
+Run against your local kubeconfig:
+
+```bash
+docker run --rm \
+  -v "$PWD":/workspace -w /workspace \
+  -v "$HOME/.kube:/home/wunder/.kube:Z" \
+  -e KUBECONFIG=/home/wunder/.kube/config \
+  quay.io/l-it/ee-wunder-devtools-ubi9:main helm list -A
+```
+
 ---
 
 ## Example wrapper script
@@ -98,7 +118,7 @@ chmod +x scripts/wunder-devtools-ee.sh
 ```
 
 Then use it in `pre-commit`, Makefiles or CI jobs to run `ansible-lint`, `yamllint`,
-`shellcheck`, `terraform`, `tflint` and `terraform-docs` in a consistent environment.
+`shellcheck`, `terraform`, `tflint`, `terraform-docs` and `helm` in a consistent environment.
 
 ---
 
