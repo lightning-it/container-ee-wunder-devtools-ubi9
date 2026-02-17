@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.2.8...v1.3.0) (2026-02-17)
+
+### Features
+
+* pre commit added ([#79](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/79)) ([fec6b3e](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/fec6b3e5aee77f9a305b39499ce3d6b1761caea1))
+
 ## [1.2.8](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.2.7...v1.2.8) (2026-02-16)
 
 ### Bug Fixes
