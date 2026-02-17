@@ -1,3 +1,9 @@
+## [1.4.0](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.3.1...v1.4.0) (2026-02-17)
+
+### Features
+
+* add Helm CLI support to Dockerfile and update README ([#80](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/80)) ([a1d779b](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/a1d779bf4458a21b719881aeb9eeeac2537dba7f))
+
 ## [1.3.1](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.3.0...v1.3.1) (2026-02-17)
 
 ### Bug Fixes
