@@ -93,7 +93,7 @@ COPY requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --no-cache-dir -r /tmp/requirements.txt && \
     rm -f /tmp/requirements.txt && \
-    ansible --version && ansible-galaxy --version
+    ansible --version && ansible-galaxy --version && shellcheck --version
 
 WORKDIR /workspace
 RUN useradd -m wunder && \
