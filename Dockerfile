@@ -9,6 +9,7 @@ ARG TARGETARCH
 ARG TF_VERSION=1.14.5
 ARG TFLINT_VERSION=0.61.0
 ARG TF_DOCS_VERSION=0.21.0
+ARG HELM_VERSION=3.19.0
 
 # hadolint ignore=DL3002
 USER 0
@@ -50,6 +51,14 @@ RUN source /tmp/arch.env && \
     chmod +x /usr/local/bin/terraform-docs && \
     rm -f /tmp/terraform-docs.tar.gz
 
+# Helm
+RUN source /tmp/arch.env && \
+    curl -fsSLo /tmp/helm.tar.gz \
+      "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz" && \
+    tar -xzf /tmp/helm.tar.gz -C /tmp && \
+    install -m 0755 "/tmp/linux-${ARCH}/helm" /usr/local/bin/helm && \
+    rm -rf /tmp/helm.tar.gz "/tmp/linux-${ARCH}"
+
 # Docker CLI + Compose plugin (from docker-ce packages)
 RUN install -m 0755 /usr/bin/docker /usr/local/bin/docker && \
     mkdir -p /usr/local/lib/docker/cli-plugins && \
@@ -85,6 +94,7 @@ RUN dnf -y update && \
 COPY --from=tools /usr/local/bin/terraform /usr/local/bin/terraform
 COPY --from=tools /usr/local/bin/tflint /usr/local/bin/tflint
 COPY --from=tools /usr/local/bin/terraform-docs /usr/local/bin/terraform-docs
+COPY --from=tools /usr/local/bin/helm /usr/local/bin/helm
 COPY --from=tools /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=tools /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 
@@ -93,7 +103,7 @@ COPY requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --no-cache-dir -r /tmp/requirements.txt && \
     rm -f /tmp/requirements.txt && \
-    ansible --version && ansible-galaxy --version && shellcheck --version
+    ansible --version && ansible-galaxy --version && shellcheck --version && helm version --short
 
 WORKDIR /workspace
 RUN useradd -m wunder && \
