@@ -1,3 +1,9 @@
+## [1.5.0](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.4.0...v1.5.0) (2026-02-20)
+
+### Features
+
+* add COPR CLI support and update documentation ([#82](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/82)) ([3515b97](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/3515b9767bd926cef21fba4e4555da60585ddcea))
+
 ## [1.4.0](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.3.1...v1.4.0) (2026-02-17)
 
 ### Features
