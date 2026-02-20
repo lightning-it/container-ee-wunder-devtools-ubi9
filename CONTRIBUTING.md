@@ -84,7 +84,7 @@ docker buildx build -t ee-wunder-toolbox-ubi9:local .
 Podman:
 
 ```bash
-podman build --format docker -t ee-wunder-toolbox-ubi9:local .
+podman build --format docker -t ee-wunder-ansible-ubi9:local .
 ```
 
 ### Smoke test
