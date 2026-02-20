@@ -132,7 +132,7 @@ podman run --rm -it \
   --userns keep-id \
   -v "$(git rev-parse --show-toplevel):/workspace:Z" -w /workspace \
   -v "$HOME/.config/copr:/home/wunder/.config/copr:ro,Z" \
-  -e COPR_OWNER=lit-modulix \
+  -e COPR_OWNER=litroc \
   -e COPR_PROJECT=modulix \
   -e COPR_PACKAGE=modulix-scripts \
   quay.io/l-it/ee-wunder-devtools-ubi9:latest \
