@@ -78,13 +78,13 @@ pre-commit run --all-files
 Docker (recommended with buildx):
 
 ```bash
-docker buildx build -t ee-wunder-ansible-ubi9:local .
+docker buildx build -t ee-wunder-toolbox-ubi9:local .
 ```
 
 Podman:
 
 ```bash
-podman build -t ee-wunder-ansible-ubi9:local .
+podman build --format docker -t ee-wunder-toolbox-ubi9:local .
 ```
 
 ### Smoke test
@@ -92,9 +92,10 @@ podman build -t ee-wunder-ansible-ubi9:local .
 Example (basic CLI check):
 
 ```bash
-docker run --rm ee-wunder-ansible-ubi9:local ansible --version
-docker run --rm ee-wunder-ansible-ubi9:local ansible-galaxy --version
-docker run --rm ee-wunder-ansible-ubi9:local ansible-runner --version
+podman run --rm ee-wunder-toolbox-ubi9:local ansible-navigator --version
+podman run --rm ee-wunder-toolbox-ubi9:local helm version --short
+podman run --rm ee-wunder-toolbox-ubi9:local kustomize version
+podman run --rm ee-wunder-toolbox-ubi9:local sh -lc 'command -v ansible-nav && command -v test-ansible.sh'
 ```
 
 ## Dependency Policy
