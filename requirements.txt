@@ -45,3 +45,8 @@ requests-unixsocket>=0.3.0,<1.0.0
 # - community.vmware / vmware.vmware expect pyvmomi (provides pyVim)
 # ---------------------------------------------------------------------------
 pyvmomi==9.0.0.0
+
+# ---------------------------------------------------------------------------
+# COPR CLI (needed to configure/build COPR packages from inside the container)
+# ---------------------------------------------------------------------------
+copr-cli==2.4

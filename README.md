@@ -13,6 +13,7 @@ development. It is based on **Red Hat UBI 9** and includes:
 - TFLint
 - terraform-docs
 - Helm CLI
+- COPR CLI (`copr-cli`)
 
 Use it as a stable execution environment for:
 
@@ -37,6 +38,7 @@ Use it as a stable execution environment for:
   - `tflint`
   - `terraform-docs`
   - `helm`
+  - `copr-cli`
 - Non-root default user (`wunder`)
 - Default working directory `/workspace`
 
@@ -118,7 +120,24 @@ chmod +x scripts/wunder-devtools-ee.sh
 ```
 
 Then use it in `pre-commit`, Makefiles or CI jobs to run `ansible-lint`, `yamllint`,
-`shellcheck`, `terraform`, `tflint`, `terraform-docs` and `helm` in a consistent environment.
+`shellcheck`, `terraform`, `tflint`, `terraform-docs`, `helm`, and `copr-cli` in a consistent
+environment.
+
+### Configure COPR from the container
+
+If your host does not have `copr-cli`, run COPR commands inside this devtools image:
+
+```bash
+podman run --rm -it \
+  --userns keep-id \
+  -v "$(git rev-parse --show-toplevel):/workspace:Z" -w /workspace \
+  -v "$HOME/.config/copr:/home/wunder/.config/copr:ro,Z" \
+  -e COPR_OWNER=lit-modulix \
+  -e COPR_PROJECT=modulix \
+  -e COPR_PACKAGE=modulix-scripts \
+  quay.io/l-it/ee-wunder-devtools-ubi9:latest \
+  bash /workspace/packaging/rpm/configure-copr-scm.sh
+```
 
 ---
 
