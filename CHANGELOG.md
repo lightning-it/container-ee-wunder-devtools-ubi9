@@ -1,3 +1,9 @@
+## [1.6.0](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.5.0...v1.6.0) (2026-02-20)
+
+### Features
+
+* copr added ([#83](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/83)) ([c580f99](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/c580f991f5eea242bb23b6a4c5d20ad669397aa7))
+
 ## [1.5.0](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.4.0...v1.5.0) (2026-02-20)
 
 ### Features
