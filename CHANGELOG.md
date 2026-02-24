@@ -1,3 +1,9 @@
+## [1.6.1](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.6.0...v1.6.1) (2026-02-24)
+
+### Bug Fixes
+
+* update registry.access.redhat.com/ubi9/python-311 docker digest to e26a331 ([#85](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/85)) ([83e89fc](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/83e89fc4d677174454f086e6187c033d511dd9ec))
+
 ## [1.6.0](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.5.0...v1.6.0) (2026-02-20)
 
 ### Features
