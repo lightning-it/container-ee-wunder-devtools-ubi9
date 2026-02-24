@@ -134,7 +134,7 @@ podman run --rm -it \
   -v "$HOME/.config/copr:/home/wunder/.config/copr:ro,Z" \
   -e COPR_OWNER=litroc \
   -e COPR_PROJECT=modulix \
-  -e COPR_PACKAGE=modulix-scripts \
+  -e COPR_PACKAGE=modulix-automation-runtime \
   quay.io/l-it/ee-wunder-devtools-ubi9:latest \
   bash /workspace/packaging/rpm/configure-copr-scm.sh
 ```

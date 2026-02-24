@@ -17,19 +17,6 @@
   "packageRules": [
     {
       "matchManagers": [
-        "npm"
-      ],
-      "postUpgradeTasks": {
-        "commands": [
-          "npm install --package-lock-only --include=optional"
-        ],
-        "fileFilters": [
-          "package-lock.json"
-        ]
-      }
-    },
-    {
-      "matchManagers": [
         "dockerfile"
       ],
       "groupName": "Base image and Terraform tooling"
