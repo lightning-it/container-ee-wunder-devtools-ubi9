@@ -1,3 +1,9 @@
+## [1.6.2](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.6.1...v1.6.2) (2026-02-24)
+
+### Bug Fixes
+
+* rpm updated ([#91](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/91)) ([1974359](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/1974359837ca22af6b53dcf321c22bb36b13fddd))
+
 ## [1.6.1](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.6.0...v1.6.1) (2026-02-24)
 
 ### Bug Fixes
