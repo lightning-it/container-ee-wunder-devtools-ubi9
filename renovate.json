@@ -104,6 +104,46 @@
       ],
       "datasourceTemplate": "github-tags",
       "depNameTemplate": "terraform-docs/terraform-docs"
+    },
+    {
+      "customType": "regex",
+      "description": "Helm version pin in Dockerfile",
+      "managerFilePatterns": [
+        "/Dockerfile/"
+      ],
+      "matchStrings": [
+        "HELM_VERSION=(?<currentValue>[0-9.]+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "helm/helm",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "ansible-core version pin in Dockerfile",
+      "managerFilePatterns": [
+        "/Dockerfile/"
+      ],
+      "matchStrings": [
+        "ANSIBLE_CORE_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"
+      ],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "ansible-core",
+      "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "description": "pip version pin in Dockerfile",
+      "managerFilePatterns": [
+        "/Dockerfile/"
+      ],
+      "matchStrings": [
+        "PIP_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"
+      ],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "pip",
+      "versioningTemplate": "pep440"
     }
   ]
 }
