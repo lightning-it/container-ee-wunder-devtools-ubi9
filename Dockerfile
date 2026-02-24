@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/python-311@sha256:bb09d55bce99b839b0df565ab9e244cdc545037e612dad388569016137367cab AS tools
+FROM registry.access.redhat.com/ubi9/python-311@sha256:e26a331a9b8505b9b6163a2a055aadee262db8d0caa55da7ca295627c7ba11a7 AS tools
 
 LABEL maintainer="Lightning IT"
 LABEL org.opencontainers.image.title="ee-wunder-devtools-ubi9"
@@ -71,7 +71,7 @@ RUN install -m 0755 /usr/bin/docker /usr/local/bin/docker && \
     fi
 
 
-FROM registry.access.redhat.com/ubi9/python-311@sha256:bb09d55bce99b839b0df565ab9e244cdc545037e612dad388569016137367cab
+FROM registry.access.redhat.com/ubi9/python-311@sha256:e26a331a9b8505b9b6163a2a055aadee262db8d0caa55da7ca295627c7ba11a7
 
 LABEL maintainer="Lightning IT"
 LABEL org.opencontainers.image.title="ee-wunder-ansible-ubi9"
