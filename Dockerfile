@@ -78,7 +78,7 @@ LABEL org.opencontainers.image.title="ee-wunder-ansible-ubi9"
 LABEL org.opencontainers.image.description="Ansible Execution Environment (UBI 9) for Wunder automation."
 LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-ee-wunder-ansible-ubi9"
 
-ARG ANSIBLE_CORE_VERSION=2.18.12
+ARG ANSIBLE_CORE_VERSION=2.20.3
 ARG PIP_VERSION=25.3
 
 USER 0
