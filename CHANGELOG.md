@@ -1,3 +1,9 @@
+## [1.7.1](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.7.0...v1.7.1) (2026-02-25)
+
+### Bug Fixes
+
+* sync shared assets from lightning-it/shared-assets ([#100](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/100)) ([1fed758](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/1fed758e383eaf32bb1dd4564567d0baa3ee84db))
+
 ## [1.7.0](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.6.2...v1.7.0) (2026-02-25)
 
 ### Features
