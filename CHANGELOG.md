@@ -1,3 +1,9 @@
+## [1.7.0](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.6.2...v1.7.0) (2026-02-25)
+
+### Features
+
+* add custom regex managers for Helm, ansible-core, and pip version pins in Dockerfile ([#94](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/94)) ([e87a69c](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/e87a69cd7603b5cc0d0db2a2b6fe8225e2ff5248))
+
 ## [1.6.2](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.6.1...v1.6.2) (2026-02-24)
 
 ### Bug Fixes
