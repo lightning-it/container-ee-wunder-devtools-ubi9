@@ -14,6 +14,7 @@ development. It is based on **Red Hat UBI 9** and includes:
 - terraform-docs
 - Helm CLI
 - COPR CLI (`copr-cli`)
+- RPM build tooling (`rpmspec`, `rpmbuild`)
 
 Use it as a stable execution environment for:
 
@@ -39,6 +40,7 @@ Use it as a stable execution environment for:
   - `terraform-docs`
   - `helm`
   - `copr-cli`
+  - `rpmspec` / `rpmbuild`
 - Non-root default user (`wunder`)
 - Default working directory `/workspace`
 
@@ -59,7 +61,7 @@ docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtoo
 ```
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:main ansible-playbook -i inventories/dev/hosts.yml playbooks/site.yml
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:main ansible-playbook -i <inventory.yml> <playbook.yml>
 ```
 
 ### Run Terraform tooling
@@ -120,7 +122,7 @@ chmod +x scripts/wunder-devtools-ee.sh
 ```
 
 Then use it in `pre-commit`, Makefiles or CI jobs to run `ansible-lint`, `yamllint`,
-`shellcheck`, `terraform`, `tflint`, `terraform-docs`, `helm`, and `copr-cli` in a consistent
+`shellcheck`, `terraform`, `tflint`, `terraform-docs`, `helm`, `copr-cli`, and RPM tooling in a consistent
 environment.
 
 ### Configure COPR from the container
