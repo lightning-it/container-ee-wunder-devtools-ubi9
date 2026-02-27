@@ -87,7 +87,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Base tools you *actually* need at runtime
 RUN dnf -y update && \
     dnf -y install --allowerasing \
-      bash git openssh-clients rsync which findutils ca-certificates && \
+      bash git openssh-clients rsync which findutils ca-certificates rpm-build && \
     dnf clean all && rm -rf /var/cache/yum
 
 # Copy toolchain from builder (no curl/unzip in final image)
@@ -104,7 +104,7 @@ RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --no-cache-dir -r /tmp/requirements.txt && \
     rm -f /tmp/requirements.txt && \
     ansible --version && ansible-galaxy --version && shellcheck --version && helm version --short && \
-    copr-cli --version
+    copr-cli --version && rpmspec --version
 
 WORKDIR /workspace
 RUN useradd -m wunder && \
