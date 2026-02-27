@@ -1,3 +1,9 @@
+## [1.8.0](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.7.1...v1.8.0) (2026-02-27)
+
+### Features
+
+* add RPM build tooling to the Dockerfile and update README ([#104](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/104)) ([782b36f](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/782b36f5475fe71496f607f6ca61942d13e87bcf))
+
 ## [1.7.1](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.7.0...v1.7.1) (2026-02-25)
 
 ### Bug Fixes
