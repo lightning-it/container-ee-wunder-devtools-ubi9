@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.7.0"
+IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.0"
 CONTAINER_HOME="${CONTAINER_HOME:-/tmp/wunder}"
 HOST_HOME_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/wunder-devtools-ee/home"
 
@@ -14,16 +14,66 @@ DOCKER_ARGS=(
   -v "$HOST_HOME_CACHE":"${CONTAINER_HOME}"
 )
 
+fail_or_skip() {
+  local msg="$1"
+  if [ "${CI:-}" = "true" ] || [ "${WUNDER_DEVTOOLS_STRICT:-0}" = "1" ]; then
+    echo "Error: ${msg}" >&2
+    exit 1
+  fi
+  echo "WARN: ${msg} (skipping local hook; set WUNDER_DEVTOOLS_STRICT=1 to enforce)." >&2
+  exit 0
+}
+
+sanitize_docker_host_env() {
+  if [[ "${DOCKER_HOST:-}" == unix://* ]]; then
+    host_sock="${DOCKER_HOST#unix://}"
+    if [ ! -S "$host_sock" ]; then
+      unset DOCKER_HOST
+    fi
+  fi
+}
+
+docker_usable() {
+  command -v docker >/dev/null 2>&1 || return 1
+  sanitize_docker_host_env
+  docker info >/dev/null 2>&1
+}
+
+podman_usable() {
+  command -v podman >/dev/null 2>&1 || return 1
+  podman info >/dev/null 2>&1
+}
+
+CONTAINER_BIN="${WUNDER_CONTAINER_ENGINE:-}"
+if [ -z "$CONTAINER_BIN" ]; then
+  if docker_usable; then
+    CONTAINER_BIN="docker"
+  elif podman_usable; then
+    CONTAINER_BIN="podman"
+  else
+    fail_or_skip "no usable container engine found (docker/podman not running or unreachable)"
+  fi
+fi
+
+case "$CONTAINER_BIN" in
+  podman|docker) ;;
+  *)
+    fail_or_skip "unsupported engine '$CONTAINER_BIN' (use podman|docker)"
+    ;;
+esac
+
 DOCKER_SOCKET=""
-if [ -S "$HOME/.docker/run/docker.sock" ]; then
-  DOCKER_SOCKET="$HOME/.docker/run/docker.sock"
-elif [ -S /var/run/docker.sock ]; then
-  DOCKER_SOCKET="/var/run/docker.sock"
-elif [[ "${DOCKER_HOST:-}" == unix://* ]]; then
+if [[ "${DOCKER_HOST:-}" == unix://* ]]; then
   host_sock="${DOCKER_HOST#unix://}"
   if [ -S "$host_sock" ]; then
     DOCKER_SOCKET="$host_sock"
   fi
+elif [ -S "/run/user/$(id -u)/podman/podman.sock" ]; then
+  DOCKER_SOCKET="/run/user/$(id -u)/podman/podman.sock"
+elif [ -S "$HOME/.docker/run/docker.sock" ]; then
+  DOCKER_SOCKET="$HOME/.docker/run/docker.sock"
+elif [ -S /var/run/docker.sock ]; then
+  DOCKER_SOCKET="/var/run/docker.sock"
 fi
 
 if [ -n "$DOCKER_SOCKET" ]; then
@@ -71,7 +121,18 @@ if [ "$(uname -s)" = "Linux" ]; then
   DOCKER_ARGS+=(--add-host=host.docker.internal:host-gateway)
 fi
 
-docker run --rm \
+if [ "$CONTAINER_BIN" = "docker" ]; then
+  if [ -n "$DOCKER_SOCKET" ]; then
+    export DOCKER_HOST="unix://${DOCKER_SOCKET_REAL}"
+  else
+    sanitize_docker_host_env
+    if [ -z "${DOCKER_HOST:-}" ] && [ -S "/run/user/$(id -u)/podman/podman.sock" ]; then
+      export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+    fi
+  fi
+fi
+
+"$CONTAINER_BIN" run --rm \
   --entrypoint "" \
   "${DOCKER_ARGS[@]}" \
   ${ANSIBLE_COLLECTIONS_PATH:+-e ANSIBLE_COLLECTIONS_PATH} \
