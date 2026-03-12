@@ -25,7 +25,8 @@
 ## Dependency pinning
 
 - Keep Dockerfile tool/runtime versions pinned (`ARG ..._VERSION=` or pinned image refs).
-- If you add or rename pinned versions, update `renovate.json` (or custom managers) in the same change.
+- For every change to pinned versions in managed files (workflows, scripts, container files), maintain Renovate in the same change (`renovate.json` package rules/custom managers, or the shared-assets Renovate source).
+- Validate Renovate config changes before commit (for example: `pre-commit run renovate-config-validate --files renovate.json`).
 - Do not relax version pinning in managed container templates without an explicit decision in `shared-assets`.
 
 ## Repo-specific overrides
