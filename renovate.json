@@ -144,6 +144,20 @@
       "datasourceTemplate": "pypi",
       "depNameTemplate": "pip",
       "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "description": "ee-wunder-devtools-ubi9 self image references in docs and helper scripts",
+      "managerFilePatterns": [
+        "/README\\.md$/",
+        "/scripts\\/.*\\.sh$/"
+      ],
+      "matchStrings": [
+        "quay\\.io/l-it/ee-wunder-devtools-ubi9:v(?<currentValue>[0-9.]+)"
+      ],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "quay.io/l-it/ee-wunder-devtools-ubi9",
+      "versioningTemplate": "docker"
     }
   ]
 }
