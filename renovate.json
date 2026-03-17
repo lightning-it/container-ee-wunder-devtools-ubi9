@@ -50,6 +50,16 @@
         "pip_requirements"
       ],
       "matchPackageNames": [
+        "pre-commit"
+      ],
+      "allowedVersions": "<5.0.0",
+      "rangeStrategy": "pin"
+    },
+    {
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "matchPackageNames": [
         "molecule",
         "molecule-plugins"
       ],
