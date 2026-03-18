@@ -1,3 +1,9 @@
+## [1.8.2](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.1...v1.8.2) (2026-03-18)
+
+### Bug Fixes
+
+* update devtools container version ([#117](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/117)) ([b82e35d](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/b82e35dc3e26d86ffa168fef6107bef0d57ba686))
+
 ## [1.8.1](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.0...v1.8.1) (2026-03-12)
 
 ### Bug Fixes
