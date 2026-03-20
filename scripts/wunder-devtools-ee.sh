@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.1"
+IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2"
 CONTAINER_HOME="${CONTAINER_HOME:-/tmp/wunder}"
-HOST_HOME_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/wunder-devtools-ee/home"
+HOST_HOME_CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/wunder-devtools-ee/v2/home"
+HOST_HOME_CACHE_SCOPE="host-uid-$(id -u)"
+if [ "${WUNDER_DEVTOOLS_RUN_AS_HOST_UID:-0}" != "1" ]; then
+  HOST_HOME_CACHE_SCOPE="container-root"
+fi
+HOST_HOME_CACHE="${HOST_HOME_CACHE:-${HOST_HOME_CACHE_ROOT}/${HOST_HOME_CACHE_SCOPE}}"
 
 mkdir -p "$HOST_HOME_CACHE"
+chmod 700 "$HOST_HOME_CACHE" 2>/dev/null || true
 
+WORKSPACE_MOUNT="${PWD}:/workspace"
+HOME_CACHE_MOUNT="${HOST_HOME_CACHE}:${CONTAINER_HOME}"
 DOCKER_ARGS=(
-  -v "$PWD":/workspace
   -w /workspace
   -e HOME="${CONTAINER_HOME}"
-  -v "$HOST_HOME_CACHE":"${CONTAINER_HOME}"
 )
 
 fail_or_skip() {
@@ -61,6 +67,22 @@ case "$CONTAINER_BIN" in
     fail_or_skip "unsupported engine '$CONTAINER_BIN' (use podman|docker)"
     ;;
 esac
+
+if [ "$CONTAINER_BIN" = "podman" ] && [ "$(uname -s)" = "Linux" ]; then
+  WORKSPACE_MOUNT="${WORKSPACE_MOUNT}:Z"
+  HOME_CACHE_MOUNT="${HOME_CACHE_MOUNT}:Z"
+fi
+
+DOCKER_ARGS+=(-v "$WORKSPACE_MOUNT")
+DOCKER_ARGS+=(-v "$HOME_CACHE_MOUNT")
+
+PODMAN_ROOTLESS=0
+if [ "$CONTAINER_BIN" = "podman" ]; then
+  podman_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null || true)"
+  if [ "${podman_rootless}" = "true" ]; then
+    PODMAN_ROOTLESS=1
+  fi
+fi
 
 DOCKER_SOCKET=""
 if [[ "${DOCKER_HOST:-}" == unix://* ]]; then
@@ -115,6 +137,8 @@ PY
     DOCKER_ARGS+=(--user 0:0)
     DOCKER_ARGS+=(--group-add 0)
   fi
+elif [ "${PODMAN_ROOTLESS}" = "1" ]; then
+  DOCKER_ARGS+=(--user 0:0)
 fi
 
 if [ "$(uname -s)" = "Linux" ]; then
@@ -139,6 +163,7 @@ fi
   ${ANSIBLE_ROLES_PATH:+-e ANSIBLE_ROLES_PATH} \
   ${ANSIBLE_CORE_VERSION:+-e ANSIBLE_CORE_VERSION} \
   ${ANSIBLE_LINT_VERSION:+-e ANSIBLE_LINT_VERSION} \
+  ${ANSIBLE_LINT_SKIP_META_RUNTIME:+-e ANSIBLE_LINT_SKIP_META_RUNTIME} \
   ${COLLECTION_NAMESPACE:+-e COLLECTION_NAMESPACE} \
   ${COLLECTION_NAME:+-e COLLECTION_NAME} \
   ${EXAMPLE_PLAYBOOK:+-e EXAMPLE_PLAYBOOK} \
