@@ -1,3 +1,9 @@
+## [1.8.3](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.2...v1.8.3) (2026-03-21)
+
+### Bug Fixes
+
+* sync shared assets from lightning-it/shared-assets ([#118](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/118)) ([f4ca4b4](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/f4ca4b4b928d3af633d29e7c30c559b03af7b5cf))
+
 ## [1.8.2](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.1...v1.8.2) (2026-03-18)
 
 ### Bug Fixes
