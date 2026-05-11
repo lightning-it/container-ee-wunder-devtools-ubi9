@@ -8,7 +8,7 @@ LABEL org.opencontainers.image.source="https://github.com/lightning-it/container
 ARG TARGETARCH
 ARG TF_VERSION=1.14.7
 ARG TFLINT_VERSION=0.61.0
-ARG TF_DOCS_VERSION=0.21.0
+ARG TF_DOCS_VERSION=0.24.0
 ARG HELM_VERSION=4.1.3
 
 # hadolint ignore=DL3002
