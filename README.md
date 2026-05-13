@@ -23,7 +23,7 @@ Use it as a stable execution environment for:
 - CI pipelines
 - Integration tests (e.g. against local Keycloak containers)
 
-> Current image: `quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2`
+> Current image: `quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3`
 
 ---
 
@@ -51,31 +51,31 @@ Use it as a stable execution environment for:
 ### Start an interactive shell
 
 ```bash
-docker run --rm -it -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2
+docker run --rm -it -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3
 ```
 
 ### Run Ansible commands
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2 ansible-lint
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3 ansible-lint
 ```
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2 ansible-playbook -i <inventory.yml> <playbook.yml>
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3 ansible-playbook -i <inventory.yml> <playbook.yml>
 ```
 
 ### Run Terraform tooling
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2 terraform fmt -recursive
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3 terraform fmt -recursive
 ```
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2 tflint --recursive
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3 tflint --recursive
 ```
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2 terraform-docs markdown table --output-file README.md --output-mode replace .
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3 terraform-docs markdown table --output-file README.md --output-mode replace .
 ```
 
 ### Run Helm commands
@@ -83,7 +83,7 @@ docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtoo
 Check Helm CLI:
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2 helm version --short
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3 helm version --short
 ```
 
 Run against your local kubeconfig:
@@ -93,7 +93,7 @@ docker run --rm \
   -v "$PWD":/workspace -w /workspace \
   -v "$HOME/.kube:/home/wunder/.kube:Z" \
   -e KUBECONFIG=/home/wunder/.kube/config \
-  quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2 helm list -A
+  quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3 helm list -A
 ```
 
 ---
@@ -106,7 +106,7 @@ In your repositories you can add a small helper script, e.g. `scripts/wunder-dev
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2"
+IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3"
 
 docker run --rm \
   --entrypoint "" \
@@ -137,7 +137,7 @@ podman run --rm -it \
   -e COPR_OWNER=litroc \
   -e COPR_PROJECT=modulix \
   -e COPR_PACKAGE=modulix-automation-runtime \
-  quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.2 \
+  quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.3 \
   bash /workspace/packaging/rpm/configure-copr-scm.sh
 ```
 
