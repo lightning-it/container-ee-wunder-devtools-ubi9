@@ -80,15 +80,47 @@ LABEL org.opencontainers.image.source="https://github.com/lightning-it/container
 
 ARG ANSIBLE_CORE_VERSION=2.21.0
 ARG PIP_VERSION=25.3
+ARG CENTOS_STREAM_VERSION=9-stream
 
 USER 0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Base tools you *actually* need at runtime
+# Base tools you *actually* need at runtime.
+# UBI 9 does not publish qemu-img/libguestfs packages. Use a narrow CentOS
+# Stream 9 overlay only for VM image tooling so public GitHub builds do not
+# depend on RHEL host entitlement.
 RUN dnf -y update && \
+    printf '%s\n' \
+      "[centos-stream-${CENTOS_STREAM_VERSION}-baseos]" \
+      "name=CentOS Stream ${CENTOS_STREAM_VERSION} BaseOS" \
+      "baseurl=https://mirror.stream.centos.org/${CENTOS_STREAM_VERSION}/BaseOS/\$basearch/os/" \
+      "enabled=0" \
+      "gpgcheck=1" \
+      "gpgkey=https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official" \
+      "" \
+      "[centos-stream-${CENTOS_STREAM_VERSION}-appstream]" \
+      "name=CentOS Stream ${CENTOS_STREAM_VERSION} AppStream" \
+      "baseurl=https://mirror.stream.centos.org/${CENTOS_STREAM_VERSION}/AppStream/\$basearch/os/" \
+      "enabled=0" \
+      "gpgcheck=1" \
+      "gpgkey=https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official" \
+      "" \
+      "[centos-stream-${CENTOS_STREAM_VERSION}-crb]" \
+      "name=CentOS Stream ${CENTOS_STREAM_VERSION} CRB" \
+      "baseurl=https://mirror.stream.centos.org/${CENTOS_STREAM_VERSION}/CRB/\$basearch/os/" \
+      "enabled=0" \
+      "gpgcheck=1" \
+      "gpgkey=https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official" \
+      > /etc/yum.repos.d/centos-stream-vm-image-tools.repo && \
     dnf -y install --allowerasing --setopt=install_weak_deps=False \
       bash git openssh-clients rsync which findutils ca-certificates \
-      rpm-build qemu-img guestfs-tools libguestfs && \
+      rpm-build && \
+    dnf -y install --allowerasing --setopt=install_weak_deps=False \
+      --enablerepo="centos-stream-${CENTOS_STREAM_VERSION}-baseos" \
+      --enablerepo="centos-stream-${CENTOS_STREAM_VERSION}-appstream" \
+      --enablerepo="centos-stream-${CENTOS_STREAM_VERSION}-crb" \
+      qemu-img guestfs-tools libguestfs && \
+    rm -f /etc/yum.repos.d/centos-stream-vm-image-tools.repo && \
     dnf clean all && rm -rf /var/cache/yum
 
 # Copy toolchain from builder (no curl/unzip in final image)
