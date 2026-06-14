@@ -15,6 +15,7 @@ development. It is based on **Red Hat UBI 9** and includes:
 - Helm CLI
 - COPR CLI (`copr-cli`)
 - RPM build tooling (`rpmspec`, `rpmbuild`)
+- VM image tooling (`qemu-img`, `virt-customize`, `virt-sysprep`, `guestfish`)
 
 Use it as a stable execution environment for:
 
@@ -41,6 +42,9 @@ Use it as a stable execution environment for:
   - `helm`
   - `copr-cli`
   - `rpmspec` / `rpmbuild`
+  - `qemu-img`
+  - `virt-customize` / `virt-sysprep`
+  - `guestfish`
 - Non-root default user (`wunder`)
 - Default working directory `/workspace`
 
@@ -122,8 +126,8 @@ chmod +x scripts/wunder-devtools-ee.sh
 ```
 
 Then use it in `pre-commit`, Makefiles or CI jobs to run `ansible-lint`, `yamllint`,
-`shellcheck`, `terraform`, `tflint`, `terraform-docs`, `helm`, `copr-cli`, and RPM tooling in a consistent
-environment.
+`shellcheck`, `terraform`, `tflint`, `terraform-docs`, `helm`, `copr-cli`, RPM tooling,
+and VM image tooling in a consistent environment.
 
 ### Configure COPR from the container
 
