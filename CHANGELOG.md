@@ -1,3 +1,9 @@
+## [1.8.5](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.4...v1.8.5) (2026-06-14)
+
+### Bug Fixes
+
+* add CentOS Stream 9 repositories for VM image tooling ([#146](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/146)) ([0d59d3d](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/0d59d3d8a2b7e6febaf138391ad43e1718665e46))
+
 ## [1.8.4](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.3...v1.8.4) (2026-06-14)
 
 ### Bug Fixes
