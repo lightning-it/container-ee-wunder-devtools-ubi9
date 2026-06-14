@@ -1,3 +1,9 @@
+## [1.8.4](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.3...v1.8.4) (2026-06-14)
+
+### Bug Fixes
+
+* update npm to v11.17.0 ([#141](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/141)) ([46a312f](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/46a312f27763d96ff218498bb0467bcf0824255e))
+
 ## [1.8.3](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.2...v1.8.3) (2026-03-21)
 
 ### Bug Fixes
