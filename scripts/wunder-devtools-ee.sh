@@ -69,8 +69,8 @@ case "$CONTAINER_BIN" in
 esac
 
 if [ "$CONTAINER_BIN" = "podman" ] && [ "$(uname -s)" = "Linux" ]; then
-  WORKSPACE_MOUNT="${WORKSPACE_MOUNT}:Z"
-  HOME_CACHE_MOUNT="${HOME_CACHE_MOUNT}:Z"
+  WORKSPACE_MOUNT="${WORKSPACE_MOUNT}:z"
+  HOME_CACHE_MOUNT="${HOME_CACHE_MOUNT}:z"
 fi
 
 DOCKER_ARGS+=(-v "$WORKSPACE_MOUNT")
