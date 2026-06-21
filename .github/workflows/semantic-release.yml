@@ -58,9 +58,7 @@ jobs:
         run: |
           npx --yes \
             --package semantic-release@25 \
-            --package @semantic-release/changelog@6 \
             --package @semantic-release/commit-analyzer@13 \
-            --package @semantic-release/git@10 \
             --package @semantic-release/github@12 \
             --package @semantic-release/release-notes-generator@14 \
             --package conventional-changelog-conventionalcommits@9 \
@@ -90,9 +88,7 @@ jobs:
         run: |
           npx --yes \
             --package semantic-release@25 \
-            --package @semantic-release/changelog@6 \
             --package @semantic-release/commit-analyzer@13 \
-            --package @semantic-release/git@10 \
             --package @semantic-release/github@12 \
             --package @semantic-release/release-notes-generator@14 \
             --package conventional-changelog-conventionalcommits@9 \
