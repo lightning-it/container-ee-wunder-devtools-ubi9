@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.5"
+IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.8.6"
 CONTAINER_HOME="${CONTAINER_HOME:-/tmp/wunder}"
 HOST_HOME_CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/wunder-devtools-ee/v2/home"
 HOST_HOME_CACHE_SCOPE="host-uid-$(id -u)"
@@ -67,6 +67,10 @@ case "$CONTAINER_BIN" in
     fail_or_skip "unsupported engine '$CONTAINER_BIN' (use podman|docker)"
     ;;
 esac
+
+if [ "${WUNDER_DEVTOOLS_PRIVILEGED:-0}" = "1" ]; then
+  DOCKER_ARGS+=(--privileged)
+fi
 
 if [ "$CONTAINER_BIN" = "podman" ] && [ "$(uname -s)" = "Linux" ]; then
   WORKSPACE_MOUNT="${WORKSPACE_MOUNT}:z"
@@ -194,6 +198,7 @@ fi
   ${ANSIBLE_LINT_SKIP_META_RUNTIME:+-e ANSIBLE_LINT_SKIP_META_RUNTIME} \
   ${COLLECTION_NAMESPACE:+-e COLLECTION_NAMESPACE} \
   ${COLLECTION_NAME:+-e COLLECTION_NAME} \
+  ${SCENARIO_FILTER:+-e SCENARIO_FILTER} \
   ${EXAMPLE_PLAYBOOK:+-e EXAMPLE_PLAYBOOK} \
   ${MOLECULE_NO_LOG:+-e MOLECULE_NO_LOG} \
   ${VAGRANT_SSH_HOST:+-e VAGRANT_SSH_HOST} \
