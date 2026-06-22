@@ -1,3 +1,9 @@
+## [1.8.8](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.7...v1.8.8) (2026-06-22)
+
+### Bug Fixes
+
+* include antsibull changelog in devtools image ([4ff1348](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/4ff13488579808c70d4b25151898c5a4a3a7898e))
+
 ## [1.8.7](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.6...v1.8.7) (2026-06-22)
 
 ### Bug Fixes
