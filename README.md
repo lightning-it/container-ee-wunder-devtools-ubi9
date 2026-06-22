@@ -7,6 +7,7 @@ development. It is based on **Red Hat UBI 9** and includes:
 
 - Ansible Core
 - ansible-lint
+- antsibull-changelog
 - yamllint
 - ShellCheck
 - Terraform CLI
@@ -34,6 +35,7 @@ Use it as a stable execution environment for:
 - Preinstalled tooling:
   - `ansible-core`
   - `ansible-lint`
+  - `antsibull-changelog`
   - `yamllint`
   - `shellcheck`
   - `terraform`
