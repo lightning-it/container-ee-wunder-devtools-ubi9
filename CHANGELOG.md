@@ -1,3 +1,9 @@
+## [1.8.7](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.6...v1.8.7) (2026-06-22)
+
+### Bug Fixes
+
+* update quay.io/l-it/ee-wunder-devtools-ubi9 docker tag to v1.8.6 ([#151](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/issues/151)) ([d0e90d4](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/commit/d0e90d4b8063183d727b3d5b286f8b0ac9be449d))
+
 ## [1.8.6](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/compare/v1.8.5...v1.8.6) (2026-06-15)
 
 ### Bug Fixes
