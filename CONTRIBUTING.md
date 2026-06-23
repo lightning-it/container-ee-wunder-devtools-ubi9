@@ -25,7 +25,7 @@ This project follows our community standards described in `CODE_OF_CONDUCT.md`. 
 - `main` is the production release branch and should only receive changes through the automated `develop` to `main`
   promotion PR.
 - Merging the promotion PR into `main` runs semantic-release.
-- After `main` changes, automation merges `main` back into `develop` so future promotion PRs start from a clean branch
+- After `main` changes, automation opens a `main` back to `develop` PR so future promotion PRs start from a clean branch
   ancestry.
 - semantic-release calculates the next version, creates the Git tag, and publishes GitHub Release notes.
 - Container images are built from the exact release tag and published with immutable version/SHA tags plus the moving
