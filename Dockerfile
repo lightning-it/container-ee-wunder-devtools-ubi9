@@ -16,54 +16,73 @@ ARG GH_VERSION=2.95.0
 USER 0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+COPY scripts/container-download-verified.sh /usr/local/lib/container-download-verified.sh
+
 RUN dnf -y update && \
     dnf -y install --allowerasing ca-certificates curl unzip tar dnf-plugins-core && \
     curl -fsSL https://download.docker.com/linux/centos/docker-ce.repo -o /etc/yum.repos.d/docker-ce.repo && \
     dnf -y install docker-ce-cli docker-compose-plugin && \
-    dnf clean all && rm -rf /var/cache/yum
+    dnf clean all && rm -rf /var/cache/dnf /var/cache/yum
 
 # Map docker arch naming
-RUN case "${TARGETARCH}" in \
-      amd64)  export ARCH=amd64   DOCKER_ARCH=x86_64  ;; \
-      arm64)  export ARCH=arm64   DOCKER_ARCH=aarch64 ;; \
-      *) echo "Unsupported TARGETARCH=${TARGETARCH}" && exit 1 ;; \
-    esac && \
-    echo "ARCH=${ARCH} DOCKER_ARCH=${DOCKER_ARCH}" > /tmp/arch.env
+RUN source /usr/local/lib/container-download-verified.sh && \
+    detect_container_arch && \
+    echo "ARCH=${CONTAINER_ARCH} DOCKER_ARCH=${CONTAINER_RPM_ARCH}" > /tmp/arch.env
 
 # Terraform
-RUN source /tmp/arch.env && \
-    curl -fsSLo /tmp/terraform.zip \
-      "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${ARCH}.zip" && \
+RUN source /usr/local/lib/container-download-verified.sh && \
+    source /tmp/arch.env && \
+    download_verified \
+      "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${ARCH}.zip" \
+      /tmp/terraform.zip \
+      "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_SHA256SUMS" \
+      "terraform_${TF_VERSION}_linux_${ARCH}.zip" && \
     unzip -q /tmp/terraform.zip -d /usr/local/bin && \
     rm -f /tmp/terraform.zip
 
 # TFLint
-RUN source /tmp/arch.env && \
-    curl -fsSLo /tmp/tflint.zip \
-      "https://github.com/terraform-linters/tflint/releases/download/v${TFLINT_VERSION}/tflint_linux_${ARCH}.zip" && \
+RUN source /usr/local/lib/container-download-verified.sh && \
+    source /tmp/arch.env && \
+    download_verified \
+      "https://github.com/terraform-linters/tflint/releases/download/v${TFLINT_VERSION}/tflint_linux_${ARCH}.zip" \
+      /tmp/tflint.zip \
+      "https://github.com/terraform-linters/tflint/releases/download/v${TFLINT_VERSION}/checksums.txt" \
+      "tflint_linux_${ARCH}.zip" && \
     unzip -q /tmp/tflint.zip -d /usr/local/bin && \
     rm -f /tmp/tflint.zip
 
 # terraform-docs
-RUN source /tmp/arch.env && \
-    curl -fsSLo /tmp/terraform-docs.tar.gz \
-      "https://github.com/terraform-docs/terraform-docs/releases/download/v${TF_DOCS_VERSION}/terraform-docs-v${TF_DOCS_VERSION}-linux-${ARCH}.tar.gz" && \
+RUN source /usr/local/lib/container-download-verified.sh && \
+    source /tmp/arch.env && \
+    download_verified \
+      "https://github.com/terraform-docs/terraform-docs/releases/download/v${TF_DOCS_VERSION}/terraform-docs-v${TF_DOCS_VERSION}-linux-${ARCH}.tar.gz" \
+      /tmp/terraform-docs.tar.gz \
+      "https://github.com/terraform-docs/terraform-docs/releases/download/v${TF_DOCS_VERSION}/terraform-docs-v${TF_DOCS_VERSION}.sha256sum" \
+      "terraform-docs-v${TF_DOCS_VERSION}-linux-${ARCH}.tar.gz" && \
     tar -xzf /tmp/terraform-docs.tar.gz -C /usr/local/bin terraform-docs && \
     chmod +x /usr/local/bin/terraform-docs && \
     rm -f /tmp/terraform-docs.tar.gz
 
 # Helm
-RUN source /tmp/arch.env && \
-    curl -fsSLo /tmp/helm.tar.gz \
-      "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz" && \
+RUN source /usr/local/lib/container-download-verified.sh && \
+    source /tmp/arch.env && \
+    download_verified \
+      "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz" \
+      /tmp/helm.tar.gz \
+      "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz.sha256sum" \
+      "helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz" && \
     tar -xzf /tmp/helm.tar.gz -C /tmp && \
     install -m 0755 "/tmp/linux-${ARCH}/helm" /usr/local/bin/helm && \
     rm -rf /tmp/helm.tar.gz "/tmp/linux-${ARCH}"
 
 # GitHub CLI
-RUN source /tmp/arch.env && \
-    curl -fsSLo /tmp/gh.tar.gz \
-      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" && \
+RUN source /usr/local/lib/container-download-verified.sh && \
+    source /tmp/arch.env && \
+    download_verified \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" \
+      /tmp/gh.tar.gz \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_checksums.txt" \
+      "gh_${GH_VERSION}_linux_${ARCH}.tar.gz" && \
     tar -xzf /tmp/gh.tar.gz -C /tmp && \
     install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh && \
     rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${ARCH}"
@@ -83,9 +102,9 @@ RUN install -m 0755 /usr/bin/docker /usr/local/bin/docker && \
 FROM registry.access.redhat.com/ubi9/python-311@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c
 
 LABEL maintainer="Lightning IT"
-LABEL org.opencontainers.image.title="ee-wunder-ansible-ubi9"
-LABEL org.opencontainers.image.description="Ansible Execution Environment (UBI 9) for Wunder automation."
-LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-ee-wunder-ansible-ubi9"
+LABEL org.opencontainers.image.title="ee-wunder-devtools-ubi9"
+LABEL org.opencontainers.image.description="Devtools Execution Environment (UBI 9) for Wunder automation."
+LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-ee-wunder-devtools-ubi9"
 
 ARG ANSIBLE_CORE_VERSION=2.21.1
 ARG PIP_VERSION=25.3
@@ -130,7 +149,7 @@ RUN dnf -y update && \
       --enablerepo="centos-stream-${CENTOS_STREAM_VERSION}-crb" \
       qemu-img guestfs-tools libguestfs && \
     rm -f /etc/yum.repos.d/centos-stream-vm-image-tools.repo && \
-    dnf clean all && rm -rf /var/cache/yum
+    dnf clean all && rm -rf /var/cache/dnf /var/cache/yum
 
 # Copy toolchain from builder (no curl/unzip in final image)
 COPY --from=tools /usr/local/bin/terraform /usr/local/bin/terraform
