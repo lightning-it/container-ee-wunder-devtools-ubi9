@@ -10,6 +10,7 @@ ARG TF_VERSION=1.15.6
 ARG TFLINT_VERSION=0.63.1
 ARG TF_DOCS_VERSION=0.24.0
 ARG HELM_VERSION=4.2.2
+ARG GH_VERSION=2.95.0
 
 # hadolint ignore=DL3002
 USER 0
@@ -58,6 +59,14 @@ RUN source /tmp/arch.env && \
     tar -xzf /tmp/helm.tar.gz -C /tmp && \
     install -m 0755 "/tmp/linux-${ARCH}/helm" /usr/local/bin/helm && \
     rm -rf /tmp/helm.tar.gz "/tmp/linux-${ARCH}"
+
+# GitHub CLI
+RUN source /tmp/arch.env && \
+    curl -fsSLo /tmp/gh.tar.gz \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" && \
+    tar -xzf /tmp/gh.tar.gz -C /tmp && \
+    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh && \
+    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${ARCH}"
 
 # Docker CLI + Compose plugin (from docker-ce packages)
 RUN install -m 0755 /usr/bin/docker /usr/local/bin/docker && \
@@ -128,6 +137,7 @@ COPY --from=tools /usr/local/bin/terraform /usr/local/bin/terraform
 COPY --from=tools /usr/local/bin/tflint /usr/local/bin/tflint
 COPY --from=tools /usr/local/bin/terraform-docs /usr/local/bin/terraform-docs
 COPY --from=tools /usr/local/bin/helm /usr/local/bin/helm
+COPY --from=tools /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=tools /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=tools /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 
@@ -137,7 +147,7 @@ RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --no-cache-dir -r /tmp/requirements.txt && \
     rm -f /tmp/requirements.txt && \
     ansible --version && ansible-galaxy --version && antsibull-changelog --version && \
-    shellcheck --version && helm version --short && \
+    shellcheck --version && helm version --short && gh --version && \
     copr-cli --version && rpmspec --version && qemu-img --version && \
     virt-customize --version && virt-sysprep --version && guestfish --version
 

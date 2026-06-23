@@ -132,6 +132,20 @@
     },
     {
       "customType": "regex",
+      "description": "GitHub CLI version pin in Dockerfile",
+      "managerFilePatterns": [
+        "/Dockerfile/"
+      ],
+      "matchStrings": [
+        "GH_VERSION=(?<currentValue>[0-9.]+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "cli/cli",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
       "description": "ansible-core version pin in Dockerfile",
       "managerFilePatterns": [
         "/Dockerfile/"
