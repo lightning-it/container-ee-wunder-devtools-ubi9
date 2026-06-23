@@ -9,7 +9,8 @@
     "before 6am on monday"
   ],
   "labels": [
-    "dependencies"
+    "dependencies",
+    "renovate"
   ],
   "lockFileMaintenance": {
     "enabled": true
@@ -169,5 +170,8 @@
       "depNameTemplate": "quay.io/l-it/ee-wunder-devtools-ubi9",
       "versioningTemplate": "docker"
     }
+  ],
+  "baseBranchPatterns": [
+    "develop"
   ]
 }
