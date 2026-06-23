@@ -65,6 +65,12 @@ run_yaml_checks() {
   yamllint .
 }
 
+run_shellcheck() {
+  if compgen -G "scripts/*.sh" >/dev/null; then
+    shellcheck scripts/*.sh
+  fi
+}
+
 run_actionlint() {
   require_docker
   set_nested_workspace_args
@@ -262,6 +268,7 @@ run_semantic_release_dry_run() {
 
 run_ci() {
   run_yaml_checks
+  run_shellcheck
   run_actionlint
   run_hadolint
   run_container_build
