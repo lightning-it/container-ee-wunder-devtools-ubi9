@@ -1,0 +1,48 @@
+# yamllint disable rule:truthy
+---
+name: Sync main back to develop
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-main-to-develop
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge main into develop
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v7
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.LITRELEASEBOT_TOKEN }}
+          persist-credentials: true
+
+      - name: Configure git author
+        run: |
+          git config user.name "litreleasebot"
+          git config user.email "litreleasebot@users.noreply.github.com"
+
+      - name: Sync main back to develop
+        run: |
+          set -euo pipefail
+
+          git fetch origin main develop
+
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "develop already contains main; nothing to sync."
+            exit 0
+          fi
+
+          git merge --no-ff origin/main -m "chore: sync main back to develop"
+          git push origin HEAD:develop
