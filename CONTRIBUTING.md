@@ -18,6 +18,18 @@ This project follows our community standards described in `CODE_OF_CONDUCT.md`. 
 
 ## How to Contribute
 
+### Branch and release flow
+
+- Open normal PRs against `develop`.
+- Renovate and shared-assets sync PRs also target `develop`.
+- `main` is the production release branch and should only receive changes through the automated `develop` to `main`
+  promotion PR.
+- Merging the promotion PR into `main` runs semantic-release.
+- semantic-release calculates the next version, creates the Git tag, and publishes GitHub Release notes.
+- Container images are built from the exact release tag and published with immutable version/SHA tags plus the moving
+  production tag.
+- Container repositories do not maintain a committed `CHANGELOG.md`; use GitHub Releases as the changelog.
+
 ### 1) Open an Issue (recommended for non-trivial changes)
 
 Please open an issue for:
