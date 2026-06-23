@@ -141,6 +141,7 @@ run_contract_tests() {
         helm version --short
         ansible-lint --version
         pre-commit --version
+        gh --version
         docker --version
         antsibull-changelog --version
       '
