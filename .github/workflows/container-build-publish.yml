@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   build:
@@ -18,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
         with:
           ref: ${{ github.event.release.tag_name }}
 
@@ -85,25 +86,33 @@ jobs:
           echo "Using SHORT_SHA=${short_sha}"
 
       - name: Set up QEMU (multi-arch)
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3  # v4
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4
 
       - name: Log in to Quay.io
-        uses: docker/login-action@v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_PASSWORD }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
       - name: Build and push image (amd64 + arm64)
-        uses: docker/build-push-action@v7
+        id: build_image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7
         with:
           context: .
           file: ./Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=${{ github.repository }}
+          cache-to: type=gha,mode=max,scope=${{ github.repository }}
+          sbom: true
+          provenance: mode=max
           tags: |
             ${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
             ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
@@ -117,12 +126,8 @@ jobs:
             org.opencontainers.image.title=${{ github.event.repository.name }}
             org.opencontainers.image.description=${{ github.event.repository.description }}
 
-      - name: Verify pushed image tags
+      - name: Verify, scan, sign, and summarize release image
         shell: bash
-        run: |
-          set -euo pipefail
-
-          docker buildx imagetools inspect "${IMAGE_NAME}:${RELEASE_TAG}" >/dev/null
-          docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}" >/dev/null
-          docker buildx imagetools inspect "${IMAGE_NAME}:sha-${SHORT_SHA}" >/dev/null
-          docker buildx imagetools inspect "${IMAGE_NAME}:latest" >/dev/null
+        env:
+          IMAGE_DIGEST: ${{ steps.build_image.outputs.digest }}
+        run: bash scripts/devtools-container-release-verify.sh
