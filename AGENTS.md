@@ -34,8 +34,8 @@
 - Promotion from `develop` to `main` happens only through a pull request.
 - Merging `develop` into `main` is the container release trigger.
 - Use merge commits for `develop` to `main` promotion PRs so branch ancestry remains clear.
-- After `main` changes, the shared `sync-main-to-develop` workflow must merge `main` back into `develop` so the next
-  promotion PR can be opened without branch drift.
+- After `main` changes, the shared `sync-main-to-develop` workflow must open a back-sync PR from `main` to `develop` so
+  the next promotion PR can be opened without branch drift.
 - Repository settings, default branches, branch protection, and workflow permissions belong in `github-management-lit`.
 
 ## Semantic release and container publishing
