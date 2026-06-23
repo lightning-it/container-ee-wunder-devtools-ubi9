@@ -19,8 +19,33 @@
   - `.releaserc`
   - `.yamllint`
   - `CONTRIBUTING.md`
+  - `.github/workflows/container-ci.yml`
   - `.github/workflows/container-build-publish.yml`
+  - `.github/workflows/promote-develop-to-main.yml`
+  - `.github/workflows/renovate-guarded-automerge.yml`
   - `.github/workflows/semantic-release.yml`
+
+## Branch and release model
+
+- `develop` is the default development and integration branch.
+- Feature, Renovate, and shared-assets sync PRs target `develop`.
+- `main` is the stable production release branch.
+- Promotion from `develop` to `main` happens only through a pull request.
+- Merging `develop` into `main` is the container release trigger.
+- Use merge commits for `develop` to `main` promotion PRs so branch ancestry remains clear.
+- Repository settings, default branches, branch protection, and workflow permissions belong in `github-management-lit`.
+
+## Semantic release and container publishing
+
+- Container repositories use `semantic-release` on `main` for version calculation, Git tag creation, GitHub Release
+  creation, and release notes.
+- Do not use `@semantic-release/changelog`, `@semantic-release/git`, or committed `CHANGELOG.md` for container
+  repositories unless a repository has an explicit, documented exception.
+- The container publish workflow must build from the exact semantic-release tag.
+- Released images must publish immutable release-version and commit-SHA tags plus the repository's moving production
+  tag, usually `latest`.
+- Released images must include OCI labels for source repository, revision, version, creation time, title/name, and any
+  repo-specific description/license metadata already in use.
 
 ## Dependency pinning
 

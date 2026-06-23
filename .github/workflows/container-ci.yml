@@ -1,0 +1,59 @@
+# yamllint disable rule:truthy
+---
+name: Container CI
+
+on:
+  push:
+    branches: ["develop", "main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate container repository
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: yamllint
+        run: |
+          python -m pip install --no-cache-dir yamllint
+          yamllint .
+
+      - name: hadolint
+        uses: hadolint/hadolint-action@v4
+        with:
+          dockerfile: Dockerfile
+          ignore: DL3041
+
+      - name: Build image
+        run: |
+          set -euo pipefail
+
+          image="local/${GITHUB_REPOSITORY#*/}:ci"
+          docker build \
+            --build-arg COLLECTION_PROFILE=public \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=ci-${GITHUB_SHA::12}" \
+            --label "org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --label "org.opencontainers.image.title=${GITHUB_REPOSITORY#*/}" \
+            -t "$image" \
+            -f Dockerfile \
+            .
+
+      - name: Inspect labels
+        run: |
+          set -euo pipefail
+
+          image="local/${GITHUB_REPOSITORY#*/}:ci"
+          docker image inspect "$image" \
+            --format '{{ index .Config.Labels "org.opencontainers.image.source" }}'
+          docker image inspect "$image" \
+            --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
+          docker image inspect "$image" \
+            --format '{{ index .Config.Labels "org.opencontainers.image.version" }}'
