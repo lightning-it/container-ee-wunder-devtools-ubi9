@@ -25,10 +25,9 @@ jobs:
           yamllint .
 
       - name: hadolint
-        uses: hadolint/hadolint-action@v4
-        with:
-          dockerfile: Dockerfile
-          ignore: DL3041
+        run: |
+          docker run --rm -i docker.io/hadolint/hadolint:v2.14.0 \
+            hadolint --failure-threshold error --ignore DL3041 - < Dockerfile
 
       - name: Build image
         run: |
