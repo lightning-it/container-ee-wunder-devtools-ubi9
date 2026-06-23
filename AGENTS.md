@@ -27,6 +27,9 @@
   - `.github/workflows/semantic-release.yml`
   - `scripts/devtools-container-ci.sh`
   - `scripts/devtools-container-release-verify.sh`
+  - `scripts/container-download-verified.sh`
+  - `scripts/ee-entrypoint.sh`
+  - `scripts/install-galaxy-content.sh`
 
 ## Branch and release model
 
@@ -59,6 +62,12 @@
   checks there first so local validation and GitHub validation stay aligned.
 - Container vulnerability scans fail on `CRITICAL` findings and report `HIGH` findings without failing unless a stricter
   policy is deliberately added in `shared-assets-lit`.
+- Dockerfiles must not download executable tools without checksum or signature verification. Use the shared
+  `scripts/container-download-verified.sh` helper when possible.
+- Larger entrypoints and repeated build helpers should be tracked scripts, not embedded heredocs, so shell linting and
+  shared review rules can cover them.
+- Non-secret ARG names must avoid secret-looking words such as `AUTH`, `TOKEN`, or `PASSWORD` unless the ARG really is a
+  secret. Real secrets must use BuildKit secrets or GitHub secrets and must not persist in image layers.
 
 ## Dependency pinning
 

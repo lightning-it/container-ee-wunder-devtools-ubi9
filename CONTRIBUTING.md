@@ -33,6 +33,9 @@ This project follows our community standards described in `CODE_OF_CONDUCT.md`. 
 - Release images are published with Buildx SBOM/provenance attestations and are signed by immutable digest with
   keyless Sigstore/Cosign.
 - The release workflow verifies expected tags, digests, vulnerability policy, and signing identity before it finishes.
+- Dockerfiles must verify downloaded executable artifacts with upstream checksums or signatures before installation.
+- Shared helper logic, entrypoints, and repeated download/Galaxy install behavior should live in `shared-assets-lit`
+  and be rolled out to downstream container repositories.
 - Container repositories do not maintain a committed `CHANGELOG.md`; use GitHub Releases as the changelog.
 
 ### 1) Open an Issue (recommended for non-trivial changes)
