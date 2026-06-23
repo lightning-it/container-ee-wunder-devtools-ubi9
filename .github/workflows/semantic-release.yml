@@ -18,9 +18,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: yamllint
-        run: |
-          python -m pip install --no-cache-dir yamllint
-          yamllint .github
+        run: bash scripts/wunder-devtools-ee.sh yamllint .github
 
   release:
     name: Semantic Release
