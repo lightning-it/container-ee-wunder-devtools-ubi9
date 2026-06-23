@@ -1,0 +1,92 @@
+# yamllint disable rule:truthy
+---
+name: Sync main back to develop
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-main-to-develop
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Open main-to-develop sync PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.LITRELEASEBOT_TOKEN }}
+          persist-credentials: true
+
+      - name: Configure git author
+        run: |
+          git config user.name "litreleasebot"
+          git config user.email "litreleasebot@users.noreply.github.com"
+
+      - name: Create or update sync PR
+        env:
+          RELEASE_TOKEN: ${{ secrets.LITRELEASEBOT_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RELEASE_TOKEN:-}" ]; then
+            echo "LITRELEASEBOT_TOKEN is required to create or update"
+            echo "container main-to-develop sync PRs."
+            exit 1
+          fi
+
+          git fetch origin main develop
+          sync_branch="chore/sync-main-to-develop"
+          title="chore: sync main back to develop"
+
+          pr_url="$(GH_TOKEN="$RELEASE_TOKEN" gh pr list \
+            --repo "$REPO" \
+            --base develop \
+            --head "$sync_branch" \
+            --state open \
+            --json url \
+            --jq '.[0].url')"
+
+          if git merge-base --is-ancestor origin/main origin/develop; then
+            echo "develop already contains main; nothing to sync."
+            if [ -n "$pr_url" ]; then
+              GH_TOKEN="$RELEASE_TOKEN" gh pr close "$pr_url" \
+                --repo "$REPO" \
+                --comment "Closing empty back-sync PR: develop already contains main."
+            fi
+            exit 0
+          fi
+
+          git checkout -B "$sync_branch" origin/develop
+          git merge --no-ff origin/main -m "chore: sync main back to develop"
+          git push --force-with-lease origin "HEAD:${sync_branch}"
+
+          body=$'Back-sync PR from `main` to `develop`.\n\n'
+          body+=$'This keeps `develop` ancestry current after a production '
+          body+=$'promotion merge into `main`, so the next `develop` to `main` '
+          body+=$'promotion PR can open cleanly.'
+
+          if [ -z "$pr_url" ]; then
+            GH_TOKEN="$RELEASE_TOKEN" gh pr create \
+              --repo "$REPO" \
+              --base develop \
+              --head "$sync_branch" \
+              --title "$title" \
+              --body "$body"
+          else
+            GH_TOKEN="$RELEASE_TOKEN" gh pr edit "$pr_url" \
+              --repo "$REPO" \
+              --title "$title" \
+              --body "$body"
+          fi
