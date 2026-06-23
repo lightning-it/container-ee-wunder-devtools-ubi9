@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       - name: Validate Quay variables/secrets
         shell: bash
@@ -52,7 +54,7 @@ jobs:
 
           echo "Quay configuration present (namespace + credentials)."
 
-      - name: Compute image name + tag (strip "container-" prefix)
+      - name: Compute image name and tags
         shell: bash
         env:
           QUAY_NAMESPACE: ${{ vars.QUAY_NAMESPACE }}
@@ -61,15 +63,26 @@ jobs:
           repo="${GITHUB_REPOSITORY#*/}"
           image_repo="${repo#container-}"
 
-          # Always use vars.QUAY_NAMESPACE (validated above)
           image_name="${REGISTRY}/${QUAY_NAMESPACE}/${image_repo}"
-          tag="${{ github.event.release.tag_name }}"
+          release_tag="${{ github.event.release.tag_name }}"
+          version="${release_tag#v}"
+          full_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
-          echo "IMAGE_NAME=${image_name}" >> "$GITHUB_ENV"
-          echo "RELEASE_TAG=${tag}" >> "$GITHUB_ENV"
+          {
+            echo "IMAGE_NAME=${image_name}"
+            echo "RELEASE_TAG=${release_tag}"
+            echo "VERSION=${version}"
+            echo "FULL_SHA=${full_sha}"
+            echo "SHORT_SHA=${short_sha}"
+            echo "CREATED=${created}"
+          } >> "$GITHUB_ENV"
 
           echo "Using IMAGE_NAME=${image_name}"
-          echo "Using RELEASE_TAG=${tag}"
+          echo "Using RELEASE_TAG=${release_tag}"
+          echo "Using VERSION=${version}"
+          echo "Using SHORT_SHA=${short_sha}"
 
       - name: Set up QEMU (multi-arch)
         uses: docker/setup-qemu-action@v4
@@ -93,4 +106,23 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
+            ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+            ${{ env.IMAGE_NAME }}:sha-${{ env.SHORT_SHA }}
             ${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.FULL_SHA }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.created=${{ env.CREATED }}
+            org.opencontainers.image.title=${{ github.event.repository.name }}
+            org.opencontainers.image.description=${{ github.event.repository.description }}
+
+      - name: Verify pushed image tags
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker buildx imagetools inspect "${IMAGE_NAME}:${RELEASE_TAG}" >/dev/null
+          docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}" >/dev/null
+          docker buildx imagetools inspect "${IMAGE_NAME}:sha-${SHORT_SHA}" >/dev/null
+          docker buildx imagetools inspect "${IMAGE_NAME}:latest" >/dev/null

@@ -1,0 +1,105 @@
+# yamllint disable rule:truthy
+---
+name: Promote develop to main
+
+on:
+  push:
+    branches: ["develop"]
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  promote:
+    name: Open develop-to-main promotion PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create or update promotion PR
+        env:
+          RELEASE_TOKEN: ${{ secrets.LITRELEASEBOT_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RELEASE_TOKEN:-}" ]; then
+            echo "LITRELEASEBOT_TOKEN is required to create or update"
+            echo "container promotion PRs."
+            exit 1
+          fi
+
+          if ! git ls-remote --exit-code --heads origin develop >/dev/null 2>&1; then
+            echo "develop branch does not exist; skipping promotion."
+            exit 0
+          fi
+
+          git fetch origin main develop
+
+          if git merge-base --is-ancestor origin/develop origin/main; then
+            echo "main already contains develop; skipping promotion."
+            exit 0
+          fi
+
+          title="chore(release): promote develop to main"
+          pr_url="$(GH_TOKEN="$RELEASE_TOKEN" gh pr list \
+            --repo "$REPO" \
+            --base main \
+            --head develop \
+            --state open \
+            --json url \
+            --jq '.[0].url')"
+
+          if ! git merge-base --is-ancestor origin/main origin/develop; then
+            {
+              echo "main is not an ancestor of develop."
+              echo "Sync main back to develop before opening a promotion PR."
+            }
+            if [ -n "$pr_url" ]; then
+              GH_TOKEN="$RELEASE_TOKEN" gh pr close "$pr_url" \
+                --repo "$REPO" \
+                --comment "Closing stale promotion PR: main is not an ancestor of develop."
+            fi
+            exit 0
+          fi
+
+          if git diff --quiet origin/main origin/develop -- .; then
+            echo "develop and main have no file differences; promotion not needed."
+            if [ -n "$pr_url" ]; then
+              GH_TOKEN="$RELEASE_TOKEN" gh pr close "$pr_url" \
+                --repo "$REPO" \
+                --comment "Closing empty promotion PR: develop and main have no file differences."
+            fi
+            exit 0
+          fi
+
+          body=$'Promotion PR from `develop` to `main`.\n\n'
+          body+=$'Merging this PR is the production container release gate. '
+          body+=$'After merge, semantic-release calculates the next version, '
+          body+=$'creates the GitHub Release, and the container publish workflow '
+          body+=$'builds from the exact release tag.\n\n'
+          body+=$'Merge this PR with a merge commit so `develop` becomes an '
+          body+=$'ancestor of `main`.'
+
+          if [ -z "$pr_url" ]; then
+            GH_TOKEN="$RELEASE_TOKEN" gh pr create \
+              --repo "$REPO" \
+              --base main \
+              --head develop \
+              --title "$title" \
+              --body "$body"
+          else
+            GH_TOKEN="$RELEASE_TOKEN" gh pr edit "$pr_url" \
+              --repo "$REPO" \
+              --title "$title" \
+              --body "$body"
+          fi

@@ -1,0 +1,74 @@
+# yamllint disable rule:truthy
+---
+name: Renovate guarded automerge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  approve-renovate:
+    name: Approve trusted Renovate PR
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - name: Verify Renovate PR identity
+        id: guard
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          TRIGGER_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+
+          labels="$(jq -r '.[]' <<<"$PR_LABELS")"
+
+          has_label() {
+            grep -Fxq "$1" <<<"$labels"
+          }
+
+          trusted=true
+
+          if [ "$TRIGGER_ACTOR" != "renovate[bot]" ]; then
+            trusted=false
+          fi
+
+          if [ "$PR_AUTHOR" != "renovate[bot]" ]; then
+            trusted=false
+          fi
+
+          case "$PR_HEAD" in
+            renovate/*) ;;
+            *) trusted=false ;;
+          esac
+
+          if [ "$PR_BASE" != "develop" ]; then
+            trusted=false
+          fi
+
+          if ! has_label renovate || ! has_label dependencies; then
+            trusted=false
+          fi
+
+          echo "trusted=$trusted" >>"$GITHUB_OUTPUT"
+
+      - name: Approve and enable auto-merge
+        if: steps.guard.outputs.trusted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+
+          gh pr review "$PR_URL" \
+            --approve \
+            --body "Approved trusted Renovate dependency update after actor, label, branch, and base-branch checks."
+
+          gh pr merge "$PR_URL" --auto --merge
