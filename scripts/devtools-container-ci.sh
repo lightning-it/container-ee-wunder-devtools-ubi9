@@ -6,7 +6,7 @@ mode="${1:-all}"
 github_repository_env="${GITHUB_REPOSITORY:-}"
 repo_name="${github_repository_env##*/}"
 if [ -z "$repo_name" ] || [ "$repo_name" = "$github_repository_env" ]; then
-  repo_name="$(basename "$PWD")"
+  repo_name="$(basename "${WUNDER_DEVTOOLS_HOST_WORKSPACE:-$PWD}")"
 fi
 
 github_repository="${github_repository_env:-lightning-it/${repo_name}}"
@@ -14,8 +14,12 @@ github_sha="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo local)}"
 short_sha="${github_sha:0:12}"
 created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 image="local/${repo_name}:ci"
+actionlint_image="${ACTIONLINT_IMAGE:-docker.io/rhysd/actionlint:1.7.7}"
+renovate_image="${RENOVATE_IMAGE:-docker.io/renovate/renovate:41.0.0}"
+trivy_image="${TRIVY_IMAGE:-docker.io/aquasec/trivy:0.68.1}"
 nested_workspace_args=()
 nested_socket_args=()
+trivy_ignore_args=()
 
 set_nested_workspace_args() {
   if [ -f /.dockerenv ] && docker container inspect "$(hostname)" >/dev/null 2>&1; then
@@ -66,7 +70,7 @@ run_actionlint() {
   set_nested_workspace_args
   docker run --rm \
     "${nested_workspace_args[@]}" \
-    docker.io/rhysd/actionlint:latest
+    "$actionlint_image"
 }
 
 run_hadolint() {
@@ -117,6 +121,97 @@ run_label_checks() {
   assert_label "org.opencontainers.image.source" "https://github.com/${github_repository}"
   assert_label "org.opencontainers.image.revision" "${github_sha}"
   assert_label "org.opencontainers.image.version" "ci-${short_sha}"
+
+  docker image inspect "$image" --format 'Built image {{ .Id }} with tags {{ .RepoTags }}'
+}
+
+run_contract_tests() {
+  require_docker
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    run_container_build
+  fi
+
+  case "$repo_name" in
+    container-ee-wunder-devtools-ubi9)
+      docker run --rm "$image" bash -lc '
+        set -euo pipefail
+        terraform -version
+        tflint --version
+        terraform-docs --version
+        helm version --short
+        ansible-lint --version
+        pre-commit --version
+        docker --version
+        antsibull-changelog --version
+      '
+      ;;
+    container-ee-wunder-ansible-ubi9)
+      docker run --rm "$image" bash -lc '
+        set -euo pipefail
+        ansible --version
+        ansible-galaxy --version
+        ansible-runner --version
+        terraform -version
+        terragrunt --version
+        helm version --short
+        ansible-galaxy collection list -p /usr/share/ansible/collections
+      '
+      ;;
+    container-ee-wunder-toolbox-ubi9)
+      docker run --rm "$image" bash -lc '
+        set -euo pipefail
+        ansible-navigator --version
+        ansible-doc --version
+        helm version --short
+        kustomize version
+        vault --version
+        podman --version
+        command -v ansible-nav
+        command -v ansible-nav-local
+        rpm -q modulix-automation-runtime
+      '
+      ;;
+    *)
+      echo "No image-specific contract tests configured for ${repo_name}; skipping."
+      ;;
+  esac
+}
+
+run_vulnerability_scan() {
+  require_docker
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    run_container_build
+  fi
+
+  set_nested_workspace_args
+  trivy_ignore_args=()
+  if [ -f .trivyignore ]; then
+    trivy_ignore_args=(--ignorefile .trivyignore)
+  fi
+
+  docker run --rm \
+    "${nested_workspace_args[@]}" \
+    "${nested_socket_args[@]}" \
+    -e DOCKER_HOST=unix:///var/run/docker.sock \
+    "$trivy_image" image \
+      --scanners vuln \
+      --ignore-unfixed \
+      "${trivy_ignore_args[@]}" \
+      --severity HIGH \
+      --exit-code 0 \
+      "$image"
+
+  docker run --rm \
+    "${nested_workspace_args[@]}" \
+    "${nested_socket_args[@]}" \
+    -e DOCKER_HOST=unix:///var/run/docker.sock \
+    "$trivy_image" image \
+      --scanners vuln \
+      --ignore-unfixed \
+      "${trivy_ignore_args[@]}" \
+      --severity CRITICAL \
+      --exit-code 1 \
+      "$image"
 }
 
 run_renovate_config() {
@@ -128,7 +223,7 @@ run_renovate_config() {
   set_nested_workspace_args
   docker run --rm -u 0:0 \
     "${nested_workspace_args[@]}" \
-    docker.io/renovate/renovate:latest renovate-config-validator
+    "$renovate_image" renovate-config-validator
 }
 
 run_semantic_release_dry_run() {
@@ -170,6 +265,8 @@ run_ci() {
   run_hadolint
   run_container_build
   run_label_checks
+  run_contract_tests
+  run_vulnerability_scan
   run_renovate_config
 }
 

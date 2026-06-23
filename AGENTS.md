@@ -25,6 +25,8 @@
   - `.github/workflows/sync-main-to-develop.yml`
   - `.github/workflows/renovate-guarded-automerge.yml`
   - `.github/workflows/semantic-release.yml`
+  - `scripts/devtools-container-ci.sh`
+  - `scripts/devtools-container-release-verify.sh`
 
 ## Branch and release model
 
@@ -49,6 +51,14 @@
   tag, usually `latest`.
 - Released images must include OCI labels for source repository, revision, version, creation time, title/name, and any
   repo-specific description/license metadata already in use.
+- Release builds must publish SBOM and maximum provenance attestations through Buildx.
+- Release images must be signed by digest with keyless Sigstore/Cosign using GitHub OIDC.
+- Release verification must inspect all expected tags, compare them to the pushed digest, verify the Cosign identity for
+  the repository workflow/tag ref, and record the digest in the workflow summary.
+- PR CI and local pre-commit must run the shared container CI parity script through the devtools container. Add new PR
+  checks there first so local validation and GitHub validation stay aligned.
+- Container vulnerability scans fail on `CRITICAL` findings and report `HIGH` findings without failing unless a stricter
+  policy is deliberately added in `shared-assets-lit`.
 
 ## Dependency pinning
 
@@ -56,6 +66,10 @@
 - For every change to pinned versions in managed files (workflows, scripts, container files), maintain Renovate in the same change (`renovate.json` package rules/custom managers, or the shared-assets-lit Renovate source).
 - Validate Renovate config changes before commit (for example: `pre-commit run renovate-config-validate --files renovate.json`).
 - Do not relax version pinning in managed container templates without an explicit decision in `shared-assets-lit`.
+- Pin third-party GitHub Actions to full-length commit SHAs in shared workflow templates. Keep the human-readable version
+  in a YAML comment and ensure Renovate can maintain the pin.
+- Pin helper container images used by validation scripts; do not use `latest` for CI linters, scanners, or release
+  tooling.
 
 ## Repo-specific overrides
 
