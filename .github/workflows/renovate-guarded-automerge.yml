@@ -71,4 +71,4 @@ jobs:
             --approve \
             --body "Approved trusted Renovate dependency update after actor, label, branch, and base-branch checks."
 
-          gh pr merge "$PR_URL" --auto --merge
+          gh pr merge "$PR_URL" --auto --merge --delete-branch
