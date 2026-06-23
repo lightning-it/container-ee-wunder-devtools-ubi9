@@ -30,6 +30,9 @@ This project follows our community standards described in `CODE_OF_CONDUCT.md`. 
 - semantic-release calculates the next version, creates the Git tag, and publishes GitHub Release notes.
 - Container images are built from the exact release tag and published with immutable version/SHA tags plus the moving
   production tag.
+- Release images are published with Buildx SBOM/provenance attestations and are signed by immutable digest with
+  keyless Sigstore/Cosign.
+- The release workflow verifies expected tags, digests, vulnerability policy, and signing identity before it finishes.
 - Container repositories do not maintain a committed `CHANGELOG.md`; use GitHub Releases as the changelog.
 
 ### 1) Open an Issue (recommended for non-trivial changes)
@@ -101,6 +104,10 @@ pre-commit install
 ```bash
 pre-commit run --all-files
 ```
+
+The managed pre-commit hook runs the same container CI parity script that GitHub PR checks run, inside the devtools
+container. A local green run should therefore catch the normal PR build, lint, runtime contract, Renovate config, and
+container vulnerability checks before you push.
 
 ## Container Build & Test
 

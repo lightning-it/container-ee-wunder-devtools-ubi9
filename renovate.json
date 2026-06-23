@@ -171,7 +171,7 @@
       "versioningTemplate": "docker"
     }
   ],
-  "baseBranchPatterns": [
+  "baseBranches": [
     "develop"
   ]
 }
