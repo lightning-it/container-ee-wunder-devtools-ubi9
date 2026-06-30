@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.LITRELEASEBOT_TOKEN }}
+          token: ${{ github.token }}
           persist-credentials: true
 
       - name: Configure git author
@@ -35,14 +35,23 @@ jobs:
 
       - name: Create or update sync PR
         env:
-          RELEASE_TOKEN: ${{ secrets.LITRELEASEBOT_TOKEN }}
+          BOT_TOKEN: ${{ secrets.LITRELEASEBOT_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          if [ -z "${RELEASE_TOKEN:-}" ]; then
-            echo "LITRELEASEBOT_TOKEN is required to create or update"
-            echo "container main-to-develop sync PRs."
+          pr_token="${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
+          if [ -n "${BOT_TOKEN:-}" ]; then
+            if GH_TOKEN="$BOT_TOKEN" gh api user --jq '.login' >/dev/null 2>&1; then
+              pr_token="$BOT_TOKEN"
+            else
+              echo "LITRELEASEBOT_TOKEN is not valid; falling back to GITHUB_TOKEN."
+            fi
+          fi
+
+          if ! GH_TOKEN="$pr_token" gh auth status --hostname github.com >/dev/null 2>&1; then
+            echo "No valid GitHub token is available for main-to-develop sync PRs."
             exit 1
           fi
 
@@ -50,7 +59,7 @@ jobs:
           sync_branch="chore/sync-main-to-develop"
           title="chore: sync main back to develop"
 
-          pr_url="$(GH_TOKEN="$RELEASE_TOKEN" gh pr list \
+          pr_url="$(GH_TOKEN="$pr_token" gh pr list \
             --repo "$REPO" \
             --base develop \
             --head "$sync_branch" \
@@ -61,7 +70,7 @@ jobs:
           if git merge-base --is-ancestor origin/main origin/develop; then
             echo "develop already contains main; nothing to sync."
             if [ -n "$pr_url" ]; then
-              GH_TOKEN="$RELEASE_TOKEN" gh pr close "$pr_url" \
+              GH_TOKEN="$pr_token" gh pr close "$pr_url" \
                 --repo "$REPO" \
                 --comment "Closing empty back-sync PR: develop already contains main."
             fi
@@ -78,14 +87,14 @@ jobs:
           body+=$'promotion PR can open cleanly.'
 
           if [ -z "$pr_url" ]; then
-            GH_TOKEN="$RELEASE_TOKEN" gh pr create \
+            GH_TOKEN="$pr_token" gh pr create \
               --repo "$REPO" \
               --base develop \
               --head "$sync_branch" \
               --title "$title" \
               --body "$body"
           else
-            GH_TOKEN="$RELEASE_TOKEN" gh pr edit "$pr_url" \
+            GH_TOKEN="$pr_token" gh pr edit "$pr_url" \
               --repo "$REPO" \
               --title "$title" \
               --body "$body"
