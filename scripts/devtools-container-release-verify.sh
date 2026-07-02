@@ -20,7 +20,7 @@ done
 image_ref="${IMAGE_NAME}@${IMAGE_DIGEST}"
 workflow_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-build-publish.yml@refs/tags/${RELEASE_TAG}"
 workflow_identity_regexp="^https://github\\.com/${GITHUB_REPOSITORY}/\\.github/workflows/container-build-publish\\.yml@refs/tags/${RELEASE_TAG}$"
-trivy_image="${TRIVY_IMAGE:-docker.io/aquasec/trivy:0.68.1}"
+trivy_image="${TRIVY_IMAGE:-docker.io/aquasec/trivy:0.71.2}"
 trivy_workspace_args=(-v "$PWD:/repo" -w /repo)
 trivy_ignore_args=()
 
