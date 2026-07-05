@@ -1,0 +1,37 @@
+# yamllint disable rule:truthy
+---
+name: Trivy
+
+on:
+  pull_request:
+    paths:
+      - "Containerfile"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "packaging/container/**"
+      - ".github/workflows/container-trivy.yml"
+  push:
+    branches: ["develop", "main", "master"]
+    paths:
+      - "Containerfile"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "packaging/container/**"
+      - ".github/workflows/container-trivy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: Trivy
+    permissions:
+      contents: read
+      security-events: write
+    uses: lightning-it/.github/.github/workflows/container-trivy-reusable.yml@main
+    with:
+      image_name: local/${{ github.event.repository.name }}
+      containerfile: ${{ vars.CONTAINERFILE_PATH || 'Dockerfile' }}
+      context: ${{ vars.CONTAINER_BUILD_CONTEXT || '.' }}
+      severity: CRITICAL
