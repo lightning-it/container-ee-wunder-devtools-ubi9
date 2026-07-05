@@ -35,5 +35,10 @@ readme_badges:
 workflows:
   ci: container-ci.yml
   release: container-build-publish.yml
+  trivy: container-trivy.yml
   promote: promote-develop-to-main.yml
   backmerge: sync-main-to-develop.yml
+containerfile: Dockerfile
+container_build_context: .
+trivy_required: true
+trivy_release_gate: true

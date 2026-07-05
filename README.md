@@ -6,7 +6,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/lightning-it/container-ee-wunder-devtools-ubi9?sort=semver)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/releases/latest)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/lightning-it/container-ee-wunder-devtools-ubi9/badge)](https://scorecard.dev/viewer/?uri=github.com/lightning-it/container-ee-wunder-devtools-ubi9)
 [![Quay.io](https://quay.io/repository/l-it/ee-wunder-devtools-ubi9/status)](https://quay.io/repository/l-it/ee-wunder-devtools-ubi9)
-[![Trivy](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build-publish.yml/badge.svg?branch=main)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build-publish.yml)
+[![Trivy](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-trivy.yml/badge.svg?branch=develop)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-trivy.yml)
 [![Container Build](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build-publish.yml/badge.svg?branch=main)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build-publish.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
