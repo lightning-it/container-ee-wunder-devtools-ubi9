@@ -109,7 +109,7 @@ jobs:
             org.opencontainers.image.title=${{ github.event.repository.name }}
             org.opencontainers.image.description=${{ github.event.repository.description }}
 
-      - name: Run Trivy release gate before Quay publish
+      - name: Generate Trivy release gate SARIF
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:trivy-${{ env.SHORT_SHA }}
@@ -118,13 +118,23 @@ jobs:
           vuln-type: os,library
           ignore-unfixed: true
           severity: CRITICAL
-          exit-code: "1"
+          exit-code: "0"
 
       - name: Upload Trivy release gate SARIF
-        if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-release-gate.sarif
+
+      - name: Run Trivy release gate before Quay publish
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:trivy-${{ env.SHORT_SHA }}
+          format: table
+          vuln-type: os,library
+          ignore-unfixed: true
+          severity: CRITICAL
+          exit-code: "1"
 
       - name: Log in to Quay.io
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4
