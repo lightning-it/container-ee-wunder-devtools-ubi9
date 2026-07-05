@@ -15,7 +15,7 @@ test_profiles:
   - release-validation
 os_matrix:
   - ubuntu-latest
-product_matrix:
+product_matrix: &id001
   - ubi9
   - podman
   - docker-buildx
@@ -39,6 +39,21 @@ workflows:
   trivy: container-trivy.yml
   promote: promote-develop-to-main.yml
   backmerge: sync-main-to-develop.yml
+image_name: quay.io/l-it/ee-wunder-devtools-ubi9
+registry: quay.io
+quay_organization: l-it
+quay_repository: ee-wunder-devtools-ubi9
+version_source: semantic-release
+supported_base_images: *id001
+supported_target_platforms:
+  - linux/amd64
+  - linux/arm64
+smoke_test_command: repository default container smoke test
+healthcheck_expectation: container starts successfully where configured
+trivy_policy: CRITICAL gate with unfixed vulnerabilities ignored
+required_secrets:
+  - QUAY_USERNAME
+  - QUAY_PASSWORD
 containerfile: Dockerfile
 container_build_context: .
 trivy_required: true
