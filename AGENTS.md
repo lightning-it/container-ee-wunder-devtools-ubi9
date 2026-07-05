@@ -24,6 +24,7 @@
   - `.github/workflows/promote-develop-to-main.yml`
   - `.github/workflows/sync-main-to-develop.yml`
   - `.github/workflows/renovate-guarded-automerge.yml`
+  - `.github/workflows/shared-assets-guarded-automerge.yml`
   - `.github/workflows/semantic-release.yml`
   - `scripts/devtools-container-ci.sh`
   - `scripts/devtools-container-release-verify.sh`
