@@ -20,6 +20,6 @@ jobs:
       contents: read
       security-events: write
       id-token: write
-    uses: lightning-it/shared-assets-lit/.github/workflows/openssf-scorecard-reusable.yml@main
+    uses: lightning-it/.github/.github/workflows/openssf-scorecard-reusable.yml@main
     with:
       publish_results: true
