@@ -12,35 +12,42 @@
 
 <!-- END LIT_QUALITY_BADGES -->
 
-<!-- BEGIN LIT_SHARED_RELEASE_MODEL -->
+<!-- BEGIN LIT_COMPATIBILITY_MATRIX -->
+
+## Compatibility Matrix
+
+| Image Version | Image | Base Platform | Runtime | Test Type | Validation |
+|---|---|---|---|---|---|
+| Current release | quay.io/l-it/ee-wunder-devtools-ubi9 | ubi9 | ubi9, podman, docker-buildx | Build / Smoke / Trivy | See GitHub Release evidence |
+| Current release | quay.io/l-it/ee-wunder-devtools-ubi9 | podman | ubi9, podman, docker-buildx | Build / Smoke / Trivy | See GitHub Release evidence |
+| Current release | quay.io/l-it/ee-wunder-devtools-ubi9 | docker-buildx | ubi9, podman, docker-buildx | Build / Smoke / Trivy | See GitHub Release evidence |
+
+Validation proof for each released version is stored in the corresponding GitHub Release evidence.
+
+<!-- END LIT_COMPATIBILITY_MATRIX -->
+
+<!-- BEGIN LIT_RELEASE_QUALITY_MODEL -->
 
 ## Release and Quality Model
 
 This repository follows the Lightning IT shared release and quality model.
+The README shows the current supported and tested matrix.
+Exact per-version proof is stored with every GitHub Release as `release-evidence.md` and `release-evidence.json`.
 
-See [RELEASE.md](./RELEASE.md) for:
+See:
 
-- branch and release flow
-- required quality checks
-- test matrix
-- release evidence
-- artifact publishing
-- supported repository-specific release behavior
+- [RELEASE.md](./RELEASE.md)
+- [TESTING.md](./TESTING.md)
+- [GitHub Releases](../../releases)
 
 Repository classification: **Container Image**.
 Required test profiles: `pre-commit, lint, container-build, container-smoke, trivy, release-validation`.
 Publishing targets: `github-release, quay.io`.
 
-## Supported and Tested Platforms
+Release evidence records the exact GitHub Actions run, validated matrix rows, built artifacts, publish result, and security status for each release.
 
-| Platform / Product | Status | Validation |
-|---|---:|---|
-| ubuntu-latest | Supported | Container CI / Trivy |
-| ubi9 | Tested where applicable | Container CI / Trivy |
-| podman | Tested where applicable | Container CI / Trivy |
-| docker-buildx | Tested where applicable | Container CI / Trivy |
+<!-- END LIT_RELEASE_QUALITY_MODEL -->
 
-<!-- END LIT_SHARED_RELEASE_MODEL -->
 
 Shared development tools container for local and CI workflows.
 
