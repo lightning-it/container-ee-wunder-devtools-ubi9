@@ -7,14 +7,17 @@ on:
     types: [published]
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
   security-events: write
 
 jobs:
   build:
     name: Build & push image to Quay.io
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      security-events: write
     env:
       REGISTRY: quay.io
 
@@ -211,7 +214,7 @@ jobs:
 
       - name: Upload release evidence artifact
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5
         with:
           name: release-evidence
           path: |
