@@ -1,0 +1,80 @@
+# yamllint disable rule:truthy
+---
+name: Shared-assets guarded automerge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  approve-shared-assets:
+    name: Approve trusted shared-assets PR
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - name: Verify shared-assets PR identity
+        id: guard
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          labels="$(jq -r '.[]' <<<"$PR_LABELS")"
+
+          has_label() {
+            grep -Fxq "$1" <<<"$labels"
+          }
+
+          trusted=true
+
+          if [ "$PR_AUTHOR" != "litreleasebot" ]; then
+            trusted=false
+          fi
+
+          if [ "$PR_HEAD_REPO" != "$REPO" ]; then
+            trusted=false
+          fi
+
+          case "$PR_HEAD" in
+            chore/sync-shared-assets-lit-*) ;;
+            *) trusted=false ;;
+          esac
+
+          if [ "$PR_BASE" != "develop" ]; then
+            trusted=false
+          fi
+
+          if [ "$PR_TITLE" != "chore: sync shared-assets-lit" ]; then
+            trusted=false
+          fi
+
+          if ! has_label chore || ! has_label shared-assets-lit; then
+            trusted=false
+          fi
+
+          echo "trusted=$trusted" >>"$GITHUB_OUTPUT"
+
+      - name: Approve and enable auto-merge
+        if: steps.guard.outputs.trusted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+
+          gh pr review "$PR_URL" \
+            --approve \
+            --body "Approved trusted shared-assets sync after actor, label, branch, repository, and base-branch checks."
+
+          gh pr merge "$PR_URL" --auto --merge --delete-branch
