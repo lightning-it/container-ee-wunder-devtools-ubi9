@@ -35,6 +35,7 @@ readme_badges:
   - license
 workflows:
   ci: container-ci.yml
+  container_build: container-build.yml
   release: container-build-publish.yml
   trivy: container-trivy.yml
   promote: promote-develop-to-main.yml

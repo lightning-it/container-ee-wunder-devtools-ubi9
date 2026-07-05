@@ -1,0 +1,125 @@
+# yamllint disable rule:truthy
+---
+name: Container Build
+
+on:
+  pull_request:
+    branches: ["develop"]
+    paths:
+      - "Dockerfile"
+      - "Containerfile"
+      - ".dockerignore"
+      - "bindep.txt"
+      - "requirements*.txt"
+      - "rpm-packages.txt"
+      - "copr-packages.txt"
+      - "collections/**"
+      - "roles/**"
+      - "scripts/**"
+      - ".github/workflows/container-build.yml"
+  push:
+    branches: ["develop"]
+    paths:
+      - "Dockerfile"
+      - "Containerfile"
+      - ".dockerignore"
+      - "bindep.txt"
+      - "requirements*.txt"
+      - "rpm-packages.txt"
+      - "copr-packages.txt"
+      - "collections/**"
+      - "roles/**"
+      - "scripts/**"
+      - ".github/workflows/container-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build container image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4
+
+      - name: Compute build metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY#*/}"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          {
+            echo "IMAGE_NAME=local/${repo}"
+            echo "IMAGE_TAG=build-${short_sha}"
+            echo "FULL_SHA=$(git rev-parse HEAD)"
+            echo "CREATED=${created}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build image locally
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          platforms: linux/amd64
+          build-args: |
+            COLLECTION_PROFILE=public
+            TARGETARCH=amd64
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.FULL_SHA }}
+            org.opencontainers.image.version=${{ env.IMAGE_TAG }}
+            org.opencontainers.image.created=${{ env.CREATED }}
+            org.opencontainers.image.title=${{ github.event.repository.name }}
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+
+      - name: Smoke test image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${IMAGE_NAME}:${IMAGE_TAG}"
+          repo="${GITHUB_REPOSITORY#*/}"
+
+          case "$repo" in
+            container-ee-wunder-devtools-ubi9)
+              docker run --rm "$image" bash -lc '
+                set -euo pipefail
+                ansible --version
+                ansible-galaxy --version
+                yamllint --version
+                actionlint --version
+                python --version
+              '
+              ;;
+            container-ee-wunder-ansible-ubi9)
+              docker run --rm "$image" bash -lc '
+                set -euo pipefail
+                ansible --version
+                ansible-galaxy --version
+                ansible-runner --version
+              '
+              ;;
+            container-ee-wunder-toolbox-ubi9)
+              docker run --rm "$image" bash -lc '
+                set -euo pipefail
+                ansible-navigator --version
+                ansible-doc --version
+                helm version --short
+                kustomize version
+                vault --version
+              '
+              ;;
+            *)
+              docker run --rm "$image" bash -lc 'command -v bash && true'
+              ;;
+          esac
