@@ -24,6 +24,7 @@
   - `.github/workflows/promote-develop-to-main.yml`
   - `.github/workflows/sync-main-to-develop.yml`
   - `.github/workflows/renovate-guarded-automerge.yml`
+  - `.github/workflows/shared-assets-guarded-automerge.yml`
   - `.github/workflows/semantic-release.yml`
   - `scripts/devtools-container-ci.sh`
   - `scripts/devtools-container-release-verify.sh`
@@ -42,6 +43,9 @@
 - After `main` changes, the shared `sync-main-to-develop` workflow must open a back-sync PR from `main` to `develop` so
   the next promotion PR can be opened without branch drift.
 - Repository settings, default branches, branch protection, and workflow permissions belong in `github-management-lit`.
+- Container repository cleanup and policy changes must be configured through `github-management-lit` first. Do not
+  directly adjust downstream container repository settings or branch enforcement unless the matching desired state is
+  represented in `github-management-lit` or an emergency exception is documented in the change summary.
 
 ## Semantic release and container publishing
 

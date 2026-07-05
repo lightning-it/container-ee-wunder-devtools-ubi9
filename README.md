@@ -10,6 +10,7 @@ development. It is based on **Red Hat UBI 9** and includes:
 - antsibull-changelog
 - yamllint
 - ShellCheck
+- actionlint
 - Terraform CLI
 - TFLint
 - terraform-docs
@@ -38,6 +39,7 @@ Use it as a stable execution environment for:
   - `antsibull-changelog`
   - `yamllint`
   - `shellcheck`
+  - `actionlint`
   - `terraform`
   - `tflint`
   - `terraform-docs`
@@ -128,8 +130,8 @@ chmod +x scripts/wunder-devtools-ee.sh
 ```
 
 Then use it in `pre-commit`, Makefiles or CI jobs to run `ansible-lint`, `yamllint`,
-`shellcheck`, `terraform`, `tflint`, `terraform-docs`, `helm`, `copr-cli`, RPM tooling,
-and VM image tooling in a consistent environment.
+`shellcheck`, `actionlint`, `terraform`, `tflint`, `terraform-docs`, `helm`,
+`copr-cli`, RPM tooling, and VM image tooling in a consistent environment.
 
 ### Configure COPR from the container
 
