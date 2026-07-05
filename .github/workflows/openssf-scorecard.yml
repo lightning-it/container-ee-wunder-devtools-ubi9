@@ -1,0 +1,25 @@
+# yamllint disable rule:truthy
+---
+name: OpenSSF Scorecard
+
+on:
+  schedule:
+    - cron: "23 4 * * 2"
+  workflow_dispatch:
+  branch_protection_rule:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  scorecard:
+    name: OpenSSF Scorecard
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write
+    uses: lightning-it/.github/.github/workflows/openssf-scorecard-reusable.yml@main
+    with:
+      publish_results: true

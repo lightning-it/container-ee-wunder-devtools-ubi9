@@ -1,5 +1,54 @@
 # ee-wunder-devtools-ubi9
 
+<!-- BEGIN LIT_QUALITY_BADGES -->
+
+[![CI](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-ci.yml/badge.svg?branch=develop)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/lightning-it/container-ee-wunder-devtools-ubi9?sort=semver)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/releases/latest)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/lightning-it/container-ee-wunder-devtools-ubi9/badge)](https://scorecard.dev/viewer/?uri=github.com/lightning-it/container-ee-wunder-devtools-ubi9)
+[![Quay.io](https://quay.io/repository/l-it/ee-wunder-devtools-ubi9/status)](https://quay.io/repository/l-it/ee-wunder-devtools-ubi9)
+[![Trivy](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-trivy.yml/badge.svg?branch=develop)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-trivy.yml)
+[![Container Build](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build-publish.yml/badge.svg?branch=main)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build-publish.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
+<!-- END LIT_QUALITY_BADGES -->
+
+<!-- BEGIN LIT_COMPATIBILITY_MATRIX -->
+
+## Compatibility Matrix
+
+| Image Version | Image | Base Platform | Runtime | Test Type | Validation |
+|---|---|---|---|---|---|
+| Current release | quay.io/l-it/ee-wunder-devtools-ubi9 | ubi9 | ubi9, podman, docker-buildx | Build / Smoke / Trivy | See GitHub Release evidence |
+| Current release | quay.io/l-it/ee-wunder-devtools-ubi9 | podman | ubi9, podman, docker-buildx | Build / Smoke / Trivy | See GitHub Release evidence |
+| Current release | quay.io/l-it/ee-wunder-devtools-ubi9 | docker-buildx | ubi9, podman, docker-buildx | Build / Smoke / Trivy | See GitHub Release evidence |
+
+Validation proof for each released version is stored in the corresponding GitHub Release evidence.
+
+<!-- END LIT_COMPATIBILITY_MATRIX -->
+
+<!-- BEGIN LIT_RELEASE_QUALITY_MODEL -->
+
+## Release and Quality Model
+
+This repository follows the Lightning IT shared release and quality model.
+The README shows the current supported and tested matrix.
+Exact per-version proof is stored with every GitHub Release as `release-evidence.md` and `release-evidence.json`.
+
+See:
+
+- [RELEASE.md](./RELEASE.md)
+- [TESTING.md](./TESTING.md)
+- [GitHub Releases](../../releases)
+
+Repository classification: **Container Image**.
+Required test profiles: `pre-commit, lint, container-build, container-smoke, trivy, release-validation`.
+Publishing targets: `github-release, quay.io`.
+
+Release evidence records the exact GitHub Actions run, validated matrix rows, built artifacts, publish result, and security status for each release.
+
+<!-- END LIT_RELEASE_QUALITY_MODEL -->
+
+
 Shared development tools container for local and CI workflows.
 
 This image bundles a unified toolchain for infrastructure automation and Ansible
