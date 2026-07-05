@@ -7,7 +7,7 @@ on:
     types: [published]
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -131,3 +131,41 @@ jobs:
         env:
           IMAGE_DIGEST: ${{ steps.build_image.outputs.digest }}
         run: bash scripts/devtools-container-release-verify.sh
+
+      - name: Generate release evidence
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.build_image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          tags="$IMAGE_NAME:$RELEASE_TAG,$IMAGE_NAME:$VERSION,$IMAGE_NAME:sha-$SHORT_SHA,$IMAGE_NAME:latest"
+          TESTED_MATRIX="ubuntu-latest,docker-buildx,trivy,release-publish" \
+          PASSED_JOBS="Build & push image to Quay.io" \
+          BUILT_ARTIFACTS="$IMAGE_NAME@$IMAGE_DIGEST" \
+          PUBLISHED_ARTIFACTS="$tags" \
+          CONTAINER_IMAGE_TAGS="$tags" \
+          QUAY_IMAGE="$IMAGE_NAME@$IMAGE_DIGEST" \
+          RELEASE_TAG="$RELEASE_TAG" \
+          RELEASE_VERSION="$VERSION" \
+          SECURITY_SCAN_RESULT="trivy-completed" \
+          python3 scripts/generate-release-evidence.py
+
+      - name: Attach release evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            dist/release-evidence.json \
+            dist/release-evidence.md \
+            --clobber
+
+      - name: Upload release evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-evidence
+          path: |
+            dist/release-evidence.json
+            dist/release-evidence.md
+          if-no-files-found: ignore

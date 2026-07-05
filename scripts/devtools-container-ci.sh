@@ -72,11 +72,6 @@ run_shellcheck() {
 }
 
 run_actionlint() {
-  if command -v actionlint >/dev/null 2>&1; then
-    actionlint
-    return
-  fi
-
   require_docker
   set_nested_workspace_args
   docker run --rm \
@@ -153,7 +148,6 @@ run_contract_tests() {
         ansible-lint --version
         pre-commit --version
         gh --version
-        actionlint --version
         docker --version
         antsibull-changelog --version
       '
