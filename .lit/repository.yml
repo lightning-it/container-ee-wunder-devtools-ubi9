@@ -1,0 +1,39 @@
+schema_version: 1
+managed_by: lightning-it/shared-assets
+repository: container-ee-wunder-devtools-ubi9
+visibility: public
+repository_type: container_image
+release_type: semantic_release
+artifact_type: container_image
+test_profiles:
+- pre-commit
+- lint
+- container-build
+- container-smoke
+- trivy
+- release-validation
+os_matrix:
+- ubuntu-latest
+product_matrix:
+- ubi9
+- podman
+- docker-buildx
+publishing_targets:
+- github-release
+- quay.io
+galaxy_publish: false
+quay_publish: true
+release_evidence: true
+heavy_incus_required: false
+readme_badges:
+- ci
+- container-build
+- trivy
+- release
+- quay
+- license
+workflows:
+  ci: container-ci.yml
+  release: container-build-publish.yml
+  promote: promote-develop-to-main.yml
+  backmerge: sync-main-to-develop.yml
