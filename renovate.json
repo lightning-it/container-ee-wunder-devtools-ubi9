@@ -146,6 +146,20 @@
     },
     {
       "customType": "regex",
+      "description": "actionlint version pin in Dockerfile",
+      "managerFilePatterns": [
+        "/Dockerfile/"
+      ],
+      "matchStrings": [
+        "ACTIONLINT_VERSION=(?<currentValue>[0-9.]+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "rhysd/actionlint",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
       "description": "ansible-core version pin in Dockerfile",
       "managerFilePatterns": [
         "/Dockerfile/"

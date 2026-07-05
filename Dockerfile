@@ -11,6 +11,7 @@ ARG TFLINT_VERSION=0.63.1
 ARG TF_DOCS_VERSION=0.24.0
 ARG HELM_VERSION=4.2.2
 ARG GH_VERSION=2.95.0
+ARG ACTIONLINT_VERSION=1.7.12
 
 # hadolint ignore=DL3002
 USER 0
@@ -87,6 +88,18 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh && \
     rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${ARCH}"
 
+# actionlint
+RUN source /usr/local/lib/container-download-verified.sh && \
+    source /tmp/arch.env && \
+    download_verified \
+      "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${ARCH}.tar.gz" \
+      /tmp/actionlint.tar.gz \
+      "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_checksums.txt" \
+      "actionlint_${ACTIONLINT_VERSION}_linux_${ARCH}.tar.gz" && \
+    tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint && \
+    install -m 0755 /tmp/actionlint /usr/local/bin/actionlint && \
+    rm -f /tmp/actionlint.tar.gz /tmp/actionlint
+
 # Docker CLI + Compose plugin (from docker-ce packages)
 RUN install -m 0755 /usr/bin/docker /usr/local/bin/docker && \
     mkdir -p /usr/local/lib/docker/cli-plugins && \
@@ -157,6 +170,7 @@ COPY --from=tools /usr/local/bin/tflint /usr/local/bin/tflint
 COPY --from=tools /usr/local/bin/terraform-docs /usr/local/bin/terraform-docs
 COPY --from=tools /usr/local/bin/helm /usr/local/bin/helm
 COPY --from=tools /usr/local/bin/gh /usr/local/bin/gh
+COPY --from=tools /usr/local/bin/actionlint /usr/local/bin/actionlint
 COPY --from=tools /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=tools /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 
@@ -166,7 +180,7 @@ RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --no-cache-dir -r /tmp/requirements.txt && \
     rm -f /tmp/requirements.txt && \
     ansible --version && ansible-galaxy --version && antsibull-changelog --version && \
-    shellcheck --version && helm version --short && gh --version && \
+    shellcheck --version && actionlint --version && helm version --short && gh --version && \
     copr-cli --version && rpmspec --version && qemu-img --version && \
     virt-customize --version && virt-sysprep --version && guestfish --version
 
