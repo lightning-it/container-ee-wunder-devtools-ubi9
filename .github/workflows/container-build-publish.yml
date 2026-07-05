@@ -110,7 +110,7 @@ jobs:
             org.opencontainers.image.description=${{ github.event.repository.description }}
 
       - name: Run Trivy release gate before Quay publish
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:trivy-${{ env.SHORT_SHA }}
           format: sarif
