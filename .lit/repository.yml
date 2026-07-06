@@ -29,6 +29,11 @@ release_evidence: true
 heavy_incus_required: false
 trivy_required: true
 trivy_release_gate: true
+openssf_best_practices:
+  required: true
+  project_id: null
+  target_level: passing
+  exception: null
 readme_badges:
   - ci
   - container-build
