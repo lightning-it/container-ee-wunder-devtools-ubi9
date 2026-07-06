@@ -193,7 +193,7 @@ jobs:
     needs: build
     permissions:
       actions: read
-      contents: write
+      contents: read
 
     steps:
       - name: Download release evidence artifact
@@ -205,8 +205,20 @@ jobs:
       - name: Attach signed release evidence
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.LITRELEASEBOT_TOKEN }}
         run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Missing required secret: secrets.LITRELEASEBOT_TOKEN"
+            exit 1
+          fi
+
+          if ! gh auth status --hostname github.com >/dev/null 2>&1; then
+            echo "::error::secrets.LITRELEASEBOT_TOKEN is not a valid GitHub token"
+            exit 1
+          fi
+
           gh release upload "${{ github.event.release.tag_name }}" \
             dist/release-evidence.json \
             dist/release-evidence.md \

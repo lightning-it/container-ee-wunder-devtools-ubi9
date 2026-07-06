@@ -11,12 +11,14 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   promote:
     name: Open develop-to-main promotion PR
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Checkout
