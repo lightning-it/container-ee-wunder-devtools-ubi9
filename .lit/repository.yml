@@ -36,6 +36,7 @@ readme_badges:
   - license
 workflows:
   ci: container-ci.yml
+  container_build: container-build.yml
   release: container-build-publish.yml
   promote: promote-develop-to-main.yml
   backmerge: sync-main-to-develop.yml
