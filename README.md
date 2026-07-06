@@ -1,13 +1,43 @@
 # ee-wunder-devtools-ubi9
 
+<!-- BEGIN LIT_SHARED_RELEASE_MODEL -->
+
+## Release and Quality Model
+
+This repository follows the Lightning IT shared release and quality model.
+
+See [RELEASE.md](./RELEASE.md) for:
+
+- branch and release flow
+- required quality checks
+- test matrix
+- release evidence
+- artifact publishing
+- supported repository-specific release behavior
+
+Repository classification: **Container Image**.
+Required test profiles: `pre-commit, lint, container-build, container-smoke, trivy, release-validation`.
+Publishing targets: `github-release, quay.io`.
+
+## Supported and Tested Platforms
+
+| Platform / Product | Status | Validation |
+|---|---:|---|
+| ubuntu-latest | Supported | Container CI / Trivy |
+| ubi9 | Tested where applicable | Container CI / Trivy |
+| podman | Tested where applicable | Container CI / Trivy |
+| docker-buildx | Tested where applicable | Container CI / Trivy |
+
+<!-- END LIT_SHARED_RELEASE_MODEL -->
+
 <!-- BEGIN LIT_QUALITY_BADGES -->
 
 [![CI](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-ci.yml/badge.svg?branch=develop)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-ci.yml)
 [![Latest Release](https://img.shields.io/github/v/release/lightning-it/container-ee-wunder-devtools-ubi9?sort=semver)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/releases/latest)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/lightning-it/container-ee-wunder-devtools-ubi9/badge)](https://scorecard.dev/viewer/?uri=github.com/lightning-it/container-ee-wunder-devtools-ubi9)
-[![Container Version](https://img.shields.io/github/v/release/lightning-it/container-ee-wunder-devtools-ubi9?sort=semver&label=Container%20Version)](https://quay.io/repository/l-it/ee-wunder-devtools-ubi9)
-[![Trivy](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-trivy.yml/badge.svg?branch=develop)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-trivy.yml)
-[![Container Build](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build.yml/badge.svg?branch=develop)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build.yml)
+[![Quay.io](https://quay.io/repository/l-it/ee-wunder-devtools-ubi9/status)](https://quay.io/repository/l-it/ee-wunder-devtools-ubi9)
+[![Trivy](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build-publish.yml/badge.svg?branch=main)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build-publish.yml)
+[![Container Build](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build-publish.yml/badge.svg?branch=main)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build-publish.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 <!-- END LIT_QUALITY_BADGES -->
