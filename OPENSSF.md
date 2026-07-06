@@ -1,6 +1,6 @@
 # OpenSSF Readiness
 
-This repository follows the Lightning IT shared OpenSSF readiness model generated from `lightning-it/shared-assets`.
+This repository follows the Lightning IT shared OpenSSF readiness model generated from `lightning-it/shared-assets-lit`.
 
 ## Repository
 
@@ -18,7 +18,7 @@ The Scorecard badge is included in `README.md` only for public repositories wher
 
 ## Best Practices Badge
 
-Not enrolled by shared-assets automation. Enroll manually at OpenSSF Best Practices, complete the project questionnaire, then add a badge only after the project is passing.
+Not enrolled by shared-assets-lit automation. Enroll manually at OpenSSF Best Practices, complete the project questionnaire, then add a badge only after the project is passing.
 
 Do not add a passing OpenSSF Best Practices badge until the repository is actually enrolled and passing.
 
@@ -29,9 +29,9 @@ Do not add a passing OpenSSF Best Practices badge until the repository is actual
 ## Branch Protection And Release Integrity
 
 - `main` is the protected release branch.
-- `develop` is the integration branch for normal work, Renovate, and shared-assets PRs.
+- `develop` is the integration branch for normal work, Renovate, and shared-assets-lit PRs.
 - `develop` to `main` promotion PRs require manual review.
-- Renovate and shared-assets PRs may auto-merge only into `develop` after required checks pass.
+- Renovate and shared-assets-lit PRs may auto-merge only into `develop` after required checks pass.
 - Releases and publishing happen only from trusted `main` workflows after validation.
 - Release evidence is generated for repositories with release artifacts.
 

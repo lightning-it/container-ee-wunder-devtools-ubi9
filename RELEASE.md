@@ -14,7 +14,7 @@ This repository follows the Lightning IT shared release and quality model.
 
 ## Branch Flow
 
-- `develop` is the integration branch for normal work, Renovate updates, and shared-assets synchronization.
+- `develop` is the integration branch for normal work, Renovate updates, and shared-assets-lit synchronization.
 - `main` is the protected release branch.
 - Releases happen only after `main` is updated.
 - A `develop` to `main` promotion PR is created automatically when releasable changes exist.
