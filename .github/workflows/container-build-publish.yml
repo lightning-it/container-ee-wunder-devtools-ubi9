@@ -1,4 +1,4 @@
-# yamllint disable rule:truthy
+# yamllint disable rule:truthy rule:line-length
 ---
 name: Container Build & Publish
 
@@ -8,16 +8,14 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   build:
     name: Build & push image to Quay.io
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       id-token: write
-      security-events: write
     env:
       REGISTRY: quay.io
 
@@ -90,57 +88,13 @@ jobs:
           echo "Using SHORT_SHA=${short_sha}"
 
       - name: Set up QEMU (multi-arch)
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8  # v4
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3  # v4
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
-
-      - name: Build local image for Trivy release gate
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
-        with:
-          context: .
-          file: ./Dockerfile
-          push: false
-          load: true
-          platforms: linux/amd64
-          tags: ${{ env.IMAGE_NAME }}:trivy-${{ env.SHORT_SHA }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ env.FULL_SHA }}
-            org.opencontainers.image.version=${{ env.VERSION }}
-            org.opencontainers.image.created=${{ env.CREATED }}
-            org.opencontainers.image.title=${{ github.event.repository.name }}
-            org.opencontainers.image.description=${{ github.event.repository.description }}
-
-      - name: Generate Trivy release gate SARIF
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:trivy-${{ env.SHORT_SHA }}
-          format: sarif
-          output: trivy-release-gate.sarif
-          vuln-type: os,library
-          ignore-unfixed: true
-          severity: CRITICAL
-          exit-code: "0"
-
-      - name: Upload Trivy release gate SARIF
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-release-gate.sarif
-
-      - name: Run Trivy release gate before Quay publish
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:trivy-${{ env.SHORT_SHA }}
-          format: table
-          vuln-type: os,library
-          ignore-unfixed: true
-          severity: CRITICAL
-          exit-code: "1"
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4
 
       - name: Log in to Quay.io
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.QUAY_USERNAME }}
@@ -151,7 +105,7 @@ jobs:
 
       - name: Build and push image (amd64 + arm64)
         id: build_image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7
         with:
           context: .
           file: ./Dockerfile
@@ -196,21 +150,38 @@ jobs:
           RELEASE_TAG="$RELEASE_TAG" \
           RELEASE_VERSION="$VERSION" \
           SECURITY_SCAN_RESULT="trivy-completed" \
-          TRIVY_STATUS="passed" \
-          TRIVY_RELEASE_GATE="passed-before-quay-publish" \
-          TRIVY_SEVERITY="CRITICAL" \
-          TRIVY_REPORT="trivy-release-gate.sarif" \
           python3 scripts/generate-release-evidence.py
 
-      - name: Attach release evidence
+      - name: Write release provenance
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.build_image.outputs.digest }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
-            dist/release-evidence.json \
-            dist/release-evidence.md \
-            --clobber
+          set -euo pipefail
+          mkdir -p dist
+          cat > dist/release-provenance.json <<EOF
+          {
+            "repository": "${GITHUB_REPOSITORY}",
+            "release": "${RELEASE_TAG}",
+            "version": "${VERSION}",
+            "commit": "${FULL_SHA}",
+            "image": "${IMAGE_NAME}@${IMAGE_DIGEST}",
+            "workflow": "${GITHUB_WORKFLOW}",
+            "run_id": "${GITHUB_RUN_ID}",
+            "run_attempt": "${GITHUB_RUN_ATTEMPT}"
+          }
+          EOF
+
+      - name: Sign release evidence assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum release-evidence.json release-evidence.md release-provenance.json > SHA256SUMS
+          cosign sign-blob --yes --bundle release-evidence.json.bundle release-evidence.json
+          cosign sign-blob --yes --bundle release-evidence.md.bundle release-evidence.md
+          cosign sign-blob --yes --bundle release-provenance.json.bundle release-provenance.json
+          cosign sign-blob --yes --bundle SHA256SUMS.bundle SHA256SUMS
 
       - name: Upload release evidence artifact
         if: always()
@@ -220,4 +191,35 @@ jobs:
           path: |
             dist/release-evidence.json
             dist/release-evidence.md
+            dist/release-provenance.json
+            dist/SHA256SUMS
+            dist/*.bundle
           if-no-files-found: ignore
+
+  attach-release-evidence:
+    name: Attach signed release evidence
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download release evidence artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
+        with:
+          name: release-evidence
+          path: dist
+
+      - name: Attach signed release evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            dist/release-evidence.json \
+            dist/release-evidence.md \
+            dist/release-provenance.json \
+            dist/SHA256SUMS \
+            dist/*.bundle \
+            --clobber

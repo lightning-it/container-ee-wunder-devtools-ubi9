@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/python-311@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c AS tools
+FROM registry.access.redhat.com/ubi9/python-311:9.8-1779945715@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c AS tools
 
 LABEL maintainer="Lightning IT"
 LABEL org.opencontainers.image.title="ee-wunder-devtools-ubi9"
@@ -112,7 +112,7 @@ RUN install -m 0755 /usr/bin/docker /usr/local/bin/docker && \
     fi
 
 
-FROM registry.access.redhat.com/ubi9/python-311@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c
+FROM registry.access.redhat.com/ubi9/python-311:9.8-1779945715@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c
 
 LABEL maintainer="Lightning IT"
 LABEL org.opencontainers.image.title="ee-wunder-devtools-ubi9"
@@ -176,9 +176,10 @@ COPY --from=tools /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/li
 
 # Python deps: this *is* the right place for pip
 COPY requirements.txt /tmp/requirements.txt
+COPY requirements.lock /tmp/requirements.lock
 RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
-    python -m pip install --no-cache-dir -r /tmp/requirements.txt && \
-    rm -f /tmp/requirements.txt && \
+    python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
+    rm -f /tmp/requirements.txt /tmp/requirements.lock && \
     ansible --version && ansible-galaxy --version && antsibull-changelog --version && \
     shellcheck --version && actionlint --version && helm version --short && gh --version && \
     copr-cli --version && rpmspec --version && qemu-img --version && \

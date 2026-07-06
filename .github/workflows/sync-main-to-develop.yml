@@ -1,4 +1,4 @@
-# yamllint disable rule:truthy
+# yamllint disable rule:truthy rule:line-length
 ---
 name: Sync main back to develop
 
@@ -8,8 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: sync-main-to-develop
@@ -19,6 +18,9 @@ jobs:
   sync:
     name: Open main-to-develop sync PR
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout
