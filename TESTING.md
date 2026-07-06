@@ -26,7 +26,7 @@ Products and runtimes:
 ## When Tests Run
 
 - Normal pull requests run pre-commit, linting, syntax checks, and light tests relevant to changed files.
-- Renovate and shared-assets synchronization pull requests target `develop` and may auto-merge only after required checks pass.
+- Renovate and shared-assets-lit synchronization pull requests target `develop` and may auto-merge only after required checks pass.
 - `develop` to `main` promotion pull requests run the strongest validation profile for this repository.
 - Trusted `main` release workflows build and publish artifacts only after validation succeeds.
 
