@@ -1,4 +1,4 @@
-# yamllint disable rule:truthy
+# yamllint disable rule:truthy rule:line-length
 ---
 name: OpenSSF Scorecard
 
@@ -18,6 +18,6 @@ jobs:
       contents: read
       security-events: write
       id-token: write
-    uses: lightning-it/.github/.github/workflows/openssf-scorecard-reusable.yml@main
+    uses: lightning-it/.github/.github/workflows/openssf-scorecard-reusable.yml@c4c82961ea76dea419be553f9a3f64de60c4cd7e
     with:
       publish_results: true

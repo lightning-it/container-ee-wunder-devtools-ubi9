@@ -1,4 +1,4 @@
-# yamllint disable rule:truthy
+# yamllint disable rule:truthy rule:line-length
 ---
 name: Trivy
 
@@ -29,7 +29,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
-    uses: lightning-it/.github/.github/workflows/container-trivy-reusable.yml@main
+    uses: lightning-it/.github/.github/workflows/container-trivy-reusable.yml@c4c82961ea76dea419be553f9a3f64de60c4cd7e
     with:
       image_name: local/${{ github.event.repository.name }}
       containerfile: ${{ vars.CONTAINERFILE_PATH || 'Dockerfile' }}

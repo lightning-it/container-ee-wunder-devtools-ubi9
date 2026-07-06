@@ -1,0 +1,33 @@
+# yamllint disable rule:truthy rule:line-length
+---
+name: Request Copilot Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  request-copilot-review:
+    name: Request Copilot advisory review
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Request Copilot reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          gh api \
+            --method POST \
+            "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" \
+            -f reviewers[]=copilot-pull-request-reviewer \
+            || echo "Copilot reviewer is unavailable for this repository; continuing."
