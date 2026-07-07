@@ -9,6 +9,7 @@ This repository uses the Lightning IT shared test model.
 - `container-build`
 - `container-smoke`
 - `trivy`
+- `fuzzing`
 - `release-validation`
 
 ## Supported Matrix
