@@ -1,8 +1,11 @@
 # ee-wunder-devtools-ubi9
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/lightning-it/container-ee-wunder-devtools-ubi9/badge)](https://scorecard.dev/viewer/?uri=github.com/lightning-it/container-ee-wunder-devtools-ubi9)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13514/badge)](https://www.bestpractices.dev/projects/13514)
+
 <!-- BEGIN LIT_SHARED_RELEASE_MODEL -->
 
-## Release and Quality Model
+## Shared Release and Quality Model
 
 This repository follows the Lightning IT shared release and quality model.
 
@@ -34,8 +37,6 @@ Publishing targets: `github-release, quay.io`.
 
 [![CI](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-ci.yml/badge.svg?branch=develop)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-ci.yml)
 [![Latest Release](https://img.shields.io/github/v/release/lightning-it/container-ee-wunder-devtools-ubi9?sort=semver)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/releases/latest)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/lightning-it/container-ee-wunder-devtools-ubi9/badge)](https://scorecard.dev/viewer/?uri=github.com/lightning-it/container-ee-wunder-devtools-ubi9)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13514/badge)](https://www.bestpractices.dev/projects/13514)
 [![Quay.io](https://img.shields.io/badge/Quay.io-image-blue?logo=quay&logoColor=white)](https://quay.io/repository/l-it/ee-wunder-devtools-ubi9)
 [![Trivy](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-trivy.yml/badge.svg?branch=develop)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-trivy.yml)
 [![Container Build](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build.yml/badge.svg?branch=develop)](https://github.com/lightning-it/container-ee-wunder-devtools-ubi9/actions/workflows/container-build.yml)
