@@ -1,4 +1,4 @@
-# yamllint disable rule:truthy
+# yamllint disable rule:truthy rule:line-length
 ---
 name: Promote develop to main
 
@@ -11,12 +11,14 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   promote:
     name: Open develop-to-main promotion PR
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Checkout

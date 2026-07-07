@@ -1,4 +1,4 @@
-# yamllint disable rule:truthy
+# yamllint disable rule:truthy rule:line-length
 ---
 name: Shared-assets guarded automerge
 
@@ -7,14 +7,16 @@ on:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   approve-shared-assets:
     name: Approve trusted shared-assets PR
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Verify shared-assets PR identity

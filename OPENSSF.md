@@ -18,9 +18,9 @@ The Scorecard badge is included in `README.md` only for public repositories wher
 
 ## Best Practices Badge
 
-Not enrolled by shared-assets-lit automation. Enroll manually at OpenSSF Best Practices, complete the project questionnaire, then add a badge only after the project is passing.
+Enrolled in OpenSSF Best Practices. The badge is emitted from the central release-model inventory using project `13514` with target level `passing`.
 
-Do not add a passing OpenSSF Best Practices badge until the repository is actually enrolled and passing.
+Do not add a passing OpenSSF Best Practices badge until the repository is actually enrolled and passing. Badges must be generated from `release-model/repositories.yml`; hand-written badges are rejected by the release-model audit.
 
 ## Security Policy
 
