@@ -1,0 +1,57 @@
+# yamllint disable rule:truthy rule:line-length
+---
+name: Container Fuzzing
+
+on:
+  pull_request:
+    paths:
+      - "Containerfile"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/**"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/**"
+      - "tests/fuzz/**"
+  push:
+    branches: ["develop", "main", "master"]
+    paths:
+      - "Containerfile"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/**"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/**"
+      - "tests/fuzz/**"
+  schedule:
+    - cron: "17 3 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fast-check container policy fuzzing
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      FUZZ_RUNS: ${{ github.event_name == 'schedule' && '10000' || '1000' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run container fuzz tests
+        run: npm run test:fuzz

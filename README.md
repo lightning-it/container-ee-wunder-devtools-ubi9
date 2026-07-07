@@ -16,7 +16,7 @@ See [RELEASE.md](./RELEASE.md) for:
 - supported repository-specific release behavior
 
 Repository classification: **Container Image**.
-Required test profiles: `pre-commit, lint, container-build, container-smoke, trivy, release-validation`.
+Required test profiles: `pre-commit, lint, container-build, container-smoke, trivy, fuzzing, release-validation`.
 Publishing targets: `github-release, quay.io`.
 
 ## Supported and Tested Platforms

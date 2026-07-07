@@ -13,6 +13,7 @@ test_profiles:
   - container-build
   - container-smoke
   - trivy
+  - fuzzing
   - release-validation
 os_matrix:
   - ubuntu-latest
