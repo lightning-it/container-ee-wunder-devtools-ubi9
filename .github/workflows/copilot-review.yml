@@ -83,6 +83,7 @@ jobs:
           review_complete=false
           head_sha=""
           for attempt in $(seq 1 40); do
+            head_sha=""
             before=""
             request_failed=false
             while true; do
@@ -118,7 +119,7 @@ jobs:
                   --arg head "${head_sha}" \
                   --arg prefix "${COPILOT_REVIEWER_PREFIX}" \
                   '[
-                    .data.repository.pullRequest.reviews.nodes[]
+                    (.data.repository.pullRequest.reviews.nodes // [])[]
                     | select((.author.login // "") | startswith($prefix))
                     | select(.state != "PENDING" and .state != "DISMISSED")
                     | select(.commit.oid == $head)
@@ -142,7 +143,11 @@ jobs:
             done
 
             if [ "${attempt}" -eq 40 ]; then
-              echo "GitHub Copilot has not completed a review of current head ${head_sha:-unknown}." >&2
+              if [ "${request_failed}" = true ]; then
+                echo "Unable to verify the Copilot review after repeated API or head-change failures." >&2
+              else
+                echo "GitHub Copilot has not completed a review of current head ${head_sha:-unknown}." >&2
+              fi
               exit 1
             fi
             if [ "${request_failed}" = true ]; then
@@ -214,7 +219,7 @@ jobs:
                 jq \
                   --arg prefix "${COPILOT_REVIEWER_PREFIX}" \
                   '[
-                    .data.repository.pullRequest.reviewThreads.nodes[]
+                    (.data.repository.pullRequest.reviewThreads.nodes // [])[]
                     | select(.isResolved == false)
                     | select(
                         ((.comments.nodes[0].author.login // "")
@@ -241,7 +246,11 @@ jobs:
               break
             fi
             if [ "${resolution_attempt}" -eq 20 ]; then
-              echo "${unresolved_copilot_threads} unresolved GitHub Copilot review thread(s) remain." >&2
+              if [ "${request_failed}" = true ]; then
+                echo "Unable to verify Copilot review threads after repeated API or head-change failures." >&2
+              else
+                echo "${unresolved_copilot_threads} unresolved GitHub Copilot review thread(s) remain." >&2
+              fi
               exit 1
             fi
             echo "Waiting for GitHub Copilot findings to be resolved (attempt ${resolution_attempt}/20)."
