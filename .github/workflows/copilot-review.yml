@@ -13,8 +13,10 @@ on:
     types: [created, edited, deleted]
 
 permissions:
-  contents: read
   pull-requests: read
+
+env:
+  COPILOT_REVIEWER_PREFIX: copilot-pull-request-reviewer
 
 concurrency:
   group: copilot-review-${{ github.event.pull_request.number }}
@@ -23,8 +25,9 @@ concurrency:
 jobs:
   current-revision-reviewed:
     name: Current revision reviewed
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
 
     steps:
       - name: Verify current Copilot review and resolved findings
@@ -37,21 +40,136 @@ jobs:
 
           owner="${REPOSITORY%%/*}"
           repository="${REPOSITORY#*/}"
-          read -r -d '' query <<'GRAPHQL' || true
-          query($owner: String!, $repository: String!, $number: Int!) {
+
+          graphql() {
+            local api_attempt output
+            for api_attempt in $(seq 1 5); do
+              if output="$(gh api graphql "$@")"; then
+                if jq -e '((.errors // []) | length) == 0' <<<"${output}" >/dev/null; then
+                  printf '%s' "${output}"
+                  return 0
+                fi
+                jq -r '.errors[]?.message' <<<"${output}" >&2
+              fi
+              echo "GitHub GraphQL request failed (attempt ${api_attempt}/5)." >&2
+              sleep 5
+            done
+            return 1
+          }
+
+          read -r -d '' review_query <<'GRAPHQL' || true
+          query(
+            $owner: String!
+            $repository: String!
+            $number: Int!
+            $before: String
+          ) {
             repository(owner: $owner, name: $repository) {
               pullRequest(number: $number) {
                 headRefOid
-                reviews(last: 100) {
+                reviews(last: 100, before: $before) {
+                  pageInfo { hasPreviousPage startCursor }
                   nodes {
                     author { login }
                     commit { oid }
                     state
-                    submittedAt
                   }
                 }
-                reviewThreads(first: 100) {
-                  totalCount
+              }
+            }
+          }
+          GRAPHQL
+
+          review_complete=false
+          head_sha=""
+          for attempt in $(seq 1 40); do
+            before=""
+            request_failed=false
+            while true; do
+              arguments=(
+                -f query="${review_query}"
+                -F owner="${owner}"
+                -F repository="${repository}"
+                -F number="${PR_NUMBER}"
+              )
+              if [ -n "${before}" ]; then
+                arguments+=(-f before="${before}")
+              fi
+
+              if ! response="$(graphql "${arguments[@]}")"; then
+                request_failed=true
+                break
+              fi
+
+              page_head_sha="$(jq -r '.data.repository.pullRequest.headRefOid // empty' <<<"${response}")"
+              if [ -z "${page_head_sha}" ]; then
+                echo "Unable to determine the pull request head SHA." >&2
+                exit 1
+              fi
+              if [ -n "${head_sha}" ] && [ "${head_sha}" != "${page_head_sha}" ]; then
+                echo "Pull request head changed during review verification; retrying." >&2
+                request_failed=true
+                break
+              fi
+              head_sha="${page_head_sha}"
+
+              current_reviews="$(
+                jq \
+                  --arg head "${head_sha}" \
+                  --arg prefix "${COPILOT_REVIEWER_PREFIX}" \
+                  '[
+                    .data.repository.pullRequest.reviews.nodes[]
+                    | select((.author.login // "") | startswith($prefix))
+                    | select(.state != "PENDING" and .state != "DISMISSED")
+                    | select(.commit.oid == $head)
+                  ]
+                  | length' <<<"${response}"
+              )"
+              if [ "${current_reviews}" -gt 0 ]; then
+                review_complete=true
+                break 2
+              fi
+
+              has_previous="$(jq -r '.data.repository.pullRequest.reviews.pageInfo.hasPreviousPage' <<<"${response}")"
+              if [ "${has_previous}" != "true" ]; then
+                break
+              fi
+              before="$(jq -r '.data.repository.pullRequest.reviews.pageInfo.startCursor // empty' <<<"${response}")"
+              if [ -z "${before}" ]; then
+                echo "Review pagination cursor is missing." >&2
+                exit 1
+              fi
+            done
+
+            if [ "${attempt}" -eq 40 ]; then
+              echo "GitHub Copilot has not completed a review of current head ${head_sha:-unknown}." >&2
+              exit 1
+            fi
+            if [ "${request_failed}" = true ]; then
+              echo "Retrying review verification after a transient API or head-change failure."
+            else
+              echo "Waiting for GitHub Copilot to review current head ${head_sha} (attempt ${attempt}/40)."
+            fi
+            sleep 15
+          done
+
+          if [ "${review_complete}" != true ]; then
+            echo "GitHub Copilot review verification ended unexpectedly." >&2
+            exit 1
+          fi
+
+          read -r -d '' thread_query <<'GRAPHQL' || true
+          query(
+            $owner: String!
+            $repository: String!
+            $number: Int!
+            $after: String
+          ) {
+            repository(owner: $owner, name: $repository) {
+              pullRequest(number: $number) {
+                headRefOid
+                reviewThreads(first: 100, after: $after) {
+                  pageInfo { hasNextPage endCursor }
                   nodes {
                     isResolved
                     comments(first: 1) {
@@ -64,67 +182,74 @@ jobs:
           }
           GRAPHQL
 
-          response=""
-          for attempt in $(seq 1 40); do
-            response="$(
-              gh api graphql \
-                -f query="${query}" \
-                -F owner="${owner}" \
-                -F repository="${repository}" \
+          findings_resolved=false
+          for resolution_attempt in $(seq 1 20); do
+            after=""
+            unresolved_copilot_threads=0
+            request_failed=false
+            while true; do
+              arguments=(
+                -f query="${thread_query}"
+                -F owner="${owner}"
+                -F repository="${repository}"
                 -F number="${PR_NUMBER}"
-            )"
+              )
+              if [ -n "${after}" ]; then
+                arguments+=(-f after="${after}")
+              fi
 
-            head_sha="$(jq -r '.data.repository.pullRequest.headRefOid // empty' <<<"${response}")"
-            if [ -z "${head_sha}" ]; then
-              echo "Unable to determine the pull request head SHA." >&2
-              exit 1
-            fi
+              if ! response="$(graphql "${arguments[@]}")"; then
+                request_failed=true
+                break
+              fi
 
-            current_reviews="$(
-              jq --arg head "${head_sha}" '
-                [
-                  .data.repository.pullRequest.reviews.nodes[]
-                  | select((.author.login // "") | startswith("copilot-pull-request-reviewer"))
-                  | select(.state == "COMMENTED")
-                  | select(.commit.oid == $head)
-                ]
-                | length
-              ' <<<"${response}"
-            )"
-            if [ "${current_reviews}" -gt 0 ]; then
+              page_head_sha="$(jq -r '.data.repository.pullRequest.headRefOid // empty' <<<"${response}")"
+              if [ "${page_head_sha}" != "${head_sha}" ]; then
+                echo "Pull request head changed during thread verification; retrying." >&2
+                request_failed=true
+                break
+              fi
+
+              page_unresolved="$(
+                jq \
+                  --arg prefix "${COPILOT_REVIEWER_PREFIX}" \
+                  '[
+                    .data.repository.pullRequest.reviewThreads.nodes[]
+                    | select(.isResolved == false)
+                    | select(
+                        ((.comments.nodes[0].author.login // "")
+                        | startswith($prefix))
+                      )
+                  ]
+                  | length' <<<"${response}"
+              )"
+              unresolved_copilot_threads=$((unresolved_copilot_threads + page_unresolved))
+
+              has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${response}")"
+              if [ "${has_next}" != "true" ]; then
+                break
+              fi
+              after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"${response}")"
+              if [ -z "${after}" ]; then
+                echo "Review-thread pagination cursor is missing." >&2
+                exit 1
+              fi
+            done
+
+            if [ "${request_failed}" = false ] && [ "${unresolved_copilot_threads}" -eq 0 ]; then
+              findings_resolved=true
               break
             fi
-
-            if [ "${attempt}" -eq 40 ]; then
-              echo "GitHub Copilot has not completed a review of current head ${head_sha}." >&2
+            if [ "${resolution_attempt}" -eq 20 ]; then
+              echo "${unresolved_copilot_threads} unresolved GitHub Copilot review thread(s) remain." >&2
               exit 1
             fi
-
-            echo "Waiting for GitHub Copilot to review current head ${head_sha} (attempt ${attempt}/40)."
+            echo "Waiting for GitHub Copilot findings to be resolved (attempt ${resolution_attempt}/20)."
             sleep 15
           done
 
-          thread_total="$(jq -r '.data.repository.pullRequest.reviewThreads.totalCount' <<<"${response}")"
-          if [ "${thread_total}" -gt 100 ]; then
-            echo "The pull request has more than 100 review threads; fail-closed verification requires pagination." >&2
-            exit 1
-          fi
-
-          unresolved_copilot_threads="$(
-            jq '
-              [
-                .data.repository.pullRequest.reviewThreads.nodes[]
-                | select(.isResolved == false)
-                | select(
-                    ((.comments.nodes[0].author.login // "")
-                    | startswith("copilot-pull-request-reviewer"))
-                  )
-              ]
-              | length
-            ' <<<"${response}"
-          )"
-          if [ "${unresolved_copilot_threads}" -gt 0 ]; then
-            echo "${unresolved_copilot_threads} unresolved GitHub Copilot review thread(s) remain." >&2
+          if [ "${findings_resolved}" != true ]; then
+            echo "GitHub Copilot thread verification ended unexpectedly." >&2
             exit 1
           fi
 
