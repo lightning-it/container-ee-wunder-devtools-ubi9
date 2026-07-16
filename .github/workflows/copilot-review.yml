@@ -17,7 +17,8 @@ permissions:
   pull-requests: read
 
 env:
-  COPILOT_REVIEWER_PREFIX: copilot-pull-request-reviewer
+  COPILOT_REVIEWER_LOGIN: copilot-pull-request-reviewer
+  UNABLE_REVIEW_MARKER: unable to review this pull request
 
 concurrency:
   group: copilot-review-${{ github.event.pull_request.number }}
@@ -71,8 +72,10 @@ jobs:
                 reviews(last: 100, before: $before) {
                   pageInfo { hasPreviousPage startCursor }
                   nodes {
+                    id
                     author { login }
                     body
+                    comments(first: 1) { totalCount }
                     commit { oid }
                     state
                   }
@@ -81,6 +84,78 @@ jobs:
             }
           }
           GRAPHQL
+
+          read -r -d '' review_comments_query <<'GRAPHQL' || true
+          query(
+            $review: ID!
+            $after: String
+          ) {
+            node(id: $review) {
+              ... on PullRequestReview {
+                commit { oid }
+                pullRequest { headRefOid }
+                comments(first: 100, after: $after) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes { body }
+                }
+              }
+            }
+          }
+          GRAPHQL
+
+          review_comments_clean() {
+            local review_id="$1" expected_head="$2" after="" response has_next marker_count
+            local -a arguments
+            while true; do
+              arguments=(
+                -f query="${review_comments_query}"
+                -f review="${review_id}"
+              )
+              if [ -n "${after}" ]; then
+                arguments+=(-f after="${after}")
+              fi
+
+              if ! response="$(graphql "${arguments[@]}")"; then
+                return 2
+              fi
+              if ! jq -e \
+                --arg head "${expected_head}" \
+                '(.data.node.comments != null)
+                  and (.data.node.commit.oid == $head)
+                  and (.data.node.pullRequest.headRefOid == $head)' \
+                <<<"${response}" >/dev/null; then
+                echo "Review ${review_id} no longer matches current head ${expected_head}." >&2
+                return 2
+              fi
+
+              marker_count="$(
+                jq \
+                  --arg marker "${UNABLE_REVIEW_MARKER}" \
+                  '[
+                    .data.node.comments.nodes[]?
+                    | select(
+                        ((.body // "")
+                        | ascii_downcase
+                        | contains($marker | ascii_downcase))
+                      )
+                  ]
+                  | length' <<<"${response}"
+              )"
+              if [ "${marker_count}" -gt 0 ]; then
+                return 1
+              fi
+
+              has_next="$(jq -r '.data.node.comments.pageInfo.hasNextPage' <<<"${response}")"
+              if [ "${has_next}" != "true" ]; then
+                return 0
+              fi
+              after="$(jq -r '.data.node.comments.pageInfo.endCursor // empty' <<<"${response}")"
+              if [ -z "${after}" ]; then
+                echo "Review-comment pagination cursor is missing." >&2
+                return 2
+              fi
+            done
+          }
 
           review_complete=false
           head_sha=""
@@ -116,27 +191,50 @@ jobs:
               fi
               head_sha="${page_head_sha}"
 
-              current_reviews="$(
-                jq \
+              candidate_review_ids="$(
+                jq -r \
                   --arg head "${head_sha}" \
-                  --arg prefix "${COPILOT_REVIEWER_PREFIX}" \
-                  '[
-                    (.data.repository.pullRequest.reviews.nodes // [])[]
-                    | select((.author.login // "") | startswith($prefix))
+                  --arg reviewer "${COPILOT_REVIEWER_LOGIN}" \
+                  --arg marker "${UNABLE_REVIEW_MARKER}" \
+                  '(.data.repository.pullRequest.reviews.nodes // [])[]
+                    | select(
+                        (.author.login // "") as $login
+                        | ($login == $reviewer or $login == ($reviewer + "[bot]"))
+                      )
                     | select(.state == "COMMENTED")
-                    | select((.body // "") != "")
+                    | select(
+                        (((.body // "") | gsub("\\s"; "")) != "")
+                        or ((.comments.totalCount // 0) > 0)
+                      )
                     | select(
                         ((.body // "")
                         | ascii_downcase
-                        | contains("unable to review this pull request")) == false
+                        | contains($marker | ascii_downcase)) == false
                       )
                     | select(.commit.oid == $head)
-                  ]
-                  | length' <<<"${response}"
+                    | .id' <<<"${response}"
               )"
-              if [ "${current_reviews}" -gt 0 ]; then
+              while IFS= read -r review_id; do
+                if [ -z "${review_id}" ]; then
+                  continue
+                fi
+                if review_comments_clean "${review_id}" "${head_sha}"; then
+                  review_complete=true
+                  break
+                else
+                  comments_status=$?
+                  if [ "${comments_status}" -eq 2 ]; then
+                    request_failed=true
+                    break
+                  fi
+                fi
+              done <<<"${candidate_review_ids}"
+              if [ "${review_complete}" = true ]; then
                 review_complete=true
                 break 2
+              fi
+              if [ "${request_failed}" = true ]; then
+                break
               fi
 
               has_previous="$(jq -r '.data.repository.pullRequest.reviews.pageInfo.hasPreviousPage' <<<"${response}")"
@@ -225,13 +323,13 @@ jobs:
 
               page_unresolved="$(
                 jq \
-                  --arg prefix "${COPILOT_REVIEWER_PREFIX}" \
+                  --arg reviewer "${COPILOT_REVIEWER_LOGIN}" \
                   '[
                     (.data.repository.pullRequest.reviewThreads.nodes // [])[]
                     | select(.isResolved == false)
                     | select(
-                        ((.comments.nodes[0].author.login // "")
-                        | startswith($prefix))
+                        (.comments.nodes[0].author.login // "") as $login
+                        | ($login == $reviewer or $login == ($reviewer + "[bot]"))
                       )
                   ]
                   | length' <<<"${response}"
