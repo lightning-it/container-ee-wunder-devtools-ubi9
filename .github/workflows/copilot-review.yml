@@ -18,6 +18,7 @@ permissions:
 
 env:
   COPILOT_REVIEWER_LOGIN: copilot-pull-request-reviewer
+  NO_FILES_REVIEW_MARKER: was not able to review any files
   UNABLE_REVIEW_MARKER: unable to review this pull request
 
 concurrency:
@@ -42,10 +43,18 @@ jobs:
 
           owner="${REPOSITORY%%/*}"
           repository="${REPOSITORY#*/}"
+          normalize_review_marker() {
+            jq -Rr '
+              ascii_downcase
+              | gsub("wasn[\u0027\u2019]t"; "was not")
+              | gsub("\\s"; "")
+            ' <<<"$1"
+          }
           normalized_unable_review_marker="$(
-            jq -nr \
-              --arg marker "${UNABLE_REVIEW_MARKER}" \
-              '$marker | ascii_downcase | gsub("\\s"; "")'
+            normalize_review_marker "${UNABLE_REVIEW_MARKER}"
+          )"
+          normalized_no_files_review_marker="$(
+            normalize_review_marker "${NO_FILES_REVIEW_MARKER}"
           )"
 
           graphql() {
@@ -111,7 +120,8 @@ jobs:
 
           review_comments_clean() {
             local review_id="$1" expected_head="$2" after="" response has_next
-            local marker_count content_count meaningful_content=false
+            local content_counts marker_count content_count meaningful_content=false
+            local count_pattern=$'^[0-9]+\t[0-9]+$'
             local -a arguments
             while true; do
               arguments=(
@@ -135,19 +145,26 @@ jobs:
                 return 2
               fi
 
-              read -r marker_count content_count <<<"$(
-                jq -r \
-                  --arg marker "${normalized_unable_review_marker}" \
-                  'def review_content:
+              if ! content_counts="$(
+                jq -er \
+                  --arg unable_marker "${normalized_unable_review_marker}" \
+                  --arg no_files_marker "${normalized_no_files_review_marker}" \
+                  'def normalize_review_text:
+                      ascii_downcase
+                      | gsub("wasn[\u0027\u2019]t"; "was not")
+                      | gsub("\\s"; "");
+                  def review_content:
                       (.data.node.body // ""),
                       (.data.node.comments.nodes[]?.body // "");
                   [
                     ([
                       review_content
                       | select(
-                          ascii_downcase
-                          | gsub("\\s"; "")
-                          | contains($marker)
+                          normalize_review_text
+                          | (
+                              contains($unable_marker)
+                              or contains($no_files_marker)
+                            )
                         )
                     ] | length),
                     ([
@@ -156,7 +173,15 @@ jobs:
                     ] | length)
                   ]
                   | @tsv' <<<"${response}"
-              )"
+              )"; then
+                echo "Unable to parse review content counts for review ${review_id}; refusing to accept the review." >&2
+                return 2
+              fi
+              if [[ ! "${content_counts}" =~ ${count_pattern} ]]; then
+                echo "Review ${review_id} returned invalid review content counts; refusing to accept the review." >&2
+                return 2
+              fi
+              IFS=$'\t' read -r marker_count content_count <<<"${content_counts}"
               if [ "${marker_count}" -gt 0 ]; then
                 return 1
               fi
@@ -217,8 +242,13 @@ jobs:
                 jq -r \
                   --arg head "${head_sha}" \
                   --arg reviewer "${COPILOT_REVIEWER_LOGIN}" \
-                  --arg marker "${normalized_unable_review_marker}" \
-                  '(.data.repository.pullRequest.reviews.nodes // [])[]
+                  --arg unable_marker "${normalized_unable_review_marker}" \
+                  --arg no_files_marker "${normalized_no_files_review_marker}" \
+                  'def normalize_review_text:
+                      ascii_downcase
+                      | gsub("wasn[\u0027\u2019]t"; "was not")
+                      | gsub("\\s"; "");
+                  (.data.repository.pullRequest.reviews.nodes // [])[]
                     | select(
                         (.author.login // "") as $login
                         | ($login == $reviewer or $login == ($reviewer + "[bot]"))
@@ -229,10 +259,11 @@ jobs:
                         or ((.comments.totalCount // 0) > 0)
                       )
                     | select(
-                        ((.body // "")
-                        | ascii_downcase
-                        | gsub("\\s"; "")
-                        | contains($marker)) == false
+                        ((.body // "") | normalize_review_text) as $body
+                        | (
+                            ($body | contains($unable_marker))
+                            or ($body | contains($no_files_marker))
+                          ) == false
                       )
                     | select(.commit.oid == $head)
                     | .id' <<<"${response}"
