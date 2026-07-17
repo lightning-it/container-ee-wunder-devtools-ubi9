@@ -242,7 +242,7 @@ jobs:
                       )
                     | select(.state == "COMMENTED")
                     | select(.commit.oid == $head)
-                    | .id' <<<"${response}"
+                    | (.id // empty)' <<<"${response}"
               )"
               while IFS= read -r review_id; do
                 if [ -z "${review_id}" ]; then
