@@ -42,11 +42,6 @@ jobs:
 
           owner="${REPOSITORY%%/*}"
           repository="${REPOSITORY#*/}"
-          normalized_unable_review_marker="$(
-            jq -nr \
-              --arg marker "${UNABLE_REVIEW_MARKER}" \
-              '$marker | ascii_downcase | gsub("\\s"; "")'
-          )"
 
           graphql() {
             local api_attempt output
@@ -97,7 +92,6 @@ jobs:
           ) {
             node(id: $review) {
               ... on PullRequestReview {
-                body
                 commit { oid }
                 pullRequest { headRefOid }
                 comments(first: 100, after: $after) {
@@ -110,8 +104,7 @@ jobs:
           GRAPHQL
 
           review_comments_clean() {
-            local review_id="$1" expected_head="$2" after="" response has_next
-            local marker_count content_count meaningful_content=false
+            local review_id="$1" expected_head="$2" after="" response has_next marker_count
             local -a arguments
             while true; do
               arguments=(
@@ -135,41 +128,26 @@ jobs:
                 return 2
               fi
 
-              read -r marker_count content_count <<<"$(
-                jq -r \
-                  --arg marker "${normalized_unable_review_marker}" \
-                  'def review_content:
-                      (.data.node.body // ""),
-                      (.data.node.comments.nodes[]?.body // "");
-                  [
-                    ([
-                      review_content
-                      | select(
-                          ascii_downcase
-                          | gsub("\\s"; "")
-                          | contains($marker)
-                        )
-                    ] | length),
-                    ([
-                      review_content
-                      | select((gsub("\\s"; "")) != "")
-                    ] | length)
+              marker_count="$(
+                jq \
+                  --arg marker "${UNABLE_REVIEW_MARKER}" \
+                  '[
+                    .data.node.comments.nodes[]?
+                    | select(
+                        ((.body // "")
+                        | ascii_downcase
+                        | contains($marker | ascii_downcase))
+                      )
                   ]
-                  | @tsv' <<<"${response}"
+                  | length' <<<"${response}"
               )"
               if [ "${marker_count}" -gt 0 ]; then
                 return 1
               fi
-              if [ "${content_count}" -gt 0 ]; then
-                meaningful_content=true
-              fi
 
               has_next="$(jq -r '.data.node.comments.pageInfo.hasNextPage' <<<"${response}")"
               if [ "${has_next}" != "true" ]; then
-                if [ "${meaningful_content}" = true ]; then
-                  return 0
-                fi
-                return 1
+                return 0
               fi
               after="$(jq -r '.data.node.comments.pageInfo.endCursor // empty' <<<"${response}")"
               if [ -z "${after}" ]; then
@@ -217,7 +195,7 @@ jobs:
                 jq -r \
                   --arg head "${head_sha}" \
                   --arg reviewer "${COPILOT_REVIEWER_LOGIN}" \
-                  --arg marker "${normalized_unable_review_marker}" \
+                  --arg marker "${UNABLE_REVIEW_MARKER}" \
                   '(.data.repository.pullRequest.reviews.nodes // [])[]
                     | select(
                         (.author.login // "") as $login
@@ -231,8 +209,7 @@ jobs:
                     | select(
                         ((.body // "")
                         | ascii_downcase
-                        | gsub("\\s"; "")
-                        | contains($marker)) == false
+                        | contains($marker | ascii_downcase)) == false
                       )
                     | select(.commit.oid == $head)
                     | .id' <<<"${response}"
@@ -253,6 +230,7 @@ jobs:
                 fi
               done <<<"${candidate_review_ids}"
               if [ "${review_complete}" = true ]; then
+                review_complete=true
                 break 2
               fi
               if [ "${request_failed}" = true ]; then
