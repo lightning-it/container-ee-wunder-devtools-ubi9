@@ -43,19 +43,6 @@ jobs:
 
           owner="${REPOSITORY%%/*}"
           repository="${REPOSITORY#*/}"
-          normalize_review_marker() {
-            jq -Rr '
-              ascii_downcase
-              | gsub("wasn[\u0027\u2019]t"; "was not")
-              | gsub("\\s"; "")
-            ' <<<"$1"
-          }
-          normalized_unable_review_marker="$(
-            normalize_review_marker "${UNABLE_REVIEW_MARKER}"
-          )"
-          normalized_no_files_review_marker="$(
-            normalize_review_marker "${NO_FILES_REVIEW_MARKER}"
-          )"
 
           graphql() {
             local api_attempt output
@@ -88,8 +75,6 @@ jobs:
                   nodes {
                     id
                     author { login }
-                    body
-                    comments(first: 1) { totalCount }
                     commit { oid }
                     state
                   }
@@ -147,8 +132,8 @@ jobs:
 
               if ! content_counts="$(
                 jq -er \
-                  --arg unable_marker "${normalized_unable_review_marker}" \
-                  --arg no_files_marker "${normalized_no_files_review_marker}" \
+                  --arg unable_marker "${UNABLE_REVIEW_MARKER}" \
+                  --arg no_files_marker "${NO_FILES_REVIEW_MARKER}" \
                   'def normalize_review_text:
                       ascii_downcase
                       | gsub("wasn[\u0027\u2019]t"; "was not")
@@ -156,14 +141,16 @@ jobs:
                   def review_content:
                       (.data.node.body // ""),
                       (.data.node.comments.nodes[]?.body // "");
-                  [
+                  ($unable_marker | normalize_review_text) as $unable
+                  | ($no_files_marker | normalize_review_text) as $no_files
+                  | [
                     ([
                       review_content
                       | select(
                           normalize_review_text
                           | (
-                              contains($unable_marker)
-                              or contains($no_files_marker)
+                              contains($unable)
+                              or contains($no_files)
                             )
                         )
                     ] | length),
@@ -242,29 +229,12 @@ jobs:
                 jq -r \
                   --arg head "${head_sha}" \
                   --arg reviewer "${COPILOT_REVIEWER_LOGIN}" \
-                  --arg unable_marker "${normalized_unable_review_marker}" \
-                  --arg no_files_marker "${normalized_no_files_review_marker}" \
-                  'def normalize_review_text:
-                      ascii_downcase
-                      | gsub("wasn[\u0027\u2019]t"; "was not")
-                      | gsub("\\s"; "");
-                  (.data.repository.pullRequest.reviews.nodes // [])[]
+                  '(.data.repository.pullRequest.reviews.nodes // [])[]
                     | select(
                         (.author.login // "") as $login
                         | ($login == $reviewer or $login == ($reviewer + "[bot]"))
                       )
                     | select(.state == "COMMENTED")
-                    | select(
-                        (((.body // "") | gsub("\\s"; "")) != "")
-                        or ((.comments.totalCount // 0) > 0)
-                      )
-                    | select(
-                        ((.body // "") | normalize_review_text) as $body
-                        | (
-                            ($body | contains($unable_marker))
-                            or ($body | contains($no_files_marker))
-                          ) == false
-                      )
                     | select(.commit.oid == $head)
                     | .id' <<<"${response}"
               )"
