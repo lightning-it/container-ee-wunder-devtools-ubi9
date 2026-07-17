@@ -193,8 +193,9 @@ jobs:
 
           # A rejected review cannot become acceptable during this run without
           # an edit event, which starts a fresh run through the concurrency
-          # group. Cache rejected IDs so marker-only reviews cost one detail
-          # query per run instead of one query on every polling attempt.
+          # group. Cache rejected IDs so marker-only, empty, or whitespace-only
+          # reviews cost one detail query per run instead of one query on every
+          # polling attempt.
           declare -A rejected_review_ids=()
           review_complete=false
           head_sha=""
@@ -247,7 +248,7 @@ jobs:
                 if [ -z "${review_id}" ]; then
                   continue
                 fi
-                if [ -n "${rejected_review_ids[${review_id}]:-}" ]; then
+                if [ -n "${rejected_review_ids["${review_id}"]:-}" ]; then
                   continue
                 fi
                 if review_comments_clean "${review_id}" "${head_sha}"; then
