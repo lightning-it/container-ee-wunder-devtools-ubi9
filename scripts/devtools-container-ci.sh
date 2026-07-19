@@ -373,6 +373,7 @@ run_contract_tests() {
     container-ee-wunder-devtools-ubi9)
       docker run --rm "${validation_container_args[@]}" "$image" bash -lc '
         set -euo pipefail
+        export XDG_CACHE_HOME=/tmp/.cache
         terraform -version
         tflint --version
         terraform-docs --version
