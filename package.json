@@ -7,7 +7,7 @@
     "conventional-changelog-conventionalcommits": "^9.0.0",
     "renovate": "43.252.1",
     "semantic-release": "^25.0.0",
-    "fast-check": "4.8.0"
+    "fast-check": "4.9.0"
   },
   "overrides": {
     "@semantic-release/github": {

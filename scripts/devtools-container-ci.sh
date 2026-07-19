@@ -39,7 +39,7 @@ target_arch="$(detect_targetarch)"
 case "$target_arch" in
   amd64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7"
-    renovate_default="docker.io/renovate/renovate:43.270.1@sha256:d4fdb02b702ee3a291157bc249dc343ad410ab8379f145c8fb5499fa47aaeffe"
+    renovate_default="docker.io/renovate/renovate:43.271.2@sha256:703028733e1dd7f9a71acfce89e6ce368de2a908ed85734f3435c0627844b1be"
     trivy_default="docker.io/aquasec/trivy:0.72.0@sha256:c6e969c5662a546ad5de4a73c2a6b7a7c627f86d916903e175aa623af5b97ada"
     hadolint_image="docker.io/hadolint/hadolint:v2.14.0@sha256:e9dbf5113239ef2bf696d20c8f28d3019a47c26a38c98b89344d3e2846c4d5f8"
     docker_cli_image="docker.io/library/docker:29-cli@sha256:feb2d49bd65f274b3e4b4620beabe2f4691e5287e496da9fbc9830ed5f780676"
@@ -47,7 +47,7 @@ case "$target_arch" in
     ;;
   arm64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:33ffa3f1ad576165ea9c26f726884defdc411fb1fcb9ccc6a117b2f554ba1723"
-    renovate_default="docker.io/renovate/renovate:43.270.1@sha256:8119ae981a645c707b72a8aee4e474020702a8f94de43839955113189bac6036"
+    renovate_default="docker.io/renovate/renovate:43.271.2@sha256:749a592002f314d56556f75feaf23f6a7be0ef9c6be51aace457da5dd44d5cdb"
     trivy_default="docker.io/aquasec/trivy:0.72.0@sha256:405015d1cd07a2630301169e694a5a420afc4dd553fb462189d4f109ba56a6df"
     hadolint_image="docker.io/hadolint/hadolint:v2.14.0@sha256:12cada422759f74155aabce5c9cfdc279090c2afeb9bc7a5138fe31098ab3093"
     docker_cli_image="docker.io/library/docker:29-cli@sha256:03ff3183ed048d713b8923026395726f643edc15dce37458ee775b40094a146f"
@@ -374,6 +374,7 @@ run_contract_tests() {
       docker run --rm "${validation_container_args[@]}" "$image" bash -lc '
         set -euo pipefail
         export XDG_CACHE_HOME=/tmp/.cache
+        mkdir -p "$XDG_CACHE_HOME"
         terraform -version
         tflint --version
         terraform-docs --version

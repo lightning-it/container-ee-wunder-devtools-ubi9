@@ -16,6 +16,60 @@
   "schedule": [],
   "rebaseWhen": "behind-base-branch",
   "prConcurrentLimit": 5,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "pip version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/", "/^Containerfile$/"],
+      "matchStrings": ["ARG\\s+PIP_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "depNameTemplate": "pip",
+      "datasourceTemplate": "pypi",
+      "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "description": "Terraform version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/", "/^Containerfile$/"],
+      "matchStrings": ["ARG\\s+TERRAFORM_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "hashicorp/terraform",
+      "versioningTemplate": "hashicorp"
+    },
+    {
+      "customType": "regex",
+      "description": "Terragrunt version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/", "/^Containerfile$/"],
+      "matchStrings": ["ARG\\s+TERRAGRUNT_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "gruntwork-io/terragrunt",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Helm version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/", "/^Containerfile$/"],
+      "matchStrings": ["ARG\\s+HELM_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "helm/helm",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^collections/requirements-base\\.yml$/", "/^collections/controller-requirements\\.yml$/"],
+      "matchStrings": ["-\\s+name:\\s+(?<depName>[A-Za-z0-9_]+\\.[A-Za-z0-9_]+)\\s*\\n\\s+version:\\s+\"?(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\"?\\s*\\n"],
+      "datasourceTemplate": "galaxy-collection",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^collections/requirements-base\\.yml$/"],
+      "matchStrings": ["-\\s+name:\\s+https://github\\.com/(?<depName>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\\.git\\s*\\n\\s+type:\\s+git\\s*\\n\\s+version:\\s+\"?(?<currentValue>[^\"\\n]+)\"?"],
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "loose"
+    }
+  ],
   "packageRules": [
     {
       "description": "Automerge safe non-major updates into develop after CI passes",
