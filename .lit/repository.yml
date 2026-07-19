@@ -30,6 +30,8 @@ release_evidence: true
 heavy_incus_required: false
 trivy_required: true
 trivy_release_gate: true
+containerfile: Dockerfile
+container_build_context: .
 openssf_best_practices:
   required: true
   project_id: 13514

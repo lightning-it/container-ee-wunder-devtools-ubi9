@@ -10,7 +10,7 @@ on:
   pull_request_review:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
-    types: [created, edited, deleted]
+    types: [edited, deleted]
 
 permissions:
   contents: read
@@ -20,20 +20,204 @@ env:
   COPILOT_REVIEWER_LOGIN: copilot-pull-request-reviewer
   NO_FILES_REVIEW_MARKER: was not able to review any files
   UNABLE_REVIEW_MARKER: unable to review this pull request
+  QUOTA_EXHAUSTED_MARKER: quota
 
 concurrency:
   group: copilot-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
+  request-current-revision-review:
+    name: Request Copilot review for current revision
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !(github.event.pull_request.user.login == 'renovate[bot]' &&
+        startsWith(github.event.pull_request.head.ref, 'renovate/') &&
+        github.event.pull_request.base.ref == 'develop') &&
+      !(github.event.pull_request.user.login == 'litreleasebot' &&
+        startsWith(github.event.pull_request.head.ref, 'chore/sync-shared-assets-lit-') &&
+        github.event.pull_request.base.ref == 'develop' &&
+        github.event.pull_request.title == 'chore: sync shared-assets-lit' &&
+        contains(github.event.pull_request.labels.*.name, 'chore') &&
+        contains(github.event.pull_request.labels.*.name, 'shared-assets-lit')) &&
+      !(github.event.pull_request.user.login == 'litreleasebot' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'chore/sync-repository-quality-') &&
+        github.event.pull_request.base.ref == 'develop' &&
+        github.event.pull_request.title == 'chore: sync repository quality assets' &&
+        contains(github.event.pull_request.labels.*.name, 'chore') &&
+        contains(github.event.pull_request.labels.*.name, 'shared-assets-lit')) &&
+      !(github.event.pull_request.user.login == 'litreleasebot' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.head.ref == 'chore/sync-main-to-develop' &&
+        github.event.pull_request.base.ref == 'develop' &&
+        github.event.pull_request.title == 'chore: sync main back to develop') &&
+      !(github.event.pull_request.user.login == 'litreleasebot' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.head.ref == 'develop' &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.title == 'chore(release): promote develop to main')
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Request Copilot review for the current revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          reviewer_login="${COPILOT_REVIEWER_LOGIN%\[bot\]}"
+          gh api --method POST \
+            "repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
+            -f "reviewers[]=${reviewer_login}[bot]"
+
   current-revision-reviewed:
     name: Successful Copilot review
     if: github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
+      - name: Classify trusted automation pull request
+        id: trusted-automation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          trusted=false
+          trusted_kind=none
+          live_pr="{}"
+          if [ "${PR_AUTHOR}" = "renovate[bot]" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [[ "${PR_HEAD}" == renovate/* ]] \
+            && [ "${PR_BASE}" = "develop" ]; then
+            if live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")" \
+              && jq -e \
+              --arg author "${PR_AUTHOR}" \
+              --arg base "${PR_BASE}" \
+              --arg head "${PR_HEAD}" \
+              --arg head_sha "${PR_HEAD_SHA}" \
+              --arg repo "${REPOSITORY}" \
+              '(.state == "open") and (.draft == false)
+               and (.user.login == $author) and (.base.ref == $base)
+               and (.head.ref == $head) and (.head.sha == $head_sha)
+               and (.head.repo.full_name == $repo)
+               and ([.labels[].name] | index("renovate") != null)
+               and ([.labels[].name] | index("dependencies") != null)
+               and ([.labels[].name] | index("safe-automerge") != null)
+               and ([.labels[].name] | index("breaking-update") == null)' \
+                <<<"${live_pr}" >/dev/null; then
+              trusted=true
+              trusted_kind=renovate
+            fi
+          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [[ "${PR_HEAD}" == chore/sync-shared-assets-lit-* ]] \
+            && [ "${PR_BASE}" = "develop" ] \
+            && [ "${PR_TITLE}" = "chore: sync shared-assets-lit" ] \
+            && jq -e 'index("chore") != null and index("shared-assets-lit") != null' \
+              <<<"${PR_LABELS}" >/dev/null; then
+            trusted=true
+            trusted_kind=shared-assets
+          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [[ "${PR_HEAD}" == chore/sync-repository-quality-* ]] \
+            && [ "${PR_BASE}" = "develop" ] \
+            && [ "${PR_TITLE}" = "chore: sync repository quality assets" ] \
+            && jq -e 'index("chore") != null and index("shared-assets-lit") != null' \
+              <<<"${PR_LABELS}" >/dev/null; then
+            trusted=true
+            trusted_kind=repository-quality
+          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [ "${PR_HEAD}" = "chore/sync-main-to-develop" ] \
+            && [ "${PR_BASE}" = "develop" ] \
+            && [ "${PR_TITLE}" = "chore: sync main back to develop" ]; then
+            trusted=true
+            trusted_kind=ancestry-backmerge
+          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [ "${PR_HEAD}" = "develop" ] \
+            && [ "${PR_BASE}" = "main" ] \
+            && [ "${PR_TITLE}" = "chore(release): promote develop to main" ]; then
+            trusted=true
+            trusted_kind=release-promotion
+          fi
+          echo "trusted=${trusted}" >>"${GITHUB_OUTPUT}"
+          echo "kind=${trusted_kind}" >>"${GITHUB_OUTPUT}"
+
+      - name: Verify file-identical ancestry backmerge
+        if: steps.trusted-automation.outputs.kind == 'ancestry-backmerge'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git init --quiet .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --quiet --no-tags origin \
+            "${HEAD_SHA}" "refs/heads/main" "refs/heads/develop"
+          git merge-base --is-ancestor "origin/main" "${HEAD_SHA}"
+          git merge-base --is-ancestor "origin/develop" "${HEAD_SHA}"
+          [ "$(git rev-list --parents -n 1 "${HEAD_SHA}" | wc -w)" -eq 3 ]
+          git diff --quiet "origin/develop" "${HEAD_SHA}"
+          echo "Verified a file-identical two-parent merge of current main and develop."
+
+      - name: Verify protected release promotion
+        if: steps.trusted-automation.outputs.kind == 'release-promotion'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git init --quiet .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --quiet --no-tags origin \
+            "${HEAD_SHA}" "refs/heads/main" "refs/heads/develop"
+          [ "$(git rev-parse origin/develop)" = "${HEAD_SHA}" ]
+          git merge-base --is-ancestor "origin/main" "${HEAD_SHA}"
+          echo "Verified current protected develop head and main ancestry."
+
+      - name: Accept trusted automation exemption
+        if: >-
+          steps.trusted-automation.outputs.trusted == 'true' &&
+          steps.trusted-automation.outputs.kind != 'ancestry-backmerge' &&
+          steps.trusted-automation.outputs.kind != 'release-promotion'
+        run: |
+          if [ "${{ steps.trusted-automation.outputs.kind }}" = renovate ]; then
+            {
+              echo "### Trusted Renovate exemption"
+              echo
+              echo "Copilot review is not required for this exact-head trusted Renovate PR."
+              echo "Trusted identity and policy verification succeeded."
+            } >>"${GITHUB_STEP_SUMMARY}"
+          else
+            echo "Trusted automation PR; Copilot review is delegated to its required guarded-automerge policy."
+          fi
+
       - name: Verify current Copilot review and resolved findings
+        if: steps.trusted-automation.outputs.trusted != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -134,6 +318,7 @@ jobs:
                 jq -er \
                   --arg unable_marker "${UNABLE_REVIEW_MARKER}" \
                   --arg no_files_marker "${NO_FILES_REVIEW_MARKER}" \
+                  --arg quota_marker "${QUOTA_EXHAUSTED_MARKER}" \
                   'def normalize_review_text:
                       ascii_downcase
                       | gsub("wasn[\u0027\u2019]t"; "was not")
@@ -143,6 +328,7 @@ jobs:
                       (.data.node.comments.nodes[]?.body // "");
                   ($unable_marker | normalize_review_text) as $unable
                   | ($no_files_marker | normalize_review_text) as $no_files
+                  | ($quota_marker | normalize_review_text) as $quota
                   | [
                     ([
                       review_content
@@ -151,6 +337,7 @@ jobs:
                           | (
                               contains($unable)
                               or contains($no_files)
+                              or contains($quota)
                             )
                         )
                     ] | length),

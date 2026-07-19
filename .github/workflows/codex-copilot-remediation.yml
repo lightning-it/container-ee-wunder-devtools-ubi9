@@ -1,0 +1,299 @@
+# Managed by lightning-it/shared-assets-lit.
+# Do not edit downstream copies directly.
+# yamllint disable rule:truthy rule:line-length
+---
+name: Codex Copilot remediation
+
+on:
+  pull_request_review:
+    types: [submitted, edited]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request to continue after a trusted Codex push
+        required: true
+        type: number
+      expected_head:
+        description: Exact head SHA pushed by the preceding remediation run
+        required: true
+        type: string
+      round:
+        description: Repair round in this head lineage
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: codex-copilot-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+env:
+  COPILOT_LOGIN: copilot-pull-request-reviewer[bot]
+
+jobs:
+  continue-after-push:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Verify exact head and request Copilot review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY_OWNER}" = lightning-it
+          current_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)"
+          test "${current_head}" = "${EXPECTED_HEAD}"
+          gh api --method POST "repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+
+  inspect:
+    if: github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    outputs:
+      eligible: ${{ steps.guard.outputs.eligible }}
+      actionable: ${{ steps.guard.outputs.actionable }}
+      head_sha: ${{ steps.guard.outputs.head_sha }}
+      head_ref: ${{ steps.guard.outputs.head_ref }}
+      pr_number: ${{ steps.guard.outputs.pr_number }}
+      round: ${{ steps.guard.outputs.round }}
+      retry: ${{ steps.guard.outputs.retry }}
+      finding_hash: ${{ steps.guard.outputs.finding_hash }}
+    steps:
+      - name: Validate trust, exact head, and unresolved Copilot findings
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_PATH: ${{ github.event_path }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          actionable=false
+          {
+            echo "eligible=false"
+            echo "actionable=false"
+            echo "retry=false"
+          } >>"${GITHUB_OUTPUT}"
+          test "${GITHUB_REPOSITORY_OWNER}" = lightning-it
+
+          pr_number="$(jq -r .pull_request.number "${EVENT_PATH}")"
+          event_author="$(jq -r .review.user.login "${EVENT_PATH}")"
+          reviewed_sha="$(jq -r .review.commit_id "${EVENT_PATH}")"
+          test "${event_author}" = "${COPILOT_LOGIN}"
+          review_body="$(jq -r '.review.body // "" | ascii_downcase' "${EVENT_PATH}")"
+          if [[ "${review_body}" == *"unable to review"* || "${review_body}" == *"not able to review"* || "${review_body}" == *quota* ]]; then
+            {
+              echo "retry=true"
+              echo "pr_number=${pr_number}"
+              echo "head_sha=${reviewed_sha}"
+            } >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          pr="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}")"
+          test "$(jq -r .state <<<"${pr}")" = open
+          test "$(jq -r .draft <<<"${pr}")" = false
+          test "$(jq -r .base.ref <<<"${pr}")" = develop
+          test "$(jq -r .head.repo.full_name <<<"${pr}")" = "${REPOSITORY}"
+          test "$(jq -r .head.label <<<"${pr}")" != null
+          head_sha="$(jq -r .head.sha <<<"${pr}")"
+          head_ref="$(jq -r .head.ref <<<"${pr}")"
+          author="$(jq -r .user.login <<<"${pr}")"
+          test "${reviewed_sha}" = "${head_sha}"
+
+          permission="$(gh api "repos/${REPOSITORY}/collaborators/${author}/permission" --jq .permission 2>/dev/null || true)"
+          case "${permission}" in admin|maintain|write) ;; *)
+            case "${author}:${head_ref}" in
+              'renovate[bot]':renovate/*|litreleasebot:chore/sync-shared-assets-lit-*|litreleasebot:chore/sync-repository-quality-*) ;;
+              *) exit 0 ;;
+            esac
+          esac
+
+          read -r owner name <<<"${REPOSITORY//\// }"
+          # shellcheck disable=SC2016 # GraphQL variables are intentionally literal.
+          query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){nodes{author{login} body pullRequestReview{commit{oid}}}}}}}}}'
+          threads='[]'
+          after=''
+          while true; do
+            args=(-f query="${query}" -F owner="${owner}" -F name="${name}" -F number="${pr_number}")
+            if [ -n "${after}" ]; then args+=(-f after="${after}"); fi
+            page="$(gh api graphql "${args[@]}")"
+            threads="$(jq -c --argjson page "$(jq '.data.repository.pullRequest.reviewThreads.nodes' <<<"${page}")" '. + $page' <<<"${threads}")"
+            if [ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${page}")" != true ]; then break; fi
+            after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"${page}")"
+            test -n "${after}"
+          done
+          count="$(jq --arg login "${COPILOT_LOGIN}" --arg sha "${head_sha}" '[.[] | select(.isResolved == false) | select(any(.comments.nodes[]; .author.login == $login and .pullRequestReview.commit.oid == $sha))] | length' <<<"${threads}")"
+          if [ "${count}" -gt 0 ]; then actionable=true; fi
+          finding_hash="$(jq -cS --arg login "${COPILOT_LOGIN}" --arg sha "${head_sha}" '[.[] | select(.isResolved == false) | [.comments.nodes[] | select(.author.login == $login and .pullRequestReview.commit.oid == $sha) | .body]]' <<<"${threads}" | sha256sum | cut -d' ' -f1)"
+
+          comments="$(gh api --paginate --slurp "repos/${REPOSITORY}/issues/${pr_number}/comments?per_page=100")"
+          round="$(jq '[add[] | select(.user.login == "github-actions[bot]") | .body | capture("<!-- codex-remediation round=(?<round>[0-9]+) head=[0-9a-f]+")?.round // empty | tonumber] | max // 0' <<<"${comments}")"
+          round="$((round + 1))"
+          if jq -e --arg hash "${finding_hash}" 'any(add[]; .user.login == "github-actions[bot]" and (.body | contains("finding=" + $hash)))' <<<"${comments}" >/dev/null; then
+            gh api --method POST "repos/${REPOSITORY}/issues/${pr_number}/comments" -f body="Codex remediation stopped: identical Copilot finding set repeated (${finding_hash})." >/dev/null
+            exit 0
+          fi
+          if [ "${round}" -gt 3 ]; then
+            gh api --method POST "repos/${REPOSITORY}/issues/${pr_number}/comments" -f body='Codex remediation stopped: maximum three automatic repair rounds reached.' >/dev/null
+            exit 0
+          fi
+          {
+            echo "eligible=true"
+            echo "actionable=${actionable}"
+            echo "head_sha=${head_sha}"
+            echo "head_ref=${head_ref}"
+            echo "pr_number=${pr_number}"
+            echo "round=${round}"
+            echo "finding_hash=${finding_hash}"
+          } >>"${GITHUB_OUTPUT}"
+
+  retry-copilot-service:
+    needs: inspect
+    if: needs.inspect.outputs.retry == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Retry an unavailable or quota-blocked Copilot review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
+          EXPECTED_HEAD: ${{ needs.inspect.outputs.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sleep 60
+          test "$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)" = "${EXPECTED_HEAD}"
+          gh api --method POST "repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+
+  remediate:
+    needs: inspect
+    if: needs.inspect.outputs.eligible == 'true' && needs.inspect.outputs.actionable == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted workflow assets
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Checkout exact pull request head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.inspect.outputs.head_sha }}
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run official Codex remediation action
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODEX_REPOSITORY: ${{ github.repository }}
+          CODEX_PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
+          CODEX_EXPECTED_HEAD_SHA: ${{ needs.inspect.outputs.head_sha }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: trusted/.github/codex/prompts/remediate-copilot.md
+          working-directory: repo
+          permission-profile: :workspace
+          safety-strategy: drop-sudo
+          allow-bots: "true"
+          allow-bot-users: copilot-pull-request-reviewer,github-actions
+      - name: Verify, commit, and push without force
+        id: push
+        working-directory: repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ needs.inspect.outputs.head_sha }}
+          HEAD_REF: ${{ needs.inspect.outputs.head_ref }}
+          PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
+          REPOSITORY: ${{ github.repository }}
+          ROUND: ${{ needs.inspect.outputs.round }}
+          FINDING_HASH: ${{ needs.inspect.outputs.finding_hash }}
+        run: |
+          set -euo pipefail
+          git diff --check
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "changed=false" >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          remote_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)"
+          test "${remote_head}" = "${EXPECTED_HEAD}"
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add -A
+          patch_hash="$(git diff --cached --binary | sha256sum | cut -d' ' -f1)"
+          comments="$(gh api --paginate --slurp "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100")"
+          if jq -e --arg hash "${patch_hash}" 'any(add[]; .user.login == "github-actions[bot]" and (.body | contains("patch=" + $hash)))' <<<"${comments}" >/dev/null; then
+            echo "Repeated patch ${patch_hash}; refusing to loop." >&2
+            exit 1
+          fi
+          git commit -m "fix: remediate Copilot findings (round ${ROUND})"
+          token_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${token_header}" push origin "HEAD:${HEAD_REF}"
+          new_head="$(git rev-parse HEAD)"
+          test "$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)" = "${new_head}"
+          echo "changed=true" >>"${GITHUB_OUTPUT}"
+          echo "new_head=${new_head}" >>"${GITHUB_OUTPUT}"
+          gh api --method POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -f body="<!-- codex-remediation round=${ROUND} head=${new_head} finding=${FINDING_HASH} patch=${patch_hash} -->Codex remediation round ${ROUND} pushed ${new_head}. A new exact-head Copilot review was requested automatically." >/dev/null
+      - name: Explicitly continue after GITHUB_TOKEN push
+        if: steps.push.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
+          NEW_HEAD: ${{ steps.push.outputs.new_head }}
+          ROUND: ${{ needs.inspect.outputs.round }}
+        run: |
+          set -euo pipefail
+          gh workflow run codex-copilot-remediation.yml --repo "${REPOSITORY}" --ref "${{ github.event.pull_request.base.ref }}" -f pr_number="${PR_NUMBER}" -f expected_head="${NEW_HEAD}" -f round="${ROUND}"
+
+  enable-develop-automerge:
+    needs: inspect
+    if: needs.inspect.outputs.eligible == 'true' && needs.inspect.outputs.actionable == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Wait for exact-head required checks and enable auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ needs.inspect.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          test "$(jq -r .base.ref <<<"${pr}")" = develop
+          test "$(jq -r .head.sha <<<"${pr}")" = "${EXPECTED_HEAD}"
+          gh pr checks "${PR_NUMBER}" --repo "${REPOSITORY}" --required --watch --fail-fast
+          test "$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)" = "${EXPECTED_HEAD}"
+          gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --auto --merge
+          test "$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json autoMergeRequest --jq '.autoMergeRequest != null')" = true
