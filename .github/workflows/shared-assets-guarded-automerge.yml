@@ -4,16 +4,19 @@ name: Shared-assets guarded automerge
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review, converted_to_draft]
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   approve-shared-assets:
     name: Approve trusted shared-assets PR
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
     permissions:
       contents: write
       pull-requests: write
@@ -24,11 +27,16 @@ jobs:
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
           PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           REPO: ${{ github.repository }}
+          TRIGGER_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -39,6 +47,14 @@ jobs:
           }
 
           trusted=true
+
+          if [ "$PR_DRAFT" != "false" ]; then
+            trusted=false
+          fi
+
+          if [ "$TRIGGER_ACTOR" != "litreleasebot" ]; then
+            trusted=false
+          fi
 
           if [ "$PR_AUTHOR" != "litreleasebot" ]; then
             trusted=false
@@ -65,18 +81,294 @@ jobs:
             trusted=false
           fi
 
+          live_pr="{}"
+          if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
+            trusted=false
+          fi
+          if ! jq -e \
+            --arg author "$PR_AUTHOR" \
+            --arg base "$PR_BASE" \
+            --arg head "$PR_HEAD" \
+            --arg head_repo "$PR_HEAD_REPO" \
+            --arg head_sha "$PR_HEAD_SHA" \
+            --arg title "$PR_TITLE" \
+            '(.state == "open") and (.draft == false)
+             and (.user.login == $author) and (.base.ref == $base)
+             and (.head.ref == $head) and (.head.repo.full_name == $head_repo)
+             and (.head.sha == $head_sha) and (.title == $title)
+             and ([.labels[].name] | index("chore") != null)
+             and ([.labels[].name] | index("shared-assets-lit") != null)' \
+            >/dev/null <<<"$live_pr"; then
+            trusted=false
+          fi
+
+          commit_rows=""
+          if ! commit_rows="$(
+            gh api --paginate \
+              "repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" \
+              --jq '.[] | @base64'
+          )"; then
+            trusted=false
+          fi
+          expected_commits="$(jq -r '.commits // 0' <<<"$live_pr")"
+          actual_commits="$(awk 'NF { count++ } END { print count + 0 }' \
+            <<<"$commit_rows")"
+          if [ "$actual_commits" -eq 0 ] \
+            || [ "$actual_commits" -ne "$expected_commits" ]; then
+            trusted=false
+          fi
+          last_commit_sha=""
+          while IFS= read -r encoded_commit; do
+            [ -n "$encoded_commit" ] || continue
+            commit_json="$(base64 --decode <<<"$encoded_commit")"
+            commit_sha="$(jq -r '.sha // ""' <<<"$commit_json")"
+            commit_author="$(jq -r '.author.login // ""' <<<"$commit_json")"
+            commit_committer="$(jq -r '.committer.login // ""' <<<"$commit_json")"
+            commit_message="$(jq -r '.commit.message // ""' <<<"$commit_json")"
+            first_line="$(head -n 1 <<<"$commit_message")"
+            source_sha_count="$(awk \
+              '/^Shared-Assets-Source-SHA: [0-9a-f]{40}$/ { count++ }
+               END { print count + 0 }' <<<"$commit_message")"
+            source_run_count="$(awk \
+              '/^Shared-Assets-Source-Run: [0-9]+$/ { count++ }
+               END { print count + 0 }' <<<"$commit_message")"
+            if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
+              || [ "$commit_author" != "litreleasebot" ] \
+              || [ "$commit_committer" != "litreleasebot" ] \
+              || [ "$first_line" != \
+                "chore: sync shared assets from lightning-it/shared-assets-lit" ] \
+              || [ "$source_sha_count" -ne 1 ] \
+              || [ "$source_run_count" -ne 1 ]; then
+              trusted=false
+            fi
+            last_commit_sha="$commit_sha"
+          done <<<"$commit_rows"
+          if [ "$last_commit_sha" != "$PR_HEAD_SHA" ]; then
+            trusted=false
+          fi
+
           echo "trusted=$trusted" >>"$GITHUB_OUTPUT"
+
+      - name: Revoke auto-merge for an untrusted state or event
+        if: steps.guard.outputs.trusted != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          current_live_is_safe() {
+            local actual_commits commit_author commit_committer commit_json
+            local commit_message commit_rows commit_sha expected_commits first_line
+            local last_commit_sha live_head_sha live_pr source_run_count
+            local source_sha_count
+
+            if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
+              return 1
+            fi
+            if ! jq -e \
+              --arg repo "$REPO" \
+              '(.state == "open") and (.draft == false)
+               and (.user.login == "litreleasebot")
+               and (.base.ref == "develop")
+               and (.head.ref | startswith("chore/sync-shared-assets-lit-"))
+               and (.head.repo.full_name == $repo)
+               and (.title == "chore: sync shared-assets-lit")
+               and ([.labels[].name] | index("chore") != null)
+               and ([.labels[].name] | index("shared-assets-lit") != null)' \
+              >/dev/null <<<"$live_pr"; then
+              return 1
+            fi
+            live_head_sha="$(jq -r '.head.sha // ""' <<<"$live_pr")"
+            if ! [[ "$live_head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              return 1
+            fi
+            if ! commit_rows="$(
+              gh api --paginate \
+                "repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" \
+                --jq '.[] | @base64'
+            )"; then
+              return 1
+            fi
+            expected_commits="$(jq -r '.commits // 0' <<<"$live_pr")"
+            actual_commits="$(awk 'NF { count++ } END { print count + 0 }' \
+              <<<"$commit_rows")"
+            if [ "$actual_commits" -eq 0 ] \
+              || [ "$actual_commits" -ne "$expected_commits" ]; then
+              return 1
+            fi
+            last_commit_sha=""
+            while IFS= read -r encoded_commit; do
+              [ -n "$encoded_commit" ] || continue
+              if ! commit_json="$(base64 --decode <<<"$encoded_commit")"; then
+                return 1
+              fi
+              commit_sha="$(jq -r '.sha // ""' <<<"$commit_json")"
+              commit_author="$(jq -r '.author.login // ""' <<<"$commit_json")"
+              commit_committer="$(jq -r '.committer.login // ""' <<<"$commit_json")"
+              commit_message="$(jq -r '.commit.message // ""' <<<"$commit_json")"
+              first_line="$(head -n 1 <<<"$commit_message")"
+              source_sha_count="$(awk \
+                '/^Shared-Assets-Source-SHA: [0-9a-f]{40}$/ { count++ }
+                 END { print count + 0 }' <<<"$commit_message")"
+              source_run_count="$(awk \
+                '/^Shared-Assets-Source-Run: [0-9]+$/ { count++ }
+                 END { print count + 0 }' <<<"$commit_message")"
+              if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
+                || [ "$commit_author" != "litreleasebot" ] \
+                || [ "$commit_committer" != "litreleasebot" ] \
+                || [ "$first_line" != \
+                  "chore: sync shared assets from lightning-it/shared-assets-lit" ] \
+                || [ "$source_sha_count" -ne 1 ] \
+                || [ "$source_run_count" -ne 1 ]; then
+                return 1
+              fi
+              last_commit_sha="$commit_sha"
+            done <<<"$commit_rows"
+            [ "$last_commit_sha" = "$live_head_sha" ]
+          }
+
+          if current_live_is_safe; then
+            echo "Current live PR state is safe; no revocation is needed."
+            exit 0
+          fi
+
+          owner="${REPO%%/*}"
+          name="${REPO#*/}"
+          auto_merge_enabled="$(
+            gh api graphql \
+              -f query="query(\$owner:String!,\$name:String!,\$number:Int!){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){autoMergeRequest{__typename}}}}" \
+              -f owner="$owner" \
+              -f name="$name" \
+              -F number="$PR_NUMBER" \
+              --jq '.data.repository.pullRequest.autoMergeRequest != null'
+          )"
+          case "$auto_merge_enabled" in
+            true) gh pr merge "$PR_URL" --disable-auto ;;
+            false) ;;
+            *)
+              echo "ERROR: unable to determine auto-merge state for ${PR_URL}." >&2
+              exit 1
+              ;;
+          esac
 
       - name: Approve and enable auto-merge
         if: steps.guard.outputs.trusted == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
+          assert_live_safe() {
+            local actual_commits commit_author commit_committer commit_json
+            local commit_message commit_rows commit_sha expected_commits first_line
+            local last_commit_sha live_pr source_run_count source_sha_count
+
+            if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
+              return 1
+            fi
+            if ! jq -e \
+              --arg author "$PR_AUTHOR" \
+              --arg base "$PR_BASE" \
+              --arg head "$PR_HEAD" \
+              --arg head_repo "$PR_HEAD_REPO" \
+              --arg head_sha "$PR_HEAD_SHA" \
+              --arg title "$PR_TITLE" \
+              '(.state == "open") and (.draft == false)
+               and (.user.login == $author) and (.base.ref == $base)
+               and (.head.ref == $head) and (.head.repo.full_name == $head_repo)
+               and (.head.sha == $head_sha) and (.title == $title)
+               and ([.labels[].name] | index("chore") != null)
+               and ([.labels[].name] | index("shared-assets-lit") != null)' \
+              >/dev/null <<<"$live_pr"; then
+              return 1
+            fi
+            if ! commit_rows="$(
+              gh api --paginate \
+                "repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" \
+                --jq '.[] | @base64'
+            )"; then
+              return 1
+            fi
+            expected_commits="$(jq -r '.commits // 0' <<<"$live_pr")"
+            actual_commits="$(awk 'NF { count++ } END { print count + 0 }' \
+              <<<"$commit_rows")"
+            if [ "$actual_commits" -eq 0 ] \
+              || [ "$actual_commits" -ne "$expected_commits" ]; then
+              return 1
+            fi
+            last_commit_sha=""
+            while IFS= read -r encoded_commit; do
+              [ -n "$encoded_commit" ] || continue
+              if ! commit_json="$(base64 --decode <<<"$encoded_commit")"; then
+                return 1
+              fi
+              commit_sha="$(jq -r '.sha // ""' <<<"$commit_json")"
+              commit_author="$(jq -r '.author.login // ""' <<<"$commit_json")"
+              commit_committer="$(jq -r '.committer.login // ""' <<<"$commit_json")"
+              commit_message="$(jq -r '.commit.message // ""' <<<"$commit_json")"
+              first_line="$(head -n 1 <<<"$commit_message")"
+              source_sha_count="$(awk \
+                '/^Shared-Assets-Source-SHA: [0-9a-f]{40}$/ { count++ }
+                 END { print count + 0 }' <<<"$commit_message")"
+              source_run_count="$(awk \
+                '/^Shared-Assets-Source-Run: [0-9]+$/ { count++ }
+                 END { print count + 0 }' <<<"$commit_message")"
+              if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
+                || [ "$commit_author" != "litreleasebot" ] \
+                || [ "$commit_committer" != "litreleasebot" ] \
+                || [ "$first_line" != \
+                  "chore: sync shared assets from lightning-it/shared-assets-lit" ] \
+                || [ "$source_sha_count" -ne 1 ] \
+                || [ "$source_run_count" -ne 1 ]; then
+                return 1
+              fi
+              last_commit_sha="$commit_sha"
+            done <<<"$commit_rows"
+            [ "$last_commit_sha" = "$PR_HEAD_SHA" ]
+          }
+
+          disable_auto_merge() {
+            local auto_merge_enabled name owner
+            owner="${REPO%%/*}"
+            name="${REPO#*/}"
+            auto_merge_enabled="$(
+              gh api graphql \
+                -f query="query(\$owner:String!,\$name:String!,\$number:Int!){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){autoMergeRequest{__typename}}}}" \
+                -f owner="$owner" \
+                -f name="$name" \
+                -F number="$PR_NUMBER" \
+                --jq '.data.repository.pullRequest.autoMergeRequest != null'
+            )"
+            [ "$auto_merge_enabled" = false ] \
+              || gh pr merge "$PR_URL" --disable-auto
+          }
+
+          if ! assert_live_safe; then
+            disable_auto_merge
+            exit 1
+          fi
+          # A synchronize event can disable a previous auto-merge request after
+          # this job starts. Clear it first so the final enable is authoritative.
+          disable_auto_merge
           gh pr review "$PR_URL" \
             --approve \
-            --body "Approved trusted shared-assets sync after actor, label, branch, repository, and base-branch checks."
+            --body "Approved a bot-triggered shared-assets sync whose exact head commit and source-run provenance passed policy."
 
-          gh pr merge "$PR_URL" --auto --merge --delete-branch
+          if ! assert_live_safe; then
+            disable_auto_merge
+            exit 1
+          fi
+          gh pr merge "$PR_URL" --auto --merge --delete-branch \
+            --match-head-commit "$PR_HEAD_SHA"

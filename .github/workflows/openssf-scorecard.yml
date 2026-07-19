@@ -1,4 +1,4 @@
-# yamllint disable rule:truthy
+# yamllint disable rule:truthy rule:line-length
 ---
 name: OpenSSF Scorecard
 
@@ -14,10 +14,35 @@ permissions:
 jobs:
   scorecard:
     name: OpenSSF Scorecard
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write
-      id-token: write
-    uses: lightning-it/.github/.github/workflows/openssf-scorecard-reusable.yml@main
-    with:
-      publish_results: true
+    steps:
+      - name: Check out exact repository source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          persist-credentials: false
+
+      - name: Run immutable OpenSSF Scorecard analysis
+        uses: docker://ghcr.io/ossf/scorecard-action:v2.4.3@sha256:2dd6a6d60100f78ef24e14a47941d0087a524b4d3642041558239b1c6097c941
+        with:
+          results_file: scorecard.sarif
+          results_format: sarif
+          repo_token: ${{ github.token }}
+          publish_results: false
+          file_mode: archive
+          internal_publish_base_url: https://api.scorecard.dev
+          internal_default_token: ${{ github.token }}
+
+      - name: Retain Scorecard SARIF
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: scorecard-sarif
+          path: scorecard.sarif
+          if-no-files-found: error
+
+      - name: Upload Scorecard SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a  # v4.37.1
+        with:
+          sarif_file: scorecard.sarif

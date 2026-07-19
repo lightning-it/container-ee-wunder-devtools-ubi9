@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+detect_targetarch() {
+  case "$(uname -m)" in
+    x86_64) echo "amd64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    *)
+      echo "ERROR: unsupported verification architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+require_digest_pinned_image() {
+  local name="$1"
+  local reference="$2"
+
+  if [[ ! "$reference" =~ ^[^[:space:]@]+@sha256:[a-f0-9]{64}$ ]]; then
+    echo "ERROR: ${name} must be an immutable image reference with a sha256 digest." >&2
+    exit 1
+  fi
+}
+
 required_env=(
   IMAGE_NAME
   IMAGE_DIGEST
@@ -20,8 +41,25 @@ done
 image_ref="${IMAGE_NAME}@${IMAGE_DIGEST}"
 workflow_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-build-publish.yml@refs/tags/${RELEASE_TAG}"
 workflow_identity_regexp="^https://github\\.com/${GITHUB_REPOSITORY}/\\.github/workflows/container-build-publish\\.yml@refs/tags/${RELEASE_TAG}$"
-trivy_image="${TRIVY_IMAGE:-docker.io/aquasec/trivy:0.71.2}"
-trivy_workspace_args=(-v "$PWD:/repo" -w /repo)
+case "$(detect_targetarch)" in
+  amd64)
+    trivy_default="docker.io/aquasec/trivy:0.72.0@sha256:c6e969c5662a546ad5de4a73c2a6b7a7c627f86d916903e175aa623af5b97ada"
+    ;;
+  arm64)
+    trivy_default="docker.io/aquasec/trivy:0.72.0@sha256:405015d1cd07a2630301169e694a5a420afc4dd553fb462189d4f109ba56a6df"
+    ;;
+esac
+trivy_image="${TRIVY_IMAGE:-$trivy_default}"
+require_digest_pinned_image trivy "$trivy_image"
+trivy_workspace_args=(-v "$(pwd -P):/repo:ro" -w /repo)
+trivy_container_args=(
+  --read-only
+  --cap-drop ALL
+  --security-opt no-new-privileges=true
+  --security-opt label=disable
+  --pids-limit 256
+  --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=1g"
+)
 trivy_ignore_args=()
 
 if [ -f .trivyignore ]; then
@@ -49,7 +87,11 @@ verify_tag_digest "sha-${SHORT_SHA}"
 verify_tag_digest "latest"
 
 echo "Scanning ${IMAGE_NAME}:${RELEASE_TAG} for HIGH findings (report only)..."
-docker run --rm "${trivy_workspace_args[@]}" "$trivy_image" image \
+docker run --rm \
+  "${trivy_container_args[@]}" \
+  "${trivy_workspace_args[@]}" \
+  "$trivy_image" image \
+  --cache-dir /tmp/trivy-cache \
   --scanners vuln \
   --ignore-unfixed \
   "${trivy_ignore_args[@]}" \
@@ -58,7 +100,11 @@ docker run --rm "${trivy_workspace_args[@]}" "$trivy_image" image \
   "${IMAGE_NAME}:${RELEASE_TAG}"
 
 echo "Scanning ${IMAGE_NAME}:${RELEASE_TAG} for CRITICAL findings (release gate)..."
-docker run --rm "${trivy_workspace_args[@]}" "$trivy_image" image \
+docker run --rm \
+  "${trivy_container_args[@]}" \
+  "${trivy_workspace_args[@]}" \
+  "$trivy_image" image \
+  --cache-dir /tmp/trivy-cache \
   --scanners vuln \
   --ignore-unfixed \
   "${trivy_ignore_args[@]}" \

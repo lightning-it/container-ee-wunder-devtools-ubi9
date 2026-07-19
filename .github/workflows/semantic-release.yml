@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          persist-credentials: false
 
       - name: yamllint
         run: bash scripts/wunder-devtools-ee.sh yamllint .github
@@ -32,9 +34,6 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
-    env:
-      GITHUB_TOKEN: ${{ secrets.LITRELEASEBOT_TOKEN }}
-      GH_TOKEN: ${{ secrets.LITRELEASEBOT_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
@@ -46,22 +45,28 @@ jobs:
         run: |
           git config user.name "litreleasebot"
           git config user.email "litreleasebot@users.noreply.github.com"
-          git remote set-url origin \
-            "https://x-access-token:${{ secrets.LITRELEASEBOT_TOKEN }}@github.com/${{ github.repository }}.git"
 
       - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7
         with:
           node-version: "24"
 
       - name: Run semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.LITRELEASEBOT_TOKEN }}
+          GH_TOKEN: ${{ secrets.LITRELEASEBOT_TOKEN }}
         run: |
+          set -euo pipefail
+          public_remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          trap 'git remote set-url origin "$public_remote"' EXIT
+          git remote set-url origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           npx --yes \
             --package semantic-release@25 \
             --package @semantic-release/commit-analyzer@13 \
             --package @semantic-release/github@12 \
             --package @semantic-release/release-notes-generator@14 \
-            --package conventional-changelog-conventionalcommits@9 \
+            --package conventional-changelog-conventionalcommits@10 \
             semantic-release
 
   release_dry_run:
@@ -71,25 +76,18 @@ jobs:
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
         with:
           fetch-depth: 0
-
-      - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6
-        with:
-          node-version: "24"
+          persist-credentials: false
 
       - name: Run semantic-release (dry run)
-        run: |
-          npx --yes \
-            --package semantic-release@25 \
-            --package @semantic-release/commit-analyzer@13 \
-            --package @semantic-release/github@12 \
-            --package @semantic-release/release-notes-generator@14 \
-            --package conventional-changelog-conventionalcommits@9 \
-            semantic-release --dry-run --no-ci --branches main
+        env:
+          WUNDER_DEVTOOLS_DOCKER_SOCKET: required
+          WUNDER_DEVTOOLS_NETWORK: bridge
+          WUNDER_DEVTOOLS_WORKSPACE_MODE: rw
+        run: >-
+          bash scripts/wunder-devtools-ee.sh
+          scripts/devtools-container-ci.sh semantic-release-dry-run

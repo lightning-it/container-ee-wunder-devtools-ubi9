@@ -1,205 +1,47 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    ":semanticCommitType(chore)",
+    ":semanticCommitScope(deps)"
   ],
-  "dependencyDashboard": true,
-  "timezone": "UTC",
-  "schedule": [
-    "before 6am on monday"
-  ],
-  "labels": [
-    "dependencies",
-    "renovate"
-  ],
-  "lockFileMaintenance": {
-    "enabled": true
+  "renovate-config": {
+    "enabled": false
   },
+  "labels": ["dependencies", "renovate"],
+  "baseBranchPatterns": ["develop"],
+  "timezone": "UTC",
+  "schedule": [],
+  "rebaseWhen": "behind-base-branch",
+  "prConcurrentLimit": 5,
   "packageRules": [
     {
-      "matchManagers": [
-        "dockerfile"
+      "description": "Automerge safe non-major updates into develop after CI passes",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest",
+        "pinDigest",
+        "lockFileMaintenance"
       ],
-      "groupName": "Base image and Terraform tooling"
+      "addLabels": ["safe-automerge"],
+      "automerge": true,
+      "automergeType": "pr"
     },
     {
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "groupName": "Python tools"
+      "description": "Require manual approval for major updates",
+      "matchUpdateTypes": ["major"],
+      "addLabels": ["breaking-update"],
+      "automerge": false,
+      "dependencyDashboardApproval": true
     },
     {
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "matchPackageNames": [
-        "ansible-core"
-      ],
-      "allowedVersions": ">=2.15.13 <2.16.0"
-    },
-    {
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "matchPackageNames": [
-        "ansible-lint"
-      ],
-      "allowedVersions": "<7.0.0"
-    },
-    {
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "matchPackageNames": [
-        "pre-commit"
-      ],
-      "allowedVersions": "<5.0.0",
-      "rangeStrategy": "pin"
-    },
-    {
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "matchPackageNames": [
-        "molecule",
-        "molecule-plugins"
-      ],
-      "allowedVersions": "<6.1.0",
-      "rangeStrategy": "pin"
-    },
-    {
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "matchPackageNames": [
-        "docker"
-      ],
-      "allowedVersions": ">=6.1.0 <7.0.0",
-      "rangeStrategy": "pin"
+      "description": "Keep every component of the GitHub Actions toolchain on one version",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions"
     }
-  ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Terraform version pins in Dockerfile",
-      "managerFilePatterns": [
-        "/Dockerfile/"
-      ],
-      "matchStrings": [
-        "TF_VERSION=(?<currentValue>[0-9.]+)"
-      ],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "hashicorp/terraform",
-      "versioningTemplate": "hashicorp"
-    },
-    {
-      "customType": "regex",
-      "description": "TFLint version pins in Dockerfile",
-      "managerFilePatterns": [
-        "/Dockerfile/"
-      ],
-      "matchStrings": [
-        "TFLINT_VERSION=(?<currentValue>[0-9.]+)"
-      ],
-      "datasourceTemplate": "github-tags",
-      "depNameTemplate": "terraform-linters/tflint"
-    },
-    {
-      "customType": "regex",
-      "description": "terraform-docs version pins in Dockerfile",
-      "managerFilePatterns": [
-        "/Dockerfile/"
-      ],
-      "matchStrings": [
-        "TF_DOCS_VERSION=(?<currentValue>[0-9.]+)"
-      ],
-      "datasourceTemplate": "github-tags",
-      "depNameTemplate": "terraform-docs/terraform-docs"
-    },
-    {
-      "customType": "regex",
-      "description": "Helm version pin in Dockerfile",
-      "managerFilePatterns": [
-        "/Dockerfile/"
-      ],
-      "matchStrings": [
-        "HELM_VERSION=(?<currentValue>[0-9.]+)"
-      ],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "helm/helm",
-      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
-      "versioningTemplate": "semver"
-    },
-    {
-      "customType": "regex",
-      "description": "GitHub CLI version pin in Dockerfile",
-      "managerFilePatterns": [
-        "/Dockerfile/"
-      ],
-      "matchStrings": [
-        "GH_VERSION=(?<currentValue>[0-9.]+)"
-      ],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "cli/cli",
-      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
-      "versioningTemplate": "semver"
-    },
-    {
-      "customType": "regex",
-      "description": "actionlint version pin in Dockerfile",
-      "managerFilePatterns": [
-        "/Dockerfile/"
-      ],
-      "matchStrings": [
-        "ACTIONLINT_VERSION=(?<currentValue>[0-9.]+)"
-      ],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "rhysd/actionlint",
-      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
-      "versioningTemplate": "semver"
-    },
-    {
-      "customType": "regex",
-      "description": "ansible-core version pin in Dockerfile",
-      "managerFilePatterns": [
-        "/Dockerfile/"
-      ],
-      "matchStrings": [
-        "ANSIBLE_CORE_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"
-      ],
-      "datasourceTemplate": "pypi",
-      "depNameTemplate": "ansible-core",
-      "versioningTemplate": "pep440"
-    },
-    {
-      "customType": "regex",
-      "description": "pip version pin in Dockerfile",
-      "managerFilePatterns": [
-        "/Dockerfile/"
-      ],
-      "matchStrings": [
-        "PIP_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"
-      ],
-      "datasourceTemplate": "pypi",
-      "depNameTemplate": "pip",
-      "versioningTemplate": "pep440"
-    },
-    {
-      "customType": "regex",
-      "description": "ee-wunder-devtools-ubi9 self image references in docs and helper scripts",
-      "managerFilePatterns": [
-        "/README\\.md$/",
-        "/scripts\\/.*\\.sh$/"
-      ],
-      "matchStrings": [
-        "quay\\.io/l-it/ee-wunder-devtools-ubi9:v(?<currentValue>[0-9.]+)"
-      ],
-      "datasourceTemplate": "docker",
-      "depNameTemplate": "quay.io/l-it/ee-wunder-devtools-ubi9",
-      "versioningTemplate": "docker"
-    }
-  ],
-  "baseBranches": [
-    "develop"
   ]
 }

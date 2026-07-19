@@ -18,6 +18,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Run container CI parity checks
-        run: bash scripts/wunder-devtools-ee.sh scripts/devtools-container-ci.sh ci
+        env:
+          WUNDER_DEVTOOLS_DOCKER_SOCKET: required
+          WUNDER_DEVTOOLS_NETWORK: bridge
+          WUNDER_DEVTOOLS_PRUNE_BUILDKIT_CACHE: "true"
+          WUNDER_DEVTOOLS_WORKSPACE_MODE: rw
+        run: bash scripts/wunder-devtools-ee.sh scripts/devtools-container-ci.sh all
