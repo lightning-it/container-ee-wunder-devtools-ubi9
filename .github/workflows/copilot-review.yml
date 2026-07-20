@@ -75,9 +75,36 @@ jobs:
         run: |
           set -euo pipefail
           reviewer_login="${COPILOT_REVIEWER_LOGIN%\[bot\]}"
-          gh api --method POST \
-            "repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
-            -f "reviewers[]=${reviewer_login}[bot]"
+          reviewer="${reviewer_login}[bot]"
+          requested_reviewers_url="repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers"
+          reviewer_is_requested() {
+            local response
+            if ! response="$(gh api "${requested_reviewers_url}")"; then
+              return 2
+            fi
+            jq -e --arg reviewer "${reviewer}" \
+              'any(.users[]?; .login == $reviewer)' <<<"${response}" >/dev/null
+          }
+          if reviewer_is_requested; then
+            echo "Copilot review is already requested for the current PR."
+          else
+            request_status=$?
+            if [ "${request_status}" -ne 1 ]; then
+              exit "${request_status}"
+            fi
+            if ! gh api --method POST "${requested_reviewers_url}" \
+                -f "reviewers[]=${reviewer}"
+            then
+              # A concurrent workflow can win the request race. Accept only
+              # that verified idempotent outcome; fail on absence/API errors.
+              if reviewer_is_requested; then
+                echo "A concurrent workflow already requested Copilot review."
+              else
+                verification_status=$?
+                exit "${verification_status}"
+              fi
+            fi
+          fi
 
   current-revision-reviewed:
     name: Successful Copilot review
