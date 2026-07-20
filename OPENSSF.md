@@ -12,15 +12,15 @@ This repository follows the Lightning IT shared OpenSSF readiness model generate
 
 ## Scorecard
 
-Enabled through `.github/workflows/openssf-scorecard.yml` with scheduled, manual, `branch_protection_rule`, and `main` push triggers. Results are published to the OpenSSF API and uploaded as SARIF to GitHub code scanning.
+Enabled through `.github/workflows/openssf-scorecard.yml` with scheduled, manual, and `branch_protection_rule` triggers. The workflow executes a digest-pinned Scorecard container and uploads SARIF to GitHub code scanning. Repository-run results are not published to the OpenSSF API because its workflow verifier does not currently accept the immutable container invocation.
 
-The Scorecard badge is included in `README.md` only for public repositories where the workflow is synced.
+The Scorecard badge is included in `README.md` only for public repositories where the workflow is synced. It can reflect OpenSSF's independent scan rather than a repository-published result.
 
 ## Best Practices Badge
 
 Enrolled in OpenSSF Best Practices. The badge is emitted from the central release-model inventory using project `13514` with target level `passing`.
 
-Do not add a passing OpenSSF Best Practices badge until the repository is actually enrolled and passing. Badges must be generated from `release-model/repositories.yml`; hand-written badges are rejected by the release-model audit.
+Do not add a passing OpenSSF Best Practices badge until the repository is actually enrolled and passing. Badges must be generated from the central `release-model/repositories.yml` inventory in `lightning-it/shared-assets-lit`; hand-written badges are rejected by the release-model audit.
 
 ## Security Policy
 
@@ -30,8 +30,9 @@ Do not add a passing OpenSSF Best Practices badge until the repository is actual
 
 - `main` is the protected release branch.
 - `develop` is the integration branch for normal work, Renovate, and shared-assets-lit PRs.
-- `develop` to `main` promotion PRs require manual review.
-- Renovate and shared-assets-lit PRs may auto-merge only into `develop` after required checks pass.
+- Every pull request must have a completed GitHub Copilot review for its current head revision.
+- `develop` to `main` promotion PRs are manual release gates and must never auto-merge.
+- Integration and backmerge PRs may auto-merge only after required checks pass, all review conversations are resolved, and there are no conflicts.
 - Releases and publishing happen only from trusted `main` workflows after validation.
 - Release evidence is generated for repositories with release artifacts.
 

@@ -1,33 +1,591 @@
+# Managed by lightning-it/shared-assets-lit.
+# Do not edit downstream copies directly.
 # yamllint disable rule:truthy rule:line-length
 ---
-name: Request Copilot Review
+name: Copilot review gate
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [edited, deleted]
 
 permissions:
   contents: read
+  pull-requests: read
+
+env:
+  COPILOT_REVIEWER_LOGIN: copilot-pull-request-reviewer
+  NO_FILES_REVIEW_MARKER: was not able to review any files
+  UNABLE_REVIEW_MARKER: unable to review this pull request
+  QUOTA_EXHAUSTED_MARKER: quota
+
+concurrency:
+  group: copilot-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  request-copilot-review:
-    name: Request Copilot advisory review
-    runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
+  request-current-revision-review:
+    name: Request Copilot review for current revision
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !(github.event.pull_request.user.login == 'renovate[bot]' &&
+        startsWith(github.event.pull_request.head.ref, 'renovate/') &&
+        github.event.pull_request.base.ref == 'develop') &&
+      !(github.event.pull_request.user.login == 'litreleasebot' &&
+        startsWith(github.event.pull_request.head.ref, 'chore/sync-shared-assets-lit-') &&
+        github.event.pull_request.base.ref == 'develop' &&
+        github.event.pull_request.title == 'chore: sync shared-assets-lit' &&
+        contains(github.event.pull_request.labels.*.name, 'chore') &&
+        contains(github.event.pull_request.labels.*.name, 'shared-assets-lit')) &&
+      !(github.event.pull_request.user.login == 'litreleasebot' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'chore/sync-repository-quality-') &&
+        github.event.pull_request.base.ref == 'develop' &&
+        github.event.pull_request.title == 'chore: sync repository quality assets' &&
+        contains(github.event.pull_request.labels.*.name, 'chore') &&
+        contains(github.event.pull_request.labels.*.name, 'shared-assets-lit')) &&
+      !(github.event.pull_request.user.login == 'litreleasebot' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.head.ref == 'chore/sync-main-to-develop' &&
+        github.event.pull_request.base.ref == 'develop' &&
+        github.event.pull_request.title == 'chore: sync main back to develop') &&
+      !(github.event.pull_request.user.login == 'litreleasebot' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.head.ref == 'develop' &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.title == 'chore(release): promote develop to main')
     permissions:
+      contents: read
       pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
-      - name: Request Copilot reviewer
+      - name: Request Copilot review for the current revision
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          reviewer_login="${COPILOT_REVIEWER_LOGIN%\[bot\]}"
+          gh api --method POST \
+            "repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
+            -f "reviewers[]=${reviewer_login}[bot]"
+
+  current-revision-reviewed:
+    name: Successful Copilot review
+    if: github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Classify trusted automation pull request
+        id: trusted-automation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          trusted=false
+          trusted_kind=none
+          live_pr="{}"
+          if [ "${PR_AUTHOR}" = "renovate[bot]" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [[ "${PR_HEAD}" == renovate/* ]] \
+            && [ "${PR_BASE}" = "develop" ]; then
+            if live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")" \
+              && jq -e \
+              --arg author "${PR_AUTHOR}" \
+              --arg base "${PR_BASE}" \
+              --arg head "${PR_HEAD}" \
+              --arg head_sha "${PR_HEAD_SHA}" \
+              --arg repo "${REPOSITORY}" \
+              '(.state == "open") and (.draft == false)
+               and (.user.login == $author) and (.base.ref == $base)
+               and (.head.ref == $head) and (.head.sha == $head_sha)
+               and (.head.repo.full_name == $repo)
+               and ([.labels[].name] | index("renovate") != null)
+               and ([.labels[].name] | index("dependencies") != null)
+               and ([.labels[].name] | index("safe-automerge") != null)
+               and ([.labels[].name] | index("breaking-update") == null)' \
+                <<<"${live_pr}" >/dev/null; then
+              trusted=true
+              trusted_kind=renovate
+            fi
+          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [[ "${PR_HEAD}" == chore/sync-shared-assets-lit-* ]] \
+            && [ "${PR_BASE}" = "develop" ] \
+            && [ "${PR_TITLE}" = "chore: sync shared-assets-lit" ] \
+            && jq -e 'index("chore") != null and index("shared-assets-lit") != null' \
+              <<<"${PR_LABELS}" >/dev/null; then
+            trusted=true
+            trusted_kind=shared-assets
+          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [[ "${PR_HEAD}" == chore/sync-repository-quality-* ]] \
+            && [ "${PR_BASE}" = "develop" ] \
+            && [ "${PR_TITLE}" = "chore: sync repository quality assets" ] \
+            && jq -e 'index("chore") != null and index("shared-assets-lit") != null' \
+              <<<"${PR_LABELS}" >/dev/null; then
+            trusted=true
+            trusted_kind=repository-quality
+          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [ "${PR_HEAD}" = "chore/sync-main-to-develop" ] \
+            && [ "${PR_BASE}" = "develop" ] \
+            && [ "${PR_TITLE}" = "chore: sync main back to develop" ]; then
+            trusted=true
+            trusted_kind=ancestry-backmerge
+          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [ "${PR_HEAD}" = "develop" ] \
+            && [ "${PR_BASE}" = "main" ] \
+            && [ "${PR_TITLE}" = "chore(release): promote develop to main" ]; then
+            trusted=true
+            trusted_kind=release-promotion
+          fi
+          echo "trusted=${trusted}" >>"${GITHUB_OUTPUT}"
+          echo "kind=${trusted_kind}" >>"${GITHUB_OUTPUT}"
+
+      - name: Verify file-identical ancestry backmerge
+        if: steps.trusted-automation.outputs.kind == 'ancestry-backmerge'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git init --quiet .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --quiet --no-tags origin \
+            "${HEAD_SHA}" "refs/heads/main" "refs/heads/develop"
+          git merge-base --is-ancestor "origin/main" "${HEAD_SHA}"
+          git merge-base --is-ancestor "origin/develop" "${HEAD_SHA}"
+          [ "$(git rev-list --parents -n 1 "${HEAD_SHA}" | wc -w)" -eq 3 ]
+          git diff --quiet "origin/develop" "${HEAD_SHA}"
+          echo "Verified a file-identical two-parent merge of current main and develop."
+
+      - name: Verify protected release promotion
+        if: steps.trusted-automation.outputs.kind == 'release-promotion'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git init --quiet .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --quiet --no-tags origin \
+            "${HEAD_SHA}" "refs/heads/main" "refs/heads/develop"
+          [ "$(git rev-parse origin/develop)" = "${HEAD_SHA}" ]
+          git merge-base --is-ancestor "origin/main" "${HEAD_SHA}"
+          echo "Verified current protected develop head and main ancestry."
+
+      - name: Accept trusted automation exemption
+        if: >-
+          steps.trusted-automation.outputs.trusted == 'true' &&
+          steps.trusted-automation.outputs.kind != 'ancestry-backmerge' &&
+          steps.trusted-automation.outputs.kind != 'release-promotion'
+        run: |
+          if [ "${{ steps.trusted-automation.outputs.kind }}" = renovate ]; then
+            {
+              echo "### Trusted Renovate exemption"
+              echo
+              echo "Copilot review is not required for this exact-head trusted Renovate PR."
+              echo "Trusted identity and policy verification succeeded."
+            } >>"${GITHUB_STEP_SUMMARY}"
+          else
+            echo "Trusted automation PR; Copilot review is delegated to its required guarded-automerge policy."
+          fi
+
+      - name: Verify current Copilot review and resolved findings
+        if: steps.trusted-automation.outputs.trusted != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          gh api \
-            --method POST \
-            "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" \
-            -f reviewers[]=copilot-pull-request-reviewer \
-            || echo "Copilot reviewer is unavailable for this repository; continuing."
+          owner="${REPOSITORY%%/*}"
+          repository="${REPOSITORY#*/}"
+
+          graphql() {
+            local api_attempt output
+            for api_attempt in $(seq 1 5); do
+              if output="$(gh api graphql "$@")"; then
+                if jq -e '((.errors // []) | length) == 0' <<<"${output}" >/dev/null; then
+                  printf '%s' "${output}"
+                  return 0
+                fi
+                jq -r '.errors[]?.message' <<<"${output}" >&2
+              fi
+              echo "GitHub GraphQL request failed (attempt ${api_attempt}/5)." >&2
+              sleep 5
+            done
+            return 1
+          }
+
+          read -r -d '' review_query <<'GRAPHQL' || true
+          query(
+            $owner: String!
+            $repository: String!
+            $number: Int!
+            $before: String
+          ) {
+            repository(owner: $owner, name: $repository) {
+              pullRequest(number: $number) {
+                headRefOid
+                reviews(last: 100, before: $before) {
+                  pageInfo { hasPreviousPage startCursor }
+                  nodes {
+                    id
+                    author { login }
+                    commit { oid }
+                    state
+                  }
+                }
+              }
+            }
+          }
+          GRAPHQL
+
+          read -r -d '' review_comments_query <<'GRAPHQL' || true
+          query(
+            $review: ID!
+            $after: String
+          ) {
+            node(id: $review) {
+              ... on PullRequestReview {
+                body
+                commit { oid }
+                pullRequest { headRefOid }
+                comments(first: 100, after: $after) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes { body }
+                }
+              }
+            }
+          }
+          GRAPHQL
+
+          review_comments_clean() {
+            local review_id="$1" expected_head="$2" after="" response has_next
+            local content_counts marker_count content_count meaningful_content=false
+            local count_pattern=$'^[0-9]+\t[0-9]+$'
+            local -a arguments
+            while true; do
+              arguments=(
+                -f query="${review_comments_query}"
+                -f review="${review_id}"
+              )
+              if [ -n "${after}" ]; then
+                arguments+=(-f after="${after}")
+              fi
+
+              if ! response="$(graphql "${arguments[@]}")"; then
+                return 2
+              fi
+              if ! jq -e \
+                --arg head "${expected_head}" \
+                '(.data.node.comments != null)
+                  and (.data.node.commit.oid == $head)
+                  and (.data.node.pullRequest.headRefOid == $head)' \
+                <<<"${response}" >/dev/null; then
+                echo "Review ${review_id} no longer matches current head ${expected_head}." >&2
+                return 2
+              fi
+
+              if ! content_counts="$(
+                jq -er \
+                  --arg unable_marker "${UNABLE_REVIEW_MARKER}" \
+                  --arg no_files_marker "${NO_FILES_REVIEW_MARKER}" \
+                  --arg quota_marker "${QUOTA_EXHAUSTED_MARKER}" \
+                  'def normalize_review_text:
+                      ascii_downcase
+                      | gsub("wasn[\u0027\u2019]t"; "was not")
+                      | gsub("\\s"; "");
+                  def review_content:
+                      (.data.node.body // ""),
+                      (.data.node.comments.nodes[]?.body // "");
+                  ($unable_marker | normalize_review_text) as $unable
+                  | ($no_files_marker | normalize_review_text) as $no_files
+                  | ($quota_marker | normalize_review_text) as $quota
+                  | [
+                    ([
+                      review_content
+                      | select(
+                          normalize_review_text
+                          | (
+                              contains($unable)
+                              or contains($no_files)
+                              or contains($quota)
+                            )
+                        )
+                    ] | length),
+                    ([
+                      review_content
+                      | select((gsub("\\s"; "")) != "")
+                    ] | length)
+                  ]
+                  | @tsv' <<<"${response}"
+              )"; then
+                echo "Unable to parse review content counts for review ${review_id}; refusing to accept the review." >&2
+                return 2
+              fi
+              if [[ ! "${content_counts}" =~ ${count_pattern} ]]; then
+                echo "Review ${review_id} returned invalid review content counts; refusing to accept the review." >&2
+                return 2
+              fi
+              IFS=$'\t' read -r marker_count content_count <<<"${content_counts}"
+              if [ "${marker_count}" -gt 0 ]; then
+                return 1
+              fi
+              if [ "${content_count}" -gt 0 ]; then
+                meaningful_content=true
+              fi
+
+              has_next="$(jq -r '.data.node.comments.pageInfo.hasNextPage' <<<"${response}")"
+              if [ "${has_next}" != "true" ]; then
+                if [ "${meaningful_content}" = true ]; then
+                  return 0
+                fi
+                return 1
+              fi
+              after="$(jq -r '.data.node.comments.pageInfo.endCursor // empty' <<<"${response}")"
+              if [ -z "${after}" ]; then
+                echo "Review-comment pagination cursor is missing." >&2
+                return 2
+              fi
+            done
+          }
+
+          # A rejected review cannot become acceptable during this run without
+          # an edit event, which starts a fresh run through the concurrency
+          # group. Cache rejected IDs so marker-only, empty, or whitespace-only
+          # reviews cost one detail query per run instead of one query on every
+          # polling attempt.
+          declare -A rejected_review_ids=()
+          review_complete=false
+          head_sha=""
+          for attempt in $(seq 1 40); do
+            head_sha=""
+            before=""
+            request_failed=false
+            while true; do
+              arguments=(
+                -f query="${review_query}"
+                -F owner="${owner}"
+                -F repository="${repository}"
+                -F number="${PR_NUMBER}"
+              )
+              if [ -n "${before}" ]; then
+                arguments+=(-f before="${before}")
+              fi
+
+              if ! response="$(graphql "${arguments[@]}")"; then
+                request_failed=true
+                break
+              fi
+
+              page_head_sha="$(jq -r '.data.repository.pullRequest.headRefOid // empty' <<<"${response}")"
+              if [ -z "${page_head_sha}" ]; then
+                echo "Unable to determine the pull request head SHA." >&2
+                exit 1
+              fi
+              if [ -n "${head_sha}" ] && [ "${head_sha}" != "${page_head_sha}" ]; then
+                echo "Pull request head changed during review verification; retrying." >&2
+                request_failed=true
+                break
+              fi
+              head_sha="${page_head_sha}"
+
+              candidate_review_ids="$(
+                jq -r \
+                  --arg head "${head_sha}" \
+                  --arg reviewer "${COPILOT_REVIEWER_LOGIN}" \
+                  '(.data.repository.pullRequest.reviews.nodes // [])[]
+                    | select(
+                        (.author.login // "") as $login
+                        | ($login == $reviewer or $login == ($reviewer + "[bot]"))
+                      )
+                    | select(.state == "COMMENTED")
+                    | select(.commit.oid == $head)
+                    | (.id // empty)' <<<"${response}"
+              )"
+              while IFS= read -r review_id; do
+                if [ -z "${review_id}" ]; then
+                  continue
+                fi
+                if [ -n "${rejected_review_ids["${review_id}"]:-}" ]; then
+                  continue
+                fi
+                if review_comments_clean "${review_id}" "${head_sha}"; then
+                  review_complete=true
+                  break
+                else
+                  comments_status=$?
+                  if [ "${comments_status}" -eq 2 ]; then
+                    request_failed=true
+                    break
+                  fi
+                  rejected_review_ids["${review_id}"]=1
+                fi
+              done <<<"${candidate_review_ids}"
+              if [ "${review_complete}" = true ]; then
+                break 2
+              fi
+              if [ "${request_failed}" = true ]; then
+                break
+              fi
+
+              has_previous="$(jq -r '.data.repository.pullRequest.reviews.pageInfo.hasPreviousPage' <<<"${response}")"
+              if [ "${has_previous}" != "true" ]; then
+                break
+              fi
+              before="$(jq -r '.data.repository.pullRequest.reviews.pageInfo.startCursor // empty' <<<"${response}")"
+              if [ -z "${before}" ]; then
+                echo "Review pagination cursor is missing." >&2
+                exit 1
+              fi
+            done
+
+            if [ "${attempt}" -eq 40 ]; then
+              if [ "${request_failed}" = true ]; then
+                echo "Unable to verify the Copilot review after repeated API or head-change failures." >&2
+              else
+                echo "GitHub Copilot has not completed a review of current head ${head_sha:-unknown}." >&2
+              fi
+              exit 1
+            fi
+            if [ "${request_failed}" = true ]; then
+              echo "Retrying review verification after a transient API or head-change failure."
+            else
+              echo "Waiting for GitHub Copilot to review current head ${head_sha} (attempt ${attempt}/40)."
+            fi
+            sleep 15
+          done
+
+          if [ "${review_complete}" != true ]; then
+            echo "GitHub Copilot review verification ended unexpectedly." >&2
+            exit 1
+          fi
+
+          read -r -d '' thread_query <<'GRAPHQL' || true
+          query(
+            $owner: String!
+            $repository: String!
+            $number: Int!
+            $after: String
+          ) {
+            repository(owner: $owner, name: $repository) {
+              pullRequest(number: $number) {
+                headRefOid
+                reviewThreads(first: 100, after: $after) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes {
+                    isResolved
+                    comments(first: 1) {
+                      nodes { author { login } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          GRAPHQL
+
+          findings_resolved=false
+          for resolution_attempt in $(seq 1 20); do
+            after=""
+            unresolved_copilot_threads=0
+            request_failed=false
+            while true; do
+              arguments=(
+                -f query="${thread_query}"
+                -F owner="${owner}"
+                -F repository="${repository}"
+                -F number="${PR_NUMBER}"
+              )
+              if [ -n "${after}" ]; then
+                arguments+=(-f after="${after}")
+              fi
+
+              if ! response="$(graphql "${arguments[@]}")"; then
+                request_failed=true
+                break
+              fi
+
+              page_head_sha="$(jq -r '.data.repository.pullRequest.headRefOid // empty' <<<"${response}")"
+              if [ "${page_head_sha}" != "${head_sha}" ]; then
+                echo "Pull request head changed during thread verification; retrying." >&2
+                request_failed=true
+                break
+              fi
+
+              page_unresolved="$(
+                jq \
+                  --arg reviewer "${COPILOT_REVIEWER_LOGIN}" \
+                  '[
+                    (.data.repository.pullRequest.reviewThreads.nodes // [])[]
+                    | select(.isResolved == false)
+                    | select(
+                        (.comments.nodes[0].author.login // "") as $login
+                        | ($login == $reviewer or $login == ($reviewer + "[bot]"))
+                      )
+                  ]
+                  | length' <<<"${response}"
+              )"
+              unresolved_copilot_threads=$((unresolved_copilot_threads + page_unresolved))
+
+              has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${response}")"
+              if [ "${has_next}" != "true" ]; then
+                break
+              fi
+              after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"${response}")"
+              if [ -z "${after}" ]; then
+                echo "Review-thread pagination cursor is missing." >&2
+                exit 1
+              fi
+            done
+
+            if [ "${request_failed}" = false ] && [ "${unresolved_copilot_threads}" -eq 0 ]; then
+              findings_resolved=true
+              break
+            fi
+            if [ "${resolution_attempt}" -eq 20 ]; then
+              if [ "${request_failed}" = true ]; then
+                echo "Unable to verify Copilot review threads after repeated API or head-change failures." >&2
+              else
+                echo "${unresolved_copilot_threads} unresolved GitHub Copilot review thread(s) remain." >&2
+              fi
+              exit 1
+            fi
+            echo "Waiting for GitHub Copilot findings to be resolved (attempt ${resolution_attempt}/20)."
+            sleep 15
+          done
+
+          if [ "${findings_resolved}" != true ]; then
+            echo "GitHub Copilot thread verification ended unexpectedly." >&2
+            exit 1
+          fi
+
+          echo "GitHub Copilot reviewed current head ${head_sha}; no unresolved Copilot findings remain."

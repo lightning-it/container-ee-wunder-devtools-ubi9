@@ -4,18 +4,22 @@ name: Renovate guarded automerge
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review, converted_to_draft]
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   approve-renovate:
     name: Approve trusted Renovate PR
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
     permissions:
       contents: write
+      issues: read
       pull-requests: write
 
     steps:
@@ -24,9 +28,15 @@ jobs:
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
           PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
           TRIGGER_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -37,6 +47,32 @@ jobs:
           }
 
           trusted=true
+
+          live_pr="{}"
+          if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
+            trusted=false
+          fi
+          if ! jq -e \
+            --arg author "$PR_AUTHOR" \
+            --arg base "$PR_BASE" \
+            --arg head "$PR_HEAD" \
+            --arg head_sha "$PR_HEAD_SHA" \
+            --arg repo "$REPO" \
+            '(.state == "open") and (.draft == false)
+             and (.user.login == $author) and (.base.ref == $base)
+             and (.head.ref == $head) and (.head.sha == $head_sha)
+             and (.head.repo.full_name == $repo)
+             and ([.labels[].name] | index("renovate") != null)
+             and ([.labels[].name] | index("dependencies") != null)
+             and ([.labels[].name] | index("safe-automerge") != null)
+             and ([.labels[].name] | index("breaking-update") == null)' \
+            >/dev/null <<<"$live_pr"; then
+            trusted=false
+          fi
+
+          if [ "$PR_DRAFT" != "false" ]; then
+            trusted=false
+          fi
 
           if [ "$TRIGGER_ACTOR" != "renovate[bot]" ]; then
             trusted=false
@@ -55,22 +91,181 @@ jobs:
             trusted=false
           fi
 
-          if ! has_label renovate || ! has_label dependencies; then
+          if ! has_label renovate || ! has_label dependencies \
+            || ! has_label safe-automerge || has_label breaking-update; then
+            trusted=false
+          fi
+
+          label_events=""
+          if ! label_events="$(
+            gh api --paginate \
+              "repos/${REPO}/issues/${PR_NUMBER}/events?per_page=100" \
+              --jq '.[] | [.event, (.label.name // ""), (.actor.login // "")] | @tsv'
+          )"; then
+            trusted=false
+          fi
+          safe_event="$(
+            awk -F '\t' \
+              '$2 == "safe-automerge" && ($1 == "labeled" || $1 == "unlabeled") { latest=$0 } END { print latest }' \
+              <<<"$label_events"
+          )"
+          if [ "$safe_event" != $'labeled\tsafe-automerge\trenovate[bot]' ]; then
+            trusted=false
+          fi
+          if grep -Fq $'labeled\tbreaking-update\t' <<<"$label_events"; then
             trusted=false
           fi
 
           echo "trusted=$trusted" >>"$GITHUB_OUTPUT"
 
+      - name: Revoke auto-merge for an untrusted state or event
+        if: steps.guard.outputs.trusted != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          current_live_is_safe() {
+            local label_events live_pr safe_event
+            if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
+              return 1
+            fi
+            if ! jq -e \
+              --arg repo "$REPO" \
+              '(.state == "open") and (.draft == false)
+               and (.user.login == "renovate[bot]")
+               and (.base.ref == "develop")
+               and (.head.ref | startswith("renovate/"))
+               and (.head.repo.full_name == $repo)
+               and ([.labels[].name] | index("renovate") != null)
+               and ([.labels[].name] | index("dependencies") != null)
+               and ([.labels[].name] | index("safe-automerge") != null)
+               and ([.labels[].name] | index("breaking-update") == null)' \
+              >/dev/null <<<"$live_pr"; then
+              return 1
+            fi
+            if ! label_events="$(
+              gh api --paginate \
+                "repos/${REPO}/issues/${PR_NUMBER}/events?per_page=100" \
+                --jq '.[] | [.event, (.label.name // ""), (.actor.login // "")] | @tsv'
+            )"; then
+              return 1
+            fi
+            safe_event="$(
+              awk -F '\t' \
+                '$2 == "safe-automerge" && ($1 == "labeled" || $1 == "unlabeled") { latest=$0 } END { print latest }' \
+                <<<"$label_events"
+            )"
+            [ "$safe_event" = $'labeled\tsafe-automerge\trenovate[bot]' ] \
+              && ! grep -Fq $'labeled\tbreaking-update\t' <<<"$label_events"
+          }
+
+          if current_live_is_safe; then
+            echo "Current live PR state is safe; no revocation is needed."
+            exit 0
+          fi
+
+          owner="${REPO%%/*}"
+          name="${REPO#*/}"
+          auto_merge_enabled="$(
+            gh api graphql \
+              -f query="query(\$owner:String!,\$name:String!,\$number:Int!){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){autoMergeRequest{__typename}}}}" \
+              -f owner="$owner" \
+              -f name="$name" \
+              -F number="$PR_NUMBER" \
+              --jq '.data.repository.pullRequest.autoMergeRequest != null'
+          )"
+          case "$auto_merge_enabled" in
+            true) gh pr merge "$PR_URL" --disable-auto ;;
+            false) ;;
+            *)
+              echo "ERROR: unable to determine auto-merge state for ${PR_URL}." >&2
+              exit 1
+              ;;
+          esac
+
       - name: Approve and enable auto-merge
         if: steps.guard.outputs.trusted == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
+          assert_live_safe() {
+            local label_events live_pr safe_event
+            if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
+              return 1
+            fi
+            if ! jq -e \
+              --arg author "$PR_AUTHOR" \
+              --arg base "$PR_BASE" \
+              --arg head "$PR_HEAD" \
+              --arg head_sha "$PR_HEAD_SHA" \
+              --arg repo "$REPO" \
+              '(.state == "open") and (.draft == false)
+               and (.user.login == $author) and (.base.ref == $base)
+               and (.head.ref == $head) and (.head.sha == $head_sha)
+               and (.head.repo.full_name == $repo)
+               and ([.labels[].name] | index("renovate") != null)
+               and ([.labels[].name] | index("dependencies") != null)
+               and ([.labels[].name] | index("safe-automerge") != null)
+               and ([.labels[].name] | index("breaking-update") == null)' \
+              >/dev/null <<<"$live_pr"; then
+              return 1
+            fi
+            if ! label_events="$(
+              gh api --paginate \
+                "repos/${REPO}/issues/${PR_NUMBER}/events?per_page=100" \
+                --jq '.[] | [.event, (.label.name // ""), (.actor.login // "")] | @tsv'
+            )"; then
+              return 1
+            fi
+            safe_event="$(
+              awk -F '\t' \
+                '$2 == "safe-automerge" && ($1 == "labeled" || $1 == "unlabeled") { latest=$0 } END { print latest }' \
+                <<<"$label_events"
+            )"
+            [ "$safe_event" = $'labeled\tsafe-automerge\trenovate[bot]' ] \
+              && ! grep -Fq $'labeled\tbreaking-update\t' <<<"$label_events"
+          }
+
+          disable_auto_merge() {
+            local auto_merge_enabled name owner
+            owner="${REPO%%/*}"
+            name="${REPO#*/}"
+            auto_merge_enabled="$(
+              gh api graphql \
+                -f query="query(\$owner:String!,\$name:String!,\$number:Int!){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){autoMergeRequest{__typename}}}}" \
+                -f owner="$owner" \
+                -f name="$name" \
+                -F number="$PR_NUMBER" \
+                --jq '.data.repository.pullRequest.autoMergeRequest != null'
+            )"
+            [ "$auto_merge_enabled" = false ] \
+              || gh pr merge "$PR_URL" --disable-auto
+          }
+
+          if ! assert_live_safe; then
+            disable_auto_merge
+            exit 1
+          fi
           gh pr review "$PR_URL" \
             --approve \
-            --body "Approved trusted Renovate dependency update after actor, label, branch, and base-branch checks."
+            --body "Approved a bot-triggered non-major Renovate update with a bot-applied safe-automerge label and no breaking-update history."
 
-          gh pr merge "$PR_URL" --auto --merge --delete-branch
+          if ! assert_live_safe; then
+            disable_auto_merge
+            exit 1
+          fi
+          gh pr merge "$PR_URL" --auto --merge --delete-branch \
+            --match-head-commit "$PR_HEAD_SHA"

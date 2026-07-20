@@ -16,6 +16,7 @@
   - `AGENTS.md`
   - `.gitignore`
   - `.pre-commit-config.yaml`
+  - `renovate.json`
   - `.releaserc`
   - `.yamllint`
   - `CONTRIBUTING.md`
