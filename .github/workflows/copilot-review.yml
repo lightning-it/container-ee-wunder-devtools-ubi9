@@ -105,6 +105,7 @@ jobs:
           set -euo pipefail
           trusted=false
           trusted_kind=none
+          release_tag=""
           live_pr="{}"
           if [ "${PR_AUTHOR}" = "renovate[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
@@ -156,14 +157,30 @@ jobs:
             trusted_kind=ancestry-backmerge
           elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [[ "${PR_HEAD}" == backsync/release-v*-to-develop ]] \
+            && [ "${PR_BASE}" = "develop" ] \
+            && jq -e 'index("skip-changelog") != null' \
+              <<<"${PR_LABELS}" >/dev/null; then
+            release_tag="${PR_HEAD#backsync/release-}"
+            release_tag="${release_tag%-to-develop}"
+            if [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              && [ "${PR_TITLE}" = "chore: sync ${release_tag} release back to develop" ]; then
+              trusted=true
+              trusted_kind=release-backsync
+            fi
+          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [ "${PR_HEAD}" = "develop" ] \
             && [ "${PR_BASE}" = "main" ] \
             && [ "${PR_TITLE}" = "chore(release): promote develop to main" ]; then
             trusted=true
             trusted_kind=release-promotion
           fi
-          echo "trusted=${trusted}" >>"${GITHUB_OUTPUT}"
-          echo "kind=${trusted_kind}" >>"${GITHUB_OUTPUT}"
+          {
+            echo "trusted=${trusted}"
+            echo "kind=${trusted_kind}"
+            echo "release_tag=${release_tag}"
+          } >>"${GITHUB_OUTPUT}"
 
       - name: Verify file-identical ancestry backmerge
         if: steps.trusted-automation.outputs.kind == 'ancestry-backmerge'
@@ -199,11 +216,48 @@ jobs:
           git merge-base --is-ancestor "origin/main" "${HEAD_SHA}"
           echo "Verified current protected develop head and main ancestry."
 
+      - name: Verify release back-sync merge and bounded files
+        if: steps.trusted-automation.outputs.kind == 'release-backsync'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RELEASE_TAG: ${{ steps.trusted-automation.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git init --quiet .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --quiet --no-tags origin \
+            "${HEAD_SHA}" "${BASE_SHA}" "refs/heads/main" "refs/heads/develop" \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          [ "$(git rev-parse origin/develop)" = "${BASE_SHA}" ]
+          [ "$(git rev-list --parents -n 1 "${HEAD_SHA}" | wc -w)" -eq 3 ]
+          [ "$(git rev-parse "${HEAD_SHA}^1")" = "${BASE_SHA}" ]
+          release_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          [ "$(git rev-parse "${HEAD_SHA}^2")" = "${release_sha}" ]
+          git merge-base --is-ancestor "${release_sha}" origin/main
+          if git diff --quiet "${BASE_SHA}" "${HEAD_SHA}"; then
+            echo "Release back-sync does not contain release-generated changes." >&2
+            exit 1
+          fi
+          unexpected="$(
+            git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" |
+              awk '$0 != "CHANGELOG.rst" && $0 != "galaxy.yml" && $0 !~ /^changelogs\//'
+          )"
+          [ -z "${unexpected}" ] || {
+            echo "Release back-sync contains files outside the allowed release paths:" >&2
+            printf '%s\n' "${unexpected}" >&2
+            exit 1
+          }
+          echo "Verified release-tag merge and bounded release-generated files."
+
       - name: Accept trusted automation exemption
         if: >-
           steps.trusted-automation.outputs.trusted == 'true' &&
           steps.trusted-automation.outputs.kind != 'ancestry-backmerge' &&
-          steps.trusted-automation.outputs.kind != 'release-promotion'
+          steps.trusted-automation.outputs.kind != 'release-promotion' &&
+          steps.trusted-automation.outputs.kind != 'release-backsync'
         run: |
           if [ "${{ steps.trusted-automation.outputs.kind }}" = renovate ]; then
             {
