@@ -113,7 +113,10 @@ jobs:
           head_sha="$(jq -r .head.sha <<<"${pr}")"
           head_ref="$(jq -r .head.ref <<<"${pr}")"
           author="$(jq -r .user.login <<<"${pr}")"
-          test "${reviewed_sha}" = "${head_sha}"
+          if [ "${reviewed_sha}" != "${head_sha}" ]; then
+            echo "Ignoring stale Copilot review for ${reviewed_sha}; current head is ${head_sha}."
+            exit 0
+          fi
 
           permission="$(gh api "repos/${REPOSITORY}/collaborators/${author}/permission" --jq .permission 2>/dev/null || true)"
           case "${permission}" in admin|maintain|write) ;; *)
