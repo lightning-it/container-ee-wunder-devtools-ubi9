@@ -22,7 +22,7 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Verify shared-assets PR identity
+      - name: Verify automated sync PR identity
         id: guard
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
@@ -47,6 +47,9 @@ jobs:
           }
 
           trusted=true
+          sync_kind=none
+          expected_subject=""
+          repo_name="${REPO#*/}"
 
           if [ "$PR_DRAFT" != "false" ]; then
             trusted=false
@@ -64,16 +67,20 @@ jobs:
             trusted=false
           fi
 
-          case "$PR_HEAD" in
-            chore/sync-shared-assets-lit-*) ;;
-            *) trusted=false ;;
-          esac
-
           if [ "$PR_BASE" != "develop" ]; then
             trusted=false
           fi
 
-          if [ "$PR_TITLE" != "chore: sync shared-assets-lit" ]; then
+          if [ "$PR_HEAD" = "chore/sync-repository-quality-${repo_name}" ] \
+            && [ "$PR_TITLE" = "chore: sync repository quality assets" ]; then
+            sync_kind=repository-quality
+            expected_subject="chore: sync repository quality assets"
+          elif [ "$PR_HEAD" = "chore/sync-shared-assets-lit-${repo_name}" ] \
+            && { [ "$PR_TITLE" = "chore: sync shared-assets-lit" ] \
+              || [ "$PR_TITLE" = "chore: sync shared assets" ]; }; then
+            sync_kind=shared-assets
+            expected_subject="chore: sync shared assets from lightning-it/shared-assets-lit"
+          else
             trusted=false
           fi
 
@@ -135,8 +142,7 @@ jobs:
             if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
               || [ "$commit_author" != "litreleasebot" ] \
               || [ "$commit_committer" != "litreleasebot" ] \
-              || [ "$first_line" != \
-                "chore: sync shared assets from lightning-it/shared-assets-lit" ] \
+              || [ "$first_line" != "$expected_subject" ] \
               || [ "$source_sha_count" -ne 1 ] \
               || [ "$source_run_count" -ne 1 ]; then
               trusted=false
@@ -147,7 +153,11 @@ jobs:
             trusted=false
           fi
 
-          echo "trusted=$trusted" >>"$GITHUB_OUTPUT"
+          {
+            echo "trusted=$trusted"
+            echo "kind=$sync_kind"
+            echo "subject=$expected_subject"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Revoke auto-merge for an untrusted state or event
         if: steps.guard.outputs.trusted != 'true'
@@ -162,7 +172,8 @@ jobs:
           current_live_is_safe() {
             local actual_commits commit_author commit_committer commit_json
             local commit_message commit_rows commit_sha expected_commits first_line
-            local last_commit_sha live_head_sha live_pr source_run_count
+            local expected_subject last_commit_sha live_head live_head_sha live_pr
+            local live_title repo_name source_run_count
             local source_sha_count
 
             if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
@@ -173,16 +184,32 @@ jobs:
               '(.state == "open") and (.draft == false)
                and (.user.login == "litreleasebot")
                and (.base.ref == "develop")
-               and (.head.ref | startswith("chore/sync-shared-assets-lit-"))
+               and ((.head.ref | startswith("chore/sync-shared-assets-lit-"))
+                    or (.head.ref | startswith("chore/sync-repository-quality-")))
                and (.head.repo.full_name == $repo)
-               and (.title == "chore: sync shared-assets-lit")
+               and ((.title == "chore: sync shared-assets-lit")
+                    or (.title == "chore: sync shared assets")
+                    or (.title == "chore: sync repository quality assets"))
                and ([.labels[].name] | index("chore") != null)
                and ([.labels[].name] | index("shared-assets-lit") != null)' \
               >/dev/null <<<"$live_pr"; then
               return 1
             fi
             live_head_sha="$(jq -r '.head.sha // ""' <<<"$live_pr")"
+            live_head="$(jq -r '.head.ref // ""' <<<"$live_pr")"
+            live_title="$(jq -r '.title // ""' <<<"$live_pr")"
+            repo_name="${REPO#*/}"
             if ! [[ "$live_head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              return 1
+            fi
+            if [ "$live_head" = "chore/sync-repository-quality-${repo_name}" ] \
+              && [ "$live_title" = "chore: sync repository quality assets" ]; then
+              expected_subject="chore: sync repository quality assets"
+            elif [ "$live_head" = "chore/sync-shared-assets-lit-${repo_name}" ] \
+              && { [ "$live_title" = "chore: sync shared-assets-lit" ] \
+                || [ "$live_title" = "chore: sync shared assets" ]; }; then
+              expected_subject="chore: sync shared assets from lightning-it/shared-assets-lit"
+            else
               return 1
             fi
             if ! commit_rows="$(
@@ -219,8 +246,7 @@ jobs:
               if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
                 || [ "$commit_author" != "litreleasebot" ] \
                 || [ "$commit_committer" != "litreleasebot" ] \
-                || [ "$first_line" != \
-                  "chore: sync shared assets from lightning-it/shared-assets-lit" ] \
+                || [ "$first_line" != "$expected_subject" ] \
                 || [ "$source_sha_count" -ne 1 ] \
                 || [ "$source_run_count" -ne 1 ]; then
                 return 1
@@ -257,6 +283,7 @@ jobs:
       - name: Approve and enable auto-merge
         if: steps.guard.outputs.trusted == 'true'
         env:
+          EXPECTED_SUBJECT: ${{ steps.guard.outputs.subject }}
           GH_TOKEN: ${{ github.token }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_BASE: ${{ github.event.pull_request.base.ref }}
@@ -328,8 +355,7 @@ jobs:
               if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
                 || [ "$commit_author" != "litreleasebot" ] \
                 || [ "$commit_committer" != "litreleasebot" ] \
-                || [ "$first_line" != \
-                  "chore: sync shared assets from lightning-it/shared-assets-lit" ] \
+                || [ "$first_line" != "$EXPECTED_SUBJECT" ] \
                 || [ "$source_sha_count" -ne 1 ] \
                 || [ "$source_run_count" -ne 1 ]; then
                 return 1
@@ -359,12 +385,17 @@ jobs:
             disable_auto_merge
             exit 1
           fi
+          gh pr checks "$PR_URL" --required --watch --fail-fast
+          if ! assert_live_safe; then
+            disable_auto_merge
+            exit 1
+          fi
           # A synchronize event can disable a previous auto-merge request after
           # this job starts. Clear it first so the final enable is authoritative.
           disable_auto_merge
           gh pr review "$PR_URL" \
             --approve \
-            --body "Approved a bot-triggered shared-assets sync whose exact head commit and source-run provenance passed policy."
+            --body "Approved a bot-triggered automated sync whose exact head commit and source-run provenance passed policy."
 
           if ! assert_live_safe; then
             disable_auto_merge
