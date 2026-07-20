@@ -95,7 +95,7 @@ jobs:
           reviewed_sha="$(jq -r .review.commit_id "${GITHUB_EVENT_PATH}")"
           test "${event_author}" = "${COPILOT_LOGIN}"
           review_body="$(jq -r '.review.body // "" | ascii_downcase' "${GITHUB_EVENT_PATH}")"
-          if [[ "${review_body}" == *"unable to review"* || "${review_body}" == *"not able to review"* || "${review_body}" == *quota* ]]; then
+          if [[ "${review_body}" == *"unable to review"* || "${review_body}" == *"not able to review"* || "${review_body}" == *"quota exhausted"* || "${review_body}" == *"quota exceeded"* ]]; then
             {
               echo "retry=true"
               echo "pr_number=${pr_number}"

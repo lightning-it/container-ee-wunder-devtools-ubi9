@@ -20,7 +20,8 @@ env:
   COPILOT_REVIEWER_LOGIN: copilot-pull-request-reviewer
   NO_FILES_REVIEW_MARKER: was not able to review any files
   UNABLE_REVIEW_MARKER: unable to review this pull request
-  QUOTA_EXHAUSTED_MARKER: quota
+  QUOTA_EXHAUSTED_MARKER: quota exhausted
+  QUOTA_EXCEEDED_MARKER: quota exceeded
 
 concurrency:
   group: copilot-review-${{ github.event.pull_request.number }}
@@ -372,7 +373,8 @@ jobs:
                 jq -er \
                   --arg unable_marker "${UNABLE_REVIEW_MARKER}" \
                   --arg no_files_marker "${NO_FILES_REVIEW_MARKER}" \
-                  --arg quota_marker "${QUOTA_EXHAUSTED_MARKER}" \
+                  --arg quota_exhausted_marker "${QUOTA_EXHAUSTED_MARKER}" \
+                  --arg quota_exceeded_marker "${QUOTA_EXCEEDED_MARKER}" \
                   'def normalize_review_text:
                       ascii_downcase
                       | gsub("wasn[\u0027\u2019]t"; "was not")
@@ -382,7 +384,8 @@ jobs:
                       (.data.node.comments.nodes[]?.body // "");
                   ($unable_marker | normalize_review_text) as $unable
                   | ($no_files_marker | normalize_review_text) as $no_files
-                  | ($quota_marker | normalize_review_text) as $quota
+                  | ($quota_exhausted_marker | normalize_review_text) as $quota_exhausted
+                  | ($quota_exceeded_marker | normalize_review_text) as $quota_exceeded
                   | [
                     ([
                       review_content
@@ -391,7 +394,8 @@ jobs:
                           | (
                               contains($unable)
                               or contains($no_files)
-                              or contains($quota)
+                              or contains($quota_exhausted)
+                              or contains($quota_exceeded)
                             )
                         )
                     ] | length),
