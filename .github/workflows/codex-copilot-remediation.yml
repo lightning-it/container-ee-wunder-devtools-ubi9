@@ -28,7 +28,11 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: codex-copilot-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: >-
+    codex-copilot-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number }}-${{
+    github.event_name == 'pull_request_review' &&
+    github.event.review.user.login != 'copilot-pull-request-reviewer[bot]' &&
+    github.event.review.user.login || 'trusted' }}
   cancel-in-progress: true
 
 env:
@@ -93,7 +97,10 @@ jobs:
           pr_number="$(jq -r .pull_request.number "${GITHUB_EVENT_PATH}")"
           event_author="$(jq -r .review.user.login "${GITHUB_EVENT_PATH}")"
           reviewed_sha="$(jq -r .review.commit_id "${GITHUB_EVENT_PATH}")"
-          test "${event_author}" = "${COPILOT_LOGIN}"
+          if [ "${event_author}" != "${COPILOT_LOGIN}" ]; then
+            echo "Ignoring review event from ${event_author}; expected ${COPILOT_LOGIN}."
+            exit 0
+          fi
           review_body="$(jq -r '.review.body // "" | ascii_downcase' "${GITHUB_EVENT_PATH}")"
           if [[ "${review_body}" == *"unable to review"* || "${review_body}" == *"not able to review"* || "${review_body}" == *"quota exhausted"* || "${review_body}" == *"quota exceeded"* ]]; then
             {
