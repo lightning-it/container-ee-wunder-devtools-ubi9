@@ -28,6 +28,7 @@ jobs:
     name: Approve trusted shared-assets PR
     runs-on: ubuntu-latest
     permissions:
+      checks: read
       contents: write
       pull-requests: write
 
