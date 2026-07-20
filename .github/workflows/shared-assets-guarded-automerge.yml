@@ -4,7 +4,17 @@ name: Shared-assets guarded automerge
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review, converted_to_draft]
+    types:
+      [
+        opened,
+        synchronize,
+        reopened,
+        edited,
+        labeled,
+        unlabeled,
+        ready_for_review,
+        converted_to_draft,
+      ]
 
 permissions:
   contents: read
