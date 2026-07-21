@@ -7,10 +7,6 @@ name: Copilot review gate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
-  pull_request_review_comment:
-    types: [edited, deleted]
 
 permissions:
   contents: read
@@ -37,13 +33,13 @@ jobs:
       !(github.event.pull_request.user.login == 'renovate[bot]' &&
         startsWith(github.event.pull_request.head.ref, 'renovate/') &&
         github.event.pull_request.base.ref == 'develop') &&
-      !(github.event.pull_request.user.login == 'litreleasebot' &&
+      !(github.event.pull_request.user.login == 'lightning-it-shared-assets-sync[bot]' &&
         startsWith(github.event.pull_request.head.ref, 'chore/sync-shared-assets-lit-') &&
         github.event.pull_request.base.ref == 'develop' &&
         github.event.pull_request.title == 'chore: sync shared-assets-lit' &&
         contains(github.event.pull_request.labels.*.name, 'chore') &&
         contains(github.event.pull_request.labels.*.name, 'shared-assets-lit')) &&
-      !(github.event.pull_request.user.login == 'litreleasebot' &&
+      !(github.event.pull_request.user.login == 'lightning-it-shared-assets-sync[bot]' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         startsWith(github.event.pull_request.head.ref, 'chore/sync-repository-quality-') &&
         github.event.pull_request.base.ref == 'develop' &&
@@ -158,7 +154,7 @@ jobs:
               trusted=true
               trusted_kind=renovate
             fi
-          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+          elif [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == chore/sync-shared-assets-lit-* ]] \
             && [ "${PR_BASE}" = "develop" ] \
@@ -167,7 +163,7 @@ jobs:
               <<<"${PR_LABELS}" >/dev/null; then
             trusted=true
             trusted_kind=shared-assets
-          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+          elif [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == chore/sync-repository-quality-* ]] \
             && [ "${PR_BASE}" = "develop" ] \

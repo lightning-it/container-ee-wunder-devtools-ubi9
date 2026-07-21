@@ -27,12 +27,22 @@ jobs:
   approve-shared-assets:
     name: Approve trusted shared-assets PR
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       checks: read
       contents: write
       pull-requests: write
+      statuses: read
 
     steps:
+      - name: Mint policy-read App token
+        id: policy-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.0.0
+        with:
+          client-id: ${{ vars.SHARED_ASSETS_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SHARED_ASSETS_SYNC_APP_PRIVATE_KEY }}
+          permission-administration: read
+
       - name: Verify automated sync PR identity
         id: guard
         env:
@@ -46,11 +56,13 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           REPO: ${{ github.repository }}
+          SYNC_APP_ID: ${{ vars.SHARED_ASSETS_SYNC_APP_ID }}
           TRIGGER_ACTOR: ${{ github.actor }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          readonly SYNC_APP_BOT="lightning-it-shared-assets-sync[bot]"
           labels="$(jq -r '.[]' <<<"$PR_LABELS")"
 
           has_label() {
@@ -66,11 +78,15 @@ jobs:
             trusted=false
           fi
 
-          if [ "$TRIGGER_ACTOR" != "litreleasebot" ]; then
+          if ! [[ "$SYNC_APP_ID" =~ ^[1-9][0-9]*$ ]]; then
             trusted=false
           fi
 
-          if [ "$PR_AUTHOR" != "litreleasebot" ]; then
+          if [ "$TRIGGER_ACTOR" != "$SYNC_APP_BOT" ]; then
+            trusted=false
+          fi
+
+          if [ "$PR_AUTHOR" != "$SYNC_APP_BOT" ]; then
             trusted=false
           fi
 
@@ -150,12 +166,16 @@ jobs:
             source_run_count="$(awk \
               '/^Shared-Assets-Source-Run: [0-9]+$/ { count++ }
                END { print count + 0 }' <<<"$commit_message")"
+            app_id_count="$(awk -v expected="$SYNC_APP_ID" \
+              '$0 == "Shared-Assets-Sync-App-ID: " expected { count++ }
+               END { print count + 0 }' <<<"$commit_message")"
             if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
-              || [ "$commit_author" != "litreleasebot" ] \
-              || [ "$commit_committer" != "litreleasebot" ] \
+              || [ "$commit_author" != "$SYNC_APP_BOT" ] \
+              || [ "$commit_committer" != "$SYNC_APP_BOT" ] \
               || [ "$first_line" != "$expected_subject" ] \
               || [ "$source_sha_count" -ne 1 ] \
-              || [ "$source_run_count" -ne 1 ]; then
+              || [ "$source_run_count" -ne 1 ] \
+              || [ "$app_id_count" -ne 1 ]; then
               trusted=false
             fi
             last_commit_sha="$commit_sha"
@@ -177,6 +197,8 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           REPO: ${{ github.repository }}
+          SYNC_APP_BOT: lightning-it-shared-assets-sync[bot]
+          SYNC_APP_ID: ${{ vars.SHARED_ASSETS_SYNC_APP_ID }}
         run: |
           set -euo pipefail
 
@@ -184,7 +206,7 @@ jobs:
             local actual_commits commit_author commit_committer commit_json
             local commit_message commit_rows commit_sha expected_commits first_line
             local expected_subject last_commit_sha live_head live_head_sha live_pr
-            local live_title repo_name source_run_count
+            local live_title repo_name source_run_count source_app_id_count
             local source_sha_count
 
             if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
@@ -193,7 +215,7 @@ jobs:
             if ! jq -e \
               --arg repo "$REPO" \
               '(.state == "open") and (.draft == false)
-               and (.user.login == "litreleasebot")
+               and (.user.login == env.SYNC_APP_BOT)
                and (.base.ref == "develop")
                and ((.head.ref | startswith("chore/sync-shared-assets-lit-"))
                     or (.head.ref | startswith("chore/sync-repository-quality-")))
@@ -254,12 +276,16 @@ jobs:
               source_run_count="$(awk \
                 '/^Shared-Assets-Source-Run: [0-9]+$/ { count++ }
                  END { print count + 0 }' <<<"$commit_message")"
+              source_app_id_count="$(awk -v expected="$SYNC_APP_ID" \
+                '$0 == "Shared-Assets-Sync-App-ID: " expected { count++ }
+                 END { print count + 0 }' <<<"$commit_message")"
               if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
-                || [ "$commit_author" != "litreleasebot" ] \
-                || [ "$commit_committer" != "litreleasebot" ] \
+                || [ "$commit_author" != "$SYNC_APP_BOT" ] \
+                || [ "$commit_committer" != "$SYNC_APP_BOT" ] \
                 || [ "$first_line" != "$expected_subject" ] \
                 || [ "$source_sha_count" -ne 1 ] \
-                || [ "$source_run_count" -ne 1 ]; then
+                || [ "$source_run_count" -ne 1 ] \
+                || [ "$source_app_id_count" -ne 1 ]; then
                 return 1
               fi
               last_commit_sha="$commit_sha"
@@ -304,14 +330,17 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_TITLE: ${{ github.event.pull_request.title }}
+          POLICY_TOKEN: ${{ steps.policy-app.outputs.token }}
           REPO: ${{ github.repository }}
+          SYNC_APP_BOT: lightning-it-shared-assets-sync[bot]
+          SYNC_APP_ID: ${{ vars.SHARED_ASSETS_SYNC_APP_ID }}
         run: |
           set -euo pipefail
 
           assert_live_safe() {
             local actual_commits commit_author commit_committer commit_json
             local commit_message commit_rows commit_sha expected_commits first_line
-            local last_commit_sha live_pr source_run_count source_sha_count
+            local last_commit_sha live_pr source_run_count source_sha_count source_app_id_count
 
             if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
               return 1
@@ -363,12 +392,16 @@ jobs:
               source_run_count="$(awk \
                 '/^Shared-Assets-Source-Run: [0-9]+$/ { count++ }
                  END { print count + 0 }' <<<"$commit_message")"
+              source_app_id_count="$(awk -v expected="$SYNC_APP_ID" \
+                '$0 == "Shared-Assets-Sync-App-ID: " expected { count++ }
+                 END { print count + 0 }' <<<"$commit_message")"
               if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
-                || [ "$commit_author" != "litreleasebot" ] \
-                || [ "$commit_committer" != "litreleasebot" ] \
+                || [ "$commit_author" != "$SYNC_APP_BOT" ] \
+                || [ "$commit_committer" != "$SYNC_APP_BOT" ] \
                 || [ "$first_line" != "$EXPECTED_SUBJECT" ] \
                 || [ "$source_sha_count" -ne 1 ] \
-                || [ "$source_run_count" -ne 1 ]; then
+                || [ "$source_run_count" -ne 1 ] \
+                || [ "$source_app_id_count" -ne 1 ]; then
                 return 1
               fi
               last_commit_sha="$commit_sha"
@@ -396,7 +429,130 @@ jobs:
             disable_auto_merge
             exit 1
           fi
-          gh pr checks "$PR_URL" --required --watch --fail-fast
+          required_checks_state() {
+            local branch_rules check_runs classic classic_state context evidence pending required required_check state status_pages
+            if ! branch_rules="$(
+              GH_TOKEN="$POLICY_TOKEN" gh api "repos/${REPO}/rules/branches/${PR_BASE}"
+            )"; then
+              echo "Unable to read branch rules for ${REPO}/${PR_BASE}; administration read access may be required." >&2
+              return 1
+            fi
+            if classic="$(
+              GH_TOKEN="$POLICY_TOKEN" gh api \
+                "repos/${REPO}/branches/${PR_BASE}/protection/required_status_checks" \
+                2>&1
+            )"; then
+              classic_state=0
+            else
+              classic_state="$?"
+            fi
+            if [ "$classic_state" -ne 0 ]; then
+              if grep -Fq "HTTP 404" <<<"$classic"; then
+                classic='{}'
+              else
+                return 1
+              fi
+            fi
+            required="$(
+              jq -nc \
+                --argjson branch_rules "$branch_rules" \
+                --argjson classic "$classic" '
+                ([ $branch_rules[]
+                   | select(.type == "required_status_checks")
+                   | .parameters.required_status_checks[]?
+                   | {context, app_id: (.integration_id // null)}
+                 ]
+                 + [ $classic.checks[]? | {context, app_id} ]
+                 + [ $classic.contexts[]? | {context: ., app_id: null} ])
+                | unique_by([.context, .app_id])
+              '
+            )"
+            [ "$(jq 'length' <<<"$required")" -gt 0 ] || return 1
+            if ! check_runs="$(
+              gh api --paginate --slurp \
+                "repos/${REPO}/commits/${PR_HEAD_SHA}/check-runs?filter=latest&per_page=100"
+            )"; then
+              return 1
+            fi
+            if ! status_pages="$(
+              gh api --paginate --slurp \
+                "repos/${REPO}/commits/${PR_HEAD_SHA}/statuses?per_page=100"
+            )"; then
+              return 1
+            fi
+            evidence="$(
+              jq -nc \
+                --argjson check_pages "$check_runs" \
+                --argjson status_pages "$status_pages" '
+                (([ $check_pages[] | .check_runs[] ]
+                  | sort_by(.name, .app.id, .id)
+                  | group_by([.name, .app.id])
+                  | map(last)
+                  | map({
+                    context: .name,
+                    app_id: (.app.id // null),
+                    state: (if .status == "completed" then (.conclusion // "") else "pending" end)
+                  }))
+                 + ([ $status_pages[] | .[] ]
+                  | sort_by(.context, .id)
+                  | group_by(.context)
+                  | map(last)
+                  | map({
+                    context: .context,
+                    app_id: null,
+                    state: .state
+                  })))
+              '
+            )"
+            pending=false
+            while IFS= read -r required_check; do
+              [ -n "$required_check" ] || continue
+              context="$(jq -r .context <<<"$required_check")"
+              state="$(
+                jq -r \
+                  --arg context "$context" \
+                  --argjson app_id "$(jq '.app_id' <<<"$required_check")" '
+                  [ .[] | select(.context == $context) ] as $matches
+                  | (if $app_id == null then
+                       ([ $matches[] | select(.app_id == null) ][0] // $matches[0])
+                     else
+                       [ $matches[] | select(.app_id == $app_id) ][0]
+                     end).state // "missing"
+                ' <<<"$evidence"
+              )"
+              case "$state" in
+                success) ;;
+                missing|pending|queued|in_progress) pending=true ;;
+                *) return 1 ;;
+              esac
+            done < <(jq -c '.[]' <<<"$required")
+            [ "$pending" = false ] || return 2
+          }
+
+          wait_for_required_checks() {
+            local state
+            for _ in $(seq 1 60); do
+              if ! assert_live_safe; then
+                return 1
+              fi
+              if required_checks_state; then
+                state=0
+              else
+                state="$?"
+              fi
+              case "$state" in
+                0) return 0 ;;
+                2) sleep 10 ;;
+                *) return 1 ;;
+              esac
+            done
+            return 1
+          }
+
+          if ! wait_for_required_checks; then
+            disable_auto_merge
+            exit 1
+          fi
           if ! assert_live_safe; then
             disable_auto_merge
             exit 1
