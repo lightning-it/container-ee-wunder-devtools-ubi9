@@ -560,10 +560,6 @@ jobs:
           # A synchronize event can disable a previous auto-merge request after
           # this job starts. Clear it first so the final enable is authoritative.
           disable_auto_merge
-          gh pr review "$PR_URL" \
-            --approve \
-            --body "Approved a bot-triggered automated sync whose exact head commit and source-run provenance passed policy."
-
           if ! assert_live_safe; then
             disable_auto_merge
             exit 1
