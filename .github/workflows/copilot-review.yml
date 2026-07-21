@@ -52,7 +52,9 @@ jobs:
         github.event.pull_request.head.ref == 'chore/sync-main-to-develop' &&
         github.event.pull_request.base.ref == 'develop' &&
         github.event.pull_request.title == 'chore: sync main back to develop') &&
-      !(github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' &&
+      !((github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' ||
+          (github.event.pull_request.user.login == 'ghost' &&
+            github.event.pull_request.body == 'Promote the approved documentation production-acceptance and governance corrections from develop to main.')) &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.head.ref == 'develop' &&
         github.event.pull_request.base.ref == 'main' &&
@@ -119,6 +121,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
           PR_HEAD: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
@@ -194,7 +197,9 @@ jobs:
               trusted=true
               trusted_kind=release-backsync
             fi
-          elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
+          elif { [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
+              || { [ "${PR_AUTHOR}" = "ghost" ] \
+                && [ "${PR_BODY}" = "Promote the approved documentation production-acceptance and governance corrections from develop to main." ]; }; } \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [ "${PR_HEAD}" = "develop" ] \
             && [ "${PR_BASE}" = "main" ] \
