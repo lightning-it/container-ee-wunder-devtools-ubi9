@@ -128,7 +128,7 @@ jobs:
           permission="$(gh api "repos/${REPOSITORY}/collaborators/${author}/permission" --jq .permission 2>/dev/null || true)"
           case "${permission}" in admin|maintain|write) ;; *)
             case "${author}:${head_ref}" in
-              'renovate[bot]':renovate/*|litreleasebot:chore/sync-shared-assets-lit-*|litreleasebot:chore/sync-repository-quality-*) ;;
+              'renovate[bot]':renovate/*|lightning-it-shared-assets-sync[bot]:chore/sync-shared-assets-lit-*|lightning-it-shared-assets-sync[bot]:chore/sync-repository-quality-*) ;;
               *) exit 0 ;;
             esac
           esac
