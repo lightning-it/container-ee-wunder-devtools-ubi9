@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
         with:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
@@ -207,20 +207,45 @@ jobs:
           name: release-evidence
           path: dist
 
+      - name: Mint release automation App token
+        id: release-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.0.0
+        with:
+          client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Resolve release automation App bot identity
+        id: release-bot
+        env:
+          APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bot_json="$(gh api "users/${APP_SLUG}%5Bbot%5D")"
+          login="$(jq -r '.login // ""' <<<"$bot_json")"
+          bot_id="$(jq -r '.id // ""' <<<"$bot_json")"
+          if [ "$login" != "${APP_SLUG}[bot]" ] || ! [[ "$bot_id" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unable to resolve the release automation App bot identity."
+            exit 1
+          fi
+          echo "login=$login" >>"$GITHUB_OUTPUT"
+          echo "email=${bot_id}+${login}@users.noreply.github.com" >>"$GITHUB_OUTPUT"
+
       - name: Attach signed release evidence
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.LITRELEASEBOT_TOKEN }}
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
         run: |
           set -euo pipefail
 
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::Missing required secret: secrets.LITRELEASEBOT_TOKEN"
+            echo "::error::Missing required secret: steps.release-app.outputs.token"
             exit 1
           fi
 
           if ! gh auth status --hostname github.com >/dev/null 2>&1; then
-            echo "::error::secrets.LITRELEASEBOT_TOKEN is not a valid GitHub token"
+            echo "::error::steps.release-app.outputs.token is not a valid GitHub token"
             exit 1
           fi
 

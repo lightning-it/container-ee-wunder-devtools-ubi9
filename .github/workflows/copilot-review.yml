@@ -46,12 +46,12 @@ jobs:
         github.event.pull_request.title == 'chore: sync repository quality assets' &&
         contains(github.event.pull_request.labels.*.name, 'chore') &&
         contains(github.event.pull_request.labels.*.name, 'shared-assets-lit')) &&
-      !(github.event.pull_request.user.login == 'litreleasebot' &&
+      !(github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.head.ref == 'chore/sync-main-to-develop' &&
         github.event.pull_request.base.ref == 'develop' &&
         github.event.pull_request.title == 'chore: sync main back to develop') &&
-      !(github.event.pull_request.user.login == 'litreleasebot' &&
+      !(github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.head.ref == 'develop' &&
         github.event.pull_request.base.ref == 'main' &&
@@ -172,14 +172,14 @@ jobs:
               <<<"${PR_LABELS}" >/dev/null; then
             trusted=true
             trusted_kind=repository-quality
-          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+          elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [ "${PR_HEAD}" = "chore/sync-main-to-develop" ] \
             && [ "${PR_BASE}" = "develop" ] \
             && [ "${PR_TITLE}" = "chore: sync main back to develop" ]; then
             trusted=true
             trusted_kind=ancestry-backmerge
-          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+          elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == backsync/release-v*-to-develop ]] \
             && [ "${PR_BASE}" = "develop" ] \
@@ -192,7 +192,7 @@ jobs:
               trusted=true
               trusted_kind=release-backsync
             fi
-          elif [ "${PR_AUTHOR}" = "litreleasebot" ] \
+          elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [ "${PR_HEAD}" = "develop" ] \
             && [ "${PR_BASE}" = "main" ] \
