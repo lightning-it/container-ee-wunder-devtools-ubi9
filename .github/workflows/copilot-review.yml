@@ -6,7 +6,7 @@ name: Copilot review gate
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
 
 permissions:
   contents: read
@@ -33,20 +33,6 @@ jobs:
       !(github.event.pull_request.user.login == 'renovate[bot]' &&
         startsWith(github.event.pull_request.head.ref, 'renovate/') &&
         github.event.pull_request.base.ref == 'develop') &&
-      !(github.event.pull_request.user.login == 'lightning-it-shared-assets-sync[bot]' &&
-        startsWith(github.event.pull_request.head.ref, 'chore/sync-shared-assets-lit-') &&
-        github.event.pull_request.base.ref == 'develop' &&
-        (github.event.pull_request.title == 'chore: sync shared-assets-lit' ||
-          github.event.pull_request.title == 'chore: sync shared assets') &&
-        contains(github.event.pull_request.labels.*.name, 'chore') &&
-        contains(github.event.pull_request.labels.*.name, 'shared-assets-lit')) &&
-      !(github.event.pull_request.user.login == 'lightning-it-shared-assets-sync[bot]' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        startsWith(github.event.pull_request.head.ref, 'chore/sync-repository-quality-') &&
-        github.event.pull_request.base.ref == 'develop' &&
-        github.event.pull_request.title == 'chore: sync repository quality assets' &&
-        contains(github.event.pull_request.labels.*.name, 'chore') &&
-        contains(github.event.pull_request.labels.*.name, 'shared-assets-lit')) &&
       !(github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.head.ref == 'chore/sync-main-to-develop' &&
@@ -69,10 +55,43 @@ jobs:
       - name: Request Copilot review for the current revision
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ] \
+            && [ "${PR_BASE}" = "develop" ] \
+            && { { [[ "${PR_HEAD}" == chore/sync-shared-assets-lit-* ]] \
+                && { [ "${PR_TITLE}" = "chore: sync shared-assets-lit" ] \
+                  || [ "${PR_TITLE}" = "chore: sync shared assets" ]; }; } \
+              || { [[ "${PR_HEAD}" == chore/sync-repository-quality-* ]] \
+                && [ "${PR_TITLE}" = "chore: sync repository quality assets" ]; }; }; then
+            for attempt in {1..6}; do
+              if ! live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"; then
+                echo "Live PR metadata unavailable; falling back to Copilot review."
+                break
+              fi
+              if jq -e --arg author "${PR_AUTHOR}" --arg base "${PR_BASE}" \
+                --arg head "${PR_HEAD}" --arg head_sha "${PR_HEAD_SHA}" \
+                --arg repo "${REPOSITORY}" --arg title "${PR_TITLE}" \
+                '(.state == "open") and (.draft == false) and (.user.login == $author)
+                 and (.base.ref == $base) and (.head.ref == $head)
+                 and (.head.sha == $head_sha) and (.head.repo.full_name == $repo)
+                 and (.title == $title)
+                 and ([.labels[].name] | index("chore") != null)
+                 and ([.labels[].name] | index("shared-assets-lit") != null)' \
+                <<<"${live_pr}" >/dev/null; then
+                echo "Trusted sync PR verified from live metadata; Copilot request skipped."
+                exit 0
+              fi
+              [ "${attempt}" -eq 6 ] || sleep 5
+            done
+          fi
           reviewer_login="${COPILOT_REVIEWER_LOGIN%\[bot\]}"
           reviewer="${reviewer_login}[bot]"
           requested_reviewers_url="repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers"
@@ -164,8 +183,18 @@ jobs:
             && [ "${PR_BASE}" = "develop" ] \
             && { [ "${PR_TITLE}" = "chore: sync shared-assets-lit" ] \
               || [ "${PR_TITLE}" = "chore: sync shared assets" ]; } \
-            && jq -e 'index("chore") != null and index("shared-assets-lit") != null' \
-              <<<"${PR_LABELS}" >/dev/null; then
+            && live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")" \
+            && jq -e \
+              --arg author "${PR_AUTHOR}" --arg base "${PR_BASE}" \
+              --arg head "${PR_HEAD}" --arg head_sha "${PR_HEAD_SHA}" --arg title "${PR_TITLE}" \
+              --arg repo "${REPOSITORY}" \
+              '(.state == "open") and (.draft == false)
+               and (.user.login == $author) and (.base.ref == $base)
+               and (.head.ref == $head) and (.head.sha == $head_sha) and (.title == $title)
+               and (.head.repo.full_name == $repo)
+               and ([.labels[].name] | index("chore") != null)
+               and ([.labels[].name] | index("shared-assets-lit") != null)' \
+              <<<"${live_pr}" >/dev/null; then
             trusted=true
             trusted_kind=shared-assets
           elif [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ] \
@@ -173,8 +202,18 @@ jobs:
             && [[ "${PR_HEAD}" == chore/sync-repository-quality-* ]] \
             && [ "${PR_BASE}" = "develop" ] \
             && [ "${PR_TITLE}" = "chore: sync repository quality assets" ] \
-            && jq -e 'index("chore") != null and index("shared-assets-lit") != null' \
-              <<<"${PR_LABELS}" >/dev/null; then
+            && live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")" \
+            && jq -e \
+              --arg author "${PR_AUTHOR}" --arg base "${PR_BASE}" \
+              --arg head "${PR_HEAD}" --arg head_sha "${PR_HEAD_SHA}" --arg title "${PR_TITLE}" \
+              --arg repo "${REPOSITORY}" \
+              '(.state == "open") and (.draft == false)
+               and (.user.login == $author) and (.base.ref == $base)
+               and (.head.ref == $head) and (.head.sha == $head_sha) and (.title == $title)
+               and (.head.repo.full_name == $repo)
+               and ([.labels[].name] | index("chore") != null)
+               and ([.labels[].name] | index("shared-assets-lit") != null)' \
+              <<<"${live_pr}" >/dev/null; then
             trusted=true
             trusted_kind=repository-quality
           elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
