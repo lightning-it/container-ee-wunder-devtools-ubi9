@@ -228,8 +228,8 @@ jobs:
           git merge-base --is-ancestor "origin/main" "${HEAD_SHA}"
           git merge-base --is-ancestor "origin/develop" "${HEAD_SHA}"
           [ "$(git rev-list --parents -n 1 "${HEAD_SHA}" | wc -w)" -eq 3 ]
-          git diff --quiet "origin/main" "${HEAD_SHA}"
-          echo "Verified a main-tree-preserving two-parent merge of current main and develop."
+          git diff --quiet "origin/develop" "${HEAD_SHA}"
+          echo "Verified a develop-tree-preserving two-parent merge of current main and develop."
 
       - name: Verify protected release promotion
         if: steps.trusted-automation.outputs.kind == 'release-promotion'
