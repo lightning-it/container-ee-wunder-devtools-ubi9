@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      issues: read
+      pull-requests: read
     steps:
       - name: Check out exact repository source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -25,7 +27,7 @@ jobs:
           persist-credentials: false
 
       - name: Run immutable OpenSSF Scorecard analysis
-        uses: docker://ghcr.io/ossf/scorecard-action:v2.4.3@sha256:2dd6a6d60100f78ef24e14a47941d0087a524b4d3642041558239b1c6097c941
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
         with:
           results_file: scorecard.sarif
           results_format: sarif
