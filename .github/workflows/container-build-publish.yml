@@ -99,7 +99,7 @@ jobs:
           driver-opts: image=docker.io/moby/buildkit:buildx-stable-1@sha256:63db51c9b30208a7c2b1c40392c7ebb9ce2f85ba238a18a85420f8f5ea2d4684
 
       - name: Log in to Quay.io
-        uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c  # v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7  # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.QUAY_USERNAME }}
