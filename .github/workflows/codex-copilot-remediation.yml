@@ -28,7 +28,11 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: codex-copilot-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: >-
+    codex-copilot-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number }}-${{
+    github.event_name == 'pull_request_review' &&
+    github.event.review.user.login != 'copilot-pull-request-reviewer[bot]' &&
+    github.event.review.user.login || 'trusted' }}
   cancel-in-progress: true
 
 env:
@@ -93,9 +97,12 @@ jobs:
           pr_number="$(jq -r .pull_request.number "${GITHUB_EVENT_PATH}")"
           event_author="$(jq -r .review.user.login "${GITHUB_EVENT_PATH}")"
           reviewed_sha="$(jq -r .review.commit_id "${GITHUB_EVENT_PATH}")"
-          test "${event_author}" = "${COPILOT_LOGIN}"
+          if [ "${event_author}" != "${COPILOT_LOGIN}" ]; then
+            echo "Ignoring review event from ${event_author}; expected ${COPILOT_LOGIN}."
+            exit 0
+          fi
           review_body="$(jq -r '.review.body // "" | ascii_downcase' "${GITHUB_EVENT_PATH}")"
-          if [[ "${review_body}" == *"unable to review"* || "${review_body}" == *"not able to review"* || "${review_body}" == *quota* ]]; then
+          if [[ "${review_body}" == *"unable to review"* || "${review_body}" == *"not able to review"* || "${review_body}" == *"quota exhausted"* || "${review_body}" == *"quota exceeded"* ]]; then
             {
               echo "retry=true"
               echo "pr_number=${pr_number}"
@@ -113,12 +120,15 @@ jobs:
           head_sha="$(jq -r .head.sha <<<"${pr}")"
           head_ref="$(jq -r .head.ref <<<"${pr}")"
           author="$(jq -r .user.login <<<"${pr}")"
-          test "${reviewed_sha}" = "${head_sha}"
+          if [ "${reviewed_sha}" != "${head_sha}" ]; then
+            echo "Ignoring stale Copilot review for ${reviewed_sha}; current head is ${head_sha}."
+            exit 0
+          fi
 
           permission="$(gh api "repos/${REPOSITORY}/collaborators/${author}/permission" --jq .permission 2>/dev/null || true)"
           case "${permission}" in admin|maintain|write) ;; *)
             case "${author}:${head_ref}" in
-              'renovate[bot]':renovate/*|litreleasebot:chore/sync-shared-assets-lit-*|litreleasebot:chore/sync-repository-quality-*) ;;
+              'renovate[bot]':renovate/*|lightning-it-shared-assets-sync[bot]:chore/sync-shared-assets-lit-*|lightning-it-shared-assets-sync[bot]:chore/sync-repository-quality-*) ;;
               *) exit 0 ;;
             esac
           esac
@@ -195,13 +205,13 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout trusted workflow assets
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted
           persist-credentials: false
       - name: Checkout exact pull request head
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.inspect.outputs.head_sha }}
           path: repo

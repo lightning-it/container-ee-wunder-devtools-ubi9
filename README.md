@@ -21,12 +21,12 @@ Publishing targets: `github-release, quay.io`.
 
 ## Supported and Tested Platforms
 
-| Platform / Product | Status | Validation |
-|---|---:|---|
-| ubuntu-latest | Supported | Container CI / Trivy |
-| ubi9 | Tested where applicable | Container CI / Trivy |
-| podman | Tested where applicable | Container CI / Trivy |
-| docker-buildx | Tested where applicable | Container CI / Trivy |
+| Platform / Product |                  Status | Validation           |
+| ------------------ | ----------------------: | -------------------- |
+| ubuntu-latest      |               Supported | Container CI / Trivy |
+| ubi9               | Tested where applicable | Container CI / Trivy |
+| podman             | Tested where applicable | Container CI / Trivy |
+| docker-buildx      | Tested where applicable | Container CI / Trivy |
 
 <!-- END LIT_SHARED_RELEASE_MODEL -->
 

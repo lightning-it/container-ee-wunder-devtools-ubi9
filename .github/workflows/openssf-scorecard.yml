@@ -1,3 +1,4 @@
+# Managed by lightning-it/shared-assets-lit; change the canonical source there.
 # yamllint disable rule:truthy rule:line-length
 ---
 name: OpenSSF Scorecard
@@ -17,15 +18,16 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      security-events: write
+      issues: read
+      pull-requests: read
     steps:
       - name: Check out exact repository source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
       - name: Run immutable OpenSSF Scorecard analysis
-        uses: docker://ghcr.io/ossf/scorecard-action:v2.4.3@sha256:2dd6a6d60100f78ef24e14a47941d0087a524b4d3642041558239b1c6097c941
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
         with:
           results_file: scorecard.sarif
           results_format: sarif
@@ -36,13 +38,31 @@ jobs:
           internal_default_token: ${{ github.token }}
 
       - name: Retain Scorecard SARIF
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: scorecard-sarif
           path: scorecard.sarif
           if-no-files-found: error
 
+  upload-sarif:
+    name: Upload Scorecard SARIF
+    runs-on: ubuntu-24.04
+    needs: scorecard
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Download Scorecard SARIF artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: scorecard-sarif
+          path: .
+
       - name: Upload Scorecard SARIF to code scanning
-        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a  # v4.37.1
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        # Private repositories without GitHub Advanced Security still retain
+        # the SARIF workflow-run artifact without failing the scan.
+        continue-on-error: ${{ github.event.repository.visibility != 'public' }}
         with:
           sarif_file: scorecard.sarif

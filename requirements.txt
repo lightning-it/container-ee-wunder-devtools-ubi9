@@ -19,7 +19,7 @@ antsibull-changelog==0.35.1
 # YAML linting (allow patch/minor, forbid major)
 # ---------------------------------------------------------------------------
 yamllint>=1.35.0,<2.0.0
-pre-commit==4.6.0
+pre-commit==4.6.1
 
 # ---------------------------------------------------------------------------
 # Shell linting
