@@ -38,8 +38,7 @@ jobs:
         github.event.pull_request.head.ref == 'chore/sync-main-to-develop' &&
         github.event.pull_request.base.ref == 'develop' &&
         github.event.pull_request.title == 'chore: sync main back to develop') &&
-      !((github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' ||
-          github.event.pull_request.user.login == 'ghost') &&
+      !(github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.head.ref == 'develop' &&
         github.event.pull_request.base.ref == 'main' &&
@@ -234,8 +233,7 @@ jobs:
               trusted=true
               trusted_kind=release-backsync
             fi
-          elif { [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
-              || [ "${PR_AUTHOR}" = "ghost" ]; } \
+          elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [ "${PR_HEAD}" = "develop" ] \
             && [ "${PR_BASE}" = "main" ] \
