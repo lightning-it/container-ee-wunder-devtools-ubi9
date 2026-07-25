@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
@@ -99,7 +99,7 @@ jobs:
           driver-opts: image=docker.io/moby/buildkit:buildx-stable-1@sha256:63db51c9b30208a7c2b1c40392c7ebb9ce2f85ba238a18a85420f8f5ea2d4684
 
       - name: Log in to Quay.io
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7  # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.QUAY_USERNAME }}
@@ -209,7 +209,7 @@ jobs:
 
       - name: Mint release automation App token
         id: release-app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.0.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
