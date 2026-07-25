@@ -5,19 +5,19 @@
     "@semantic-release/github": "^12.0.0",
     "@semantic-release/release-notes-generator": "^14.0.1",
     "conventional-changelog-conventionalcommits": "^9.0.0",
-    "renovate": "43.280.2",
+    "renovate": "43.280.4",
     "semantic-release": "^25.0.0",
     "fast-check": "4.9.0"
   },
   "overrides": {
     "@semantic-release/github": {
-      "undici": "7.28.0"
+      "undici": "7.29.0"
     },
     "@actions/http-client": {
-      "undici": "6.27.0"
+      "undici": "6.28.0"
     },
     "node-gyp": {
-      "undici": "6.27.0"
+      "undici": "6.28.0"
     },
     "js-yaml": "4.3.0",
     "npm": "11.18.0"
