@@ -39,7 +39,7 @@ target_arch="$(detect_targetarch)"
 case "$target_arch" in
   amd64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7"
-    renovate_default="docker.io/renovate/renovate:43.280.4@sha256:3f01d81d0587d6e0feb1aedfeeb625b34af6d6cc63e7f5fe8287293ec4f24823"
+    renovate_default="docker.io/renovate/renovate:43.280.5@sha256:2c5fe53717e28e3966ef017b7544d5bccc5ecd083a6d1e2d35ccf49330442704"
     trivy_default="docker.io/aquasec/trivy:0.72.0@sha256:c6e969c5662a546ad5de4a73c2a6b7a7c627f86d916903e175aa623af5b97ada"
     hadolint_image="docker.io/hadolint/hadolint:v2.14.0@sha256:e9dbf5113239ef2bf696d20c8f28d3019a47c26a38c98b89344d3e2846c4d5f8"
     docker_cli_image="docker.io/library/docker:29-cli@sha256:feb2d49bd65f274b3e4b4620beabe2f4691e5287e496da9fbc9830ed5f780676"
@@ -47,7 +47,7 @@ case "$target_arch" in
     ;;
   arm64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:33ffa3f1ad576165ea9c26f726884defdc411fb1fcb9ccc6a117b2f554ba1723"
-    renovate_default="docker.io/renovate/renovate:43.280.4@sha256:dc49805e6fa4958dae4e0894d0e146d4b60569275015c6e05a371804ecb1df87"
+    renovate_default="docker.io/renovate/renovate:43.280.5@sha256:ac9cad76058260ee3475c2000cc330a4b08372f4c3126ff3ca5fd27d58f38fa7"
     trivy_default="docker.io/aquasec/trivy:0.72.0@sha256:405015d1cd07a2630301169e694a5a420afc4dd553fb462189d4f109ba56a6df"
     hadolint_image="docker.io/hadolint/hadolint:v2.14.0@sha256:12cada422759f74155aabce5c9cfdc279090c2afeb9bc7a5138fe31098ab3093"
     docker_cli_image="docker.io/library/docker:29-cli@sha256:03ff3183ed048d713b8923026395726f643edc15dce37458ee775b40094a146f"
