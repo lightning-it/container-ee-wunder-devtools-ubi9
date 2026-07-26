@@ -547,7 +547,7 @@ jobs:
                         (.author.login // "") as $login
                         | ($login == $reviewer or $login == ($reviewer + "[bot]"))
                       )
-                    | select(.state == "COMMENTED")
+                    | select(.state == "COMMENTED" or .state == "APPROVED")
                     | select(.commit.oid == $head)
                     | (.id // empty)' <<<"${response}"
               )"
