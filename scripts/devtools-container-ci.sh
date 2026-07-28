@@ -158,6 +158,10 @@ validate_container_input() {
       ;;
   esac
 
+  command -v python3 >/dev/null 2>&1 || {
+    echo "ERROR: python3 is required to validate ${label}." >&2
+    exit 1
+  }
   workspace_root="$(pwd -P)"
   if ! resolved="$(
     python3 - "$path" <<'PY'

@@ -37,6 +37,7 @@ image="local/lightning-it-devtools:host-parity"
 # The single-quoted command is intentionally expanded in the container.
 # shellcheck disable=SC2016
 "$engine" run --rm \
+  --network none \
   --read-only \
   --cap-drop ALL \
   --security-opt no-new-privileges=true \
