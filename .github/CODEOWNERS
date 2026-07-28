@@ -1,0 +1,6 @@
+# Repository-wide ownership and mandatory review routing.
+* @lightning-it/ent:release
+
+/.github/ @lightning-it/ent:release
+/Dockerfile @lightning-it/ent:release
+/scripts/ @lightning-it/ent:release
