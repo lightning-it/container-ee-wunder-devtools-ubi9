@@ -24,8 +24,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  approve-shared-assets:
-    name: Approve trusted shared-assets PR
+  verify-shared-assets:
+    name: Verify trusted shared-assets PR
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
