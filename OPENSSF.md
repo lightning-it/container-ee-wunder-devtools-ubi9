@@ -7,9 +7,13 @@ This repository follows the Lightning IT shared OpenSSF readiness model generate
 - [Repository Topology and Shared Engineering Assets](https://lit.atlassian.net/wiki/spaces/LIT/pages/2878636297)
 - [Branching, Review and Release Governance](https://lit.atlassian.net/wiki/spaces/LIT/pages/2878603438)
 - [Mandatory CI Quality and Artifact Assurance](https://lit.atlassian.net/wiki/spaces/LIT/pages/2878636340)
+- [Distributed Test Ownership and Central Heavy Execution](https://lit.atlassian.net/wiki/spaces/LIT/pages/2886566105)
+- [ModuLix Lifecycle, Versioning and Release Evidence](https://lit.atlassian.net/wiki/spaces/LIT/pages/2886926524)
 - [Repository and Secure SDLC Standard](https://lit.atlassian.net/wiki/spaces/LIT/pages/2887778335)
+- [Technology Engineering Standards](https://lit.atlassian.net/wiki/spaces/LIT/pages/2886762765)
 - [Quality Gates and Definition of Done](https://lit.atlassian.net/wiki/spaces/LIT/pages/2887123058)
 - [OpenSSF and Software Supply Chain Assurance](https://lit.atlassian.net/wiki/spaces/LIT/pages/2887024876)
+- [Compliance Gaps and Migration Roadmap](https://lit.atlassian.net/wiki/spaces/LIT/pages/2886926554)
 
 ## Repository
 
