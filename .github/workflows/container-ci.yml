@@ -22,6 +22,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Verify Codex and Copilot instruction parity
+        run: python3 scripts/lit-push-ready.py instructions
+
       - name: Run container CI parity checks
         env:
           WUNDER_DEVTOOLS_DOCKER_SOCKET: required

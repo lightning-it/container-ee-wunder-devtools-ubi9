@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""Create commit-bound local pipeline and Copilot review evidence."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(os.environ.get("LIT_REPOSITORY_ROOT", Path(__file__).resolve().parents[1])).resolve()
+CONFIG = ROOT / ".lit" / "push-ready.json"
+EVIDENCE = ROOT / ".git" / "lit-push-ready-evidence.json"
+COPILOT = ROOT / ".github" / "copilot-instructions.md"
+AGENTS = ROOT / "AGENTS.md"
+PASS_MARKER = "PUSH_READY: PASS"
+SECRET_PATH_PARTS = {".env", "id_rsa", "id_ed25519", "secrets", "vault-password"}
+
+
+def run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=ROOT,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.STDOUT if capture else None,
+    )
+
+
+def git_output(*args: str) -> str:
+    result = run(["git", *args], capture=True)
+    if result.returncode:
+        raise RuntimeError(result.stdout.strip())
+    return result.stdout
+
+
+def tree_fingerprint() -> str:
+    payload = {
+        "head": git_output("rev-parse", "HEAD").strip(),
+        "status": git_output("status", "--porcelain=v1", "--untracked-files=all"),
+        "diff": git_output("diff", "--binary", "HEAD"),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def load_config() -> dict:
+    if not CONFIG.is_file():
+        raise RuntimeError(f"missing required configuration: {CONFIG.relative_to(ROOT)}")
+    data = json.loads(CONFIG.read_text())
+    if data.get("version") != 1 or not isinstance(data.get("checks"), list):
+        raise RuntimeError("push-ready configuration must use version 1 and define checks")
+    return data
+
+
+def instructions_digest() -> str:
+    if not AGENTS.is_file() or not COPILOT.is_file():
+        raise RuntimeError("AGENTS.md and .github/copilot-instructions.md are required")
+    return hashlib.sha256(AGENTS.read_bytes()).hexdigest()
+
+
+def check_instruction_contract() -> None:
+    expected = instructions_digest()
+    marker = f"AGENTS_SHA256: {expected}"
+    if marker not in COPILOT.read_text():
+        raise RuntimeError(
+            "Copilot instructions are stale; run "
+            "`python3 scripts/lit-push-ready.py sync-instructions`"
+        )
+
+
+def sync_instructions() -> None:
+    if not AGENTS.is_file() or not COPILOT.is_file():
+        raise RuntimeError("AGENTS.md and .github/copilot-instructions.md are required")
+    lines = COPILOT.read_text().splitlines()
+    lines = [
+        line
+        for line in lines
+        if not line.startswith("<!-- AGENTS_SHA256:")
+        and line
+        != "<!-- Managed contract: Codex and Copilot must apply AGENTS.md. -->"
+    ]
+    lines.extend(
+        [
+            "",
+            "<!-- Managed contract: Codex and Copilot must apply AGENTS.md. -->",
+            f"<!-- AGENTS_SHA256: {instructions_digest()} -->",
+        ]
+    )
+    COPILOT.write_text("\n".join(lines) + "\n")
+
+
+def execute_checks(config: dict) -> list[dict]:
+    results: list[dict] = []
+    for check in config["checks"]:
+        name = check.get("name")
+        command = check.get("command")
+        if not name or not isinstance(command, list) or not command:
+            raise RuntimeError("each check requires a name and non-empty command array")
+        started = time.monotonic()
+        print(f"==> {name}: {shlex.join(command)}", flush=True)
+        result = run(command)
+        elapsed = round(time.monotonic() - started, 3)
+        results.append(
+            {
+                "name": name,
+                "command": command,
+                "exit_code": result.returncode,
+                "duration_seconds": elapsed,
+            }
+        )
+        if result.returncode:
+            raise RuntimeError(f"check failed: {name}")
+    return results
+
+
+def changed_paths() -> list[str]:
+    values = git_output("status", "--porcelain=v1", "--untracked-files=all").splitlines()
+    return [line[3:] for line in values if len(line) > 3]
+
+
+def ensure_review_safe() -> None:
+    unsafe = []
+    for path in changed_paths():
+        lowered = path.lower()
+        if any(part in lowered for part in SECRET_PATH_PARTS):
+            unsafe.append(path)
+    if unsafe:
+        raise RuntimeError(
+            "Copilot review refused for secret-like paths: " + ", ".join(sorted(unsafe))
+        )
+
+
+def copilot_review(config: dict) -> dict:
+    ensure_review_safe()
+    executable = shutil.which("copilot")
+    if executable is None:
+        raise RuntimeError("required Copilot CLI executable is unavailable")
+    diff = git_output("diff", "--no-ext-diff", "--unified=40", "HEAD")
+    max_bytes = int(config.get("copilot", {}).get("max_diff_bytes", 200_000))
+    encoded = diff.encode()
+    if len(encoded) > max_bytes:
+        raise RuntimeError(f"planned diff exceeds Copilot review limit of {max_bytes} bytes")
+    prompt = (
+        "Review the following planned Lightning IT change. Apply AGENTS.md and "
+        ".github/copilot-instructions.md. Report correctness, security, test, "
+        "scope and expected GitHub Actions problems. Do not modify files or run "
+        "commands. End with exactly 'PUSH_READY: PASS' only when there is no "
+        "blocking finding; otherwise end with 'PUSH_READY: BLOCKED'.\n\n"
+        + diff
+    )
+    started = time.monotonic()
+    with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8") as output:
+        result = subprocess.run(
+            [
+                executable,
+                "-p",
+                prompt,
+                "--silent",
+                "--available-tools",
+                "view,grep,glob",
+                "--allow-tool",
+                "read",
+            ],
+            cwd=ROOT,
+            check=False,
+            text=True,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+        )
+        output.seek(0)
+        review = output.read()
+    if result.returncode or PASS_MARKER not in review:
+        print(review)
+        raise RuntimeError("Copilot review did not produce a passing result")
+    digest = hashlib.sha256(review.encode()).hexdigest()
+    print(review)
+    return {
+        "command": "copilot -p <review-prompt> --silent --available-tools view,grep,glob --allow-tool read",
+        "duration_seconds": round(time.monotonic() - started, 3),
+        "output_sha256": digest,
+        "result": "pass",
+    }
+
+
+def write_evidence(config: dict, checks: list[dict], review: dict) -> None:
+    EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": 1,
+        "tree_fingerprint": tree_fingerprint(),
+        "head": git_output("rev-parse", "HEAD").strip(),
+        "agents_sha256": instructions_digest(),
+        "checks": checks,
+        "copilot_review": review,
+        "remote_only_checks": config.get("remote_only_checks", []),
+        "created_at_epoch": int(time.time()),
+    }
+    EVIDENCE.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def verify_evidence() -> None:
+    if not EVIDENCE.is_file():
+        raise RuntimeError("push-ready evidence does not exist")
+    payload = json.loads(EVIDENCE.read_text())
+    if payload.get("tree_fingerprint") != tree_fingerprint():
+        raise RuntimeError("push-ready evidence is stale for the current Git tree")
+    if payload.get("agents_sha256") != instructions_digest():
+        raise RuntimeError("push-ready evidence used different AGENTS.md instructions")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "command",
+        choices=(
+            "instructions",
+            "validate",
+            "review",
+            "push-ready",
+            "verify",
+            "sync-instructions",
+        ),
+    )
+    args = parser.parse_args()
+    try:
+        if args.command == "sync-instructions":
+            sync_instructions()
+            return 0
+        config = load_config()
+        check_instruction_contract()
+        if args.command == "instructions":
+            return 0
+        if args.command == "verify":
+            verify_evidence()
+            return 0
+        if args.command == "validate":
+            execute_checks(config)
+            return 0
+        if args.command == "review":
+            copilot_review(config)
+            return 0
+        checks = execute_checks(config)
+        review = copilot_review(config)
+        write_evidence(config, checks, review)
+        verify_evidence()
+        print(f"Push-ready evidence: {EVIDENCE}")
+        return 0
+    except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+        print(f"push-ready: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

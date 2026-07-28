@@ -137,10 +137,6 @@ validate_container_input() {
   local path="$3"
   local resolved workspace_root
 
-  if ! command -v realpath >/dev/null 2>&1; then
-    echo "ERROR: realpath is required to validate configured container build paths." >&2
-    exit 1
-  fi
   if [ -z "$path" ] || [[ "$path" =~ [[:cntrl:]] ]]; then
     echo "ERROR: configured ${label} must be a non-empty path without control characters." >&2
     exit 1
@@ -163,7 +159,17 @@ validate_container_input() {
   esac
 
   workspace_root="$(pwd -P)"
-  if ! resolved="$(realpath -e -- "$path" 2>/dev/null)"; then
+  if ! resolved="$(
+    python3 - "$path" <<'PY'
+import pathlib
+import sys
+
+try:
+    print(pathlib.Path(sys.argv[1]).resolve(strict=True))
+except (OSError, RuntimeError):
+    raise SystemExit(1)
+PY
+  )"; then
     echo "ERROR: configured ${label} does not exist: ${path}" >&2
     exit 1
   fi
@@ -371,9 +377,13 @@ run_contract_tests() {
 
   case "$repo_name" in
     container-ee-wunder-devtools-ubi9)
-      docker run --rm "${validation_container_args[@]}" "$image" bash -lc '
+      # Copilot extracts and maps a signed native runtime from its cache.
+      docker run --rm "${validation_container_args[@]}" \
+        --tmpfs "/copilot-cache:rw,exec,nosuid,nodev,size=256m" \
+        -e XDG_CACHE_HOME=/copilot-cache \
+        "$image" bash -lc '
         set -euo pipefail
-        export XDG_CACHE_HOME=/tmp/.cache
+        export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/.cache}"
         mkdir -p "$XDG_CACHE_HOME"
         terraform -version
         tflint --version
@@ -382,6 +392,8 @@ run_contract_tests() {
         ansible-lint --version
         pre-commit --version
         gh --version
+        node --version
+        copilot --version
         docker --version
         antsibull-changelog --version
       '
@@ -447,7 +459,7 @@ run_vulnerability_scan() {
       --cache-dir /var/cache/trivy \
       --scanners vuln \
       --ignore-unfixed \
-      "${trivy_ignore_args[@]}" \
+      ${trivy_ignore_args[@]+"${trivy_ignore_args[@]}"} \
       --severity HIGH \
       --exit-code 0 \
       "$image"
@@ -462,7 +474,7 @@ run_vulnerability_scan() {
       --cache-dir /var/cache/trivy \
       --scanners vuln \
       --ignore-unfixed \
-      "${trivy_ignore_args[@]}" \
+      ${trivy_ignore_args[@]+"${trivy_ignore_args[@]}"} \
       --severity CRITICAL \
       --exit-code 1 \
       "$image"
