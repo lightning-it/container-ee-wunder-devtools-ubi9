@@ -396,8 +396,6 @@ run_contract_tests() {
         ansible-lint --version
         pre-commit --version
         gh --version
-        node --version
-        copilot --version
         docker --version
         antsibull-changelog --version
       '
