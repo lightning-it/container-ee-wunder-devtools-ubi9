@@ -146,8 +146,29 @@ def execute_checks(config: dict) -> list[dict]:
 
 
 def changed_paths() -> list[str]:
-    values = git_output("status", "--porcelain=v1", "--untracked-files=all").splitlines()
-    return [line[3:] for line in values if len(line) > 3]
+    values = git_output(
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+    ).split("\0")
+    paths: list[str] = []
+    index = 0
+    while index < len(values):
+        entry = values[index]
+        index += 1
+        if not entry:
+            continue
+        if len(entry) < 4:
+            raise RuntimeError("malformed porcelain status entry")
+        status = entry[:2]
+        paths.append(entry[3:])
+        if "R" in status or "C" in status:
+            if index >= len(values) or not values[index]:
+                raise RuntimeError("rename/copy status is missing its paired path")
+            paths.append(values[index])
+            index += 1
+    return paths
 
 
 def ensure_review_safe(diff: str) -> None:
