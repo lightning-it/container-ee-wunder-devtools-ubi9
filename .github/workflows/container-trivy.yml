@@ -3,13 +3,8 @@
 name: Trivy
 
 on:
-  pull_request:
-    paths:
-      - "Containerfile"
-      - "Dockerfile"
-      - ".dockerignore"
-      - "packaging/container/**"
-      - ".github/workflows/container-trivy.yml"
+  # Trivy is a required branch-protection context and must exist for every PR.
+  pull_request: {}
   push:
     branches: ["develop", "main", "master"]
     paths:

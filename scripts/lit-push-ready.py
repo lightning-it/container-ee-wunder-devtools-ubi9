@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -56,16 +57,66 @@ def evidence_path() -> Path:
     return git_dir.resolve() / "lit-push-ready-evidence.json"
 
 
+def untracked_file_hashes(max_bytes: int = 100_000_000) -> dict[str, str]:
+    names = git_output("ls-files", "--others", "--exclude-standard", "-z")
+    hashes: dict[str, str] = {}
+    total = 0
+    root = ROOT.resolve()
+    for name in (entry for entry in names.split("\0") if entry):
+        path = ROOT / name
+        if path.is_symlink():
+            raise RuntimeError(f"Cannot fingerprint untracked symbolic link: {name}")
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"Cannot fingerprint escaping or unresolvable untracked path: {name}"
+            ) from exc
+        if not resolved.is_file():
+            raise RuntimeError(
+                f"Cannot fingerprint non-regular untracked path: {name}"
+            )
+        digest = hashlib.sha256()
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                resolved,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+            )
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise RuntimeError(
+                    f"Cannot fingerprint non-regular untracked path: {name}"
+                )
+            with os.fdopen(descriptor, "rb") as stream:
+                descriptor = -1
+                while chunk := stream.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise RuntimeError(
+                            "Untracked fingerprint input exceeds "
+                            f"{max_bytes} bytes"
+                        )
+                    digest.update(chunk)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Cannot read untracked path for fingerprint: {name}"
+            ) from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        hashes[name] = digest.hexdigest()
+    return hashes
+
+
 def tree_fingerprint() -> str:
-    untracked = git_output("ls-files", "--others", "--exclude-standard").splitlines()
     payload = {
         "head": git_output("rev-parse", "HEAD").strip(),
         "status": git_output("status", "--porcelain=v1", "--untracked-files=all"),
         "diff": git_output("diff", "--no-ext-diff", "--binary", "HEAD"),
-        "untracked": {
-            path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-            for path in untracked
-        },
+        "untracked": untracked_file_hashes(),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -124,10 +175,21 @@ def sync_instructions() -> None:
 def execute_checks(config: dict) -> list[dict]:
     results: list[dict] = []
     for check in config["checks"]:
+        if not isinstance(check, dict):
+            raise RuntimeError("each check must be an object")
         name = check.get("name")
         command = check.get("command")
-        if not name or not isinstance(command, list) or not command:
-            raise RuntimeError("each check requires a name and non-empty command array")
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(command, list)
+            or not command
+            or any(not isinstance(argument, str) for argument in command)
+        ):
+            raise RuntimeError(
+                "each check requires a non-empty string name and "
+                "non-empty command array of strings"
+            )
         started = time.monotonic()
         print(f"==> {name}: {shlex.join(command)}", flush=True)
         result = run(command)
@@ -146,13 +208,34 @@ def execute_checks(config: dict) -> list[dict]:
 
 
 def changed_paths() -> list[str]:
-    values = git_output("status", "--porcelain=v1", "--untracked-files=all").splitlines()
-    return [line[3:] for line in values if len(line) > 3]
+    values = git_output(
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+    ).split("\0")
+    paths: list[str] = []
+    index = 0
+    while index < len(values):
+        entry = values[index]
+        index += 1
+        if not entry:
+            continue
+        if len(entry) < 4:
+            raise RuntimeError("malformed porcelain status entry")
+        status = entry[:2]
+        paths.append(entry[3:])
+        if "R" in status or "C" in status:
+            if index >= len(values) or not values[index]:
+                raise RuntimeError("rename/copy status is missing its paired path")
+            paths.append(values[index])
+            index += 1
+    return paths
 
 
 def ensure_review_safe(diff: str) -> None:
     unsafe = []
-    for path in changed_paths():
+    for path in sorted(set(changed_paths() + planned_paths())):
         lowered = path.lower()
         if any(part in lowered for part in SECRET_PATH_PARTS):
             unsafe.append(path)
@@ -160,8 +243,46 @@ def ensure_review_safe(diff: str) -> None:
         raise RuntimeError(
             "Copilot review refused for secret-like paths: " + ", ".join(sorted(unsafe))
         )
-    if any(pattern.search(diff) for pattern in SECRET_CONTENT_PATTERNS):
-        raise RuntimeError("Copilot review refused because the planned diff contains secret-like content")
+    review_text = diff + "\n" + untracked_review_text()
+    if any(pattern.search(review_text) for pattern in SECRET_CONTENT_PATTERNS):
+        raise RuntimeError(
+            "Copilot review refused because the planned review input "
+            "contains secret-like content"
+        )
+
+
+def untracked_review_text(max_bytes: int = 1_000_000) -> str:
+    names = git_output("ls-files", "--others", "--exclude-standard", "-z")
+    chunks: list[str] = []
+    total = 0
+    for name in (entry for entry in names.split("\0") if entry):
+        path = ROOT / name
+        if path.is_symlink():
+            raise RuntimeError(
+                f"Copilot review refused for untracked symbolic link: {name}"
+            )
+        try:
+            path.resolve().relative_to(ROOT.resolve())
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"Copilot review refused for unsafe untracked path: {name}"
+            ) from exc
+        remaining = max_bytes - total
+        try:
+            with path.open("rb") as stream:
+                payload = stream.read(remaining + 1)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Copilot review could not inspect untracked path: {name}"
+            ) from exc
+        if len(payload) > remaining:
+            raise RuntimeError(
+                "Copilot review refused because untracked content exceeds "
+                f"{max_bytes} bytes"
+            )
+        total += len(payload)
+        chunks.append(payload.decode("latin-1"))
+    return "\n".join(chunks)
 
 
 def planned_diff() -> str:
@@ -173,14 +294,32 @@ def planned_diff() -> str:
         capture=True,
     )
     if upstream.returncode == 0:
-        candidate = git_output(
+        return git_output(
             "diff", "--no-ext-diff", "--unified=40", f"{upstream.stdout.strip()}...HEAD"
         )
-        if candidate:
-            return candidate
     return git_output(
         "diff", "--no-ext-diff", "--unified=40", EMPTY_TREE, "HEAD"
     )
+
+
+def planned_paths() -> list[str]:
+    worktree = git_output("diff", "--name-only", "-z", "HEAD")
+    if worktree:
+        return [path for path in worktree.split("\0") if path]
+    upstream = run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        capture=True,
+    )
+    if upstream.returncode == 0:
+        names = git_output(
+            "diff",
+            "--name-only",
+            "-z",
+            f"{upstream.stdout.strip()}...HEAD",
+        )
+        return [path for path in names.split("\0") if path]
+    names = git_output("diff", "--name-only", "-z", EMPTY_TREE, "HEAD")
+    return [path for path in names.split("\0") if path]
 
 
 def copilot_review(config: dict) -> dict:
@@ -202,24 +341,43 @@ def copilot_review(config: dict) -> dict:
         + diff
     )
     started = time.monotonic()
-    with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8") as output:
-        result = subprocess.run(
-            [
-                executable,
-                "-p",
-                prompt,
-                "--silent",
-                "--available-tools",
-                "view,grep,glob",
-                "--allow-tool",
-                "read",
-            ],
-            cwd=ROOT,
-            check=False,
-            text=True,
-            stdout=output,
-            stderr=subprocess.STDOUT,
+    raw_timeout = config.get("copilot", {}).get("timeout_seconds", 300)
+    if isinstance(raw_timeout, bool):
+        raise RuntimeError(
+            "Copilot review timeout must be an integer between 1 and 1800 seconds"
         )
+    try:
+        timeout_seconds = int(raw_timeout)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Copilot review timeout must be an integer between 1 and 1800 seconds"
+        ) from exc
+    if timeout_seconds <= 0 or timeout_seconds > 1800:
+        raise RuntimeError("Copilot review timeout must be between 1 and 1800 seconds")
+    with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8") as output:
+        try:
+            result = subprocess.run(
+                [
+                    executable,
+                    "-p",
+                    prompt,
+                    "--silent",
+                    "--available-tools",
+                    "view,grep,glob",
+                    "--allow-tool",
+                    "read",
+                ],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Copilot review timed out after {timeout_seconds} seconds"
+            ) from exc
         output.seek(0)
         review = output.read()
     final_line = next((line.strip() for line in reversed(review.splitlines()) if line.strip()), "")
