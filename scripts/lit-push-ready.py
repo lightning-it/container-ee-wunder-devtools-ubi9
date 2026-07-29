@@ -57,6 +57,66 @@ def evidence_path() -> Path:
     return git_dir.resolve() / "lit-push-ready-evidence.json"
 
 
+def open_untracked_regular(name: str, *, purpose: str) -> int:
+    """Open an untracked file without following any path-component symlink."""
+    required_flags = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
+    missing_flags = [
+        flag for flag in required_flags if not isinstance(getattr(os, flag, None), int)
+    ]
+    if missing_flags or os.open not in os.supports_dir_fd:
+        unsupported = ", ".join(missing_flags) or "open(dir_fd=...)"
+        raise RuntimeError(
+            f"{purpose} requires unavailable safe-open capability: {unsupported}"
+        )
+
+    candidate = Path(name)
+    parts = candidate.parts
+    if (
+        candidate.is_absolute()
+        or not parts
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        raise RuntimeError(f"{purpose} refused for unsafe untracked path: {name}")
+
+    directory_flags = (
+        os.O_RDONLY
+        | os.O_CLOEXEC
+        | os.O_DIRECTORY
+        | os.O_NOFOLLOW
+    )
+    file_flags = (
+        os.O_RDONLY
+        | os.O_CLOEXEC
+        | os.O_NOFOLLOW
+        | os.O_NONBLOCK
+    )
+    directory_descriptors: list[int] = []
+    descriptor = -1
+    keep_descriptor = False
+    try:
+        current = os.open(ROOT, directory_flags)
+        directory_descriptors.append(current)
+        for component in parts[:-1]:
+            current = os.open(component, directory_flags, dir_fd=current)
+            directory_descriptors.append(current)
+        descriptor = os.open(parts[-1], file_flags, dir_fd=current)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise RuntimeError(
+                f"{purpose} refused for non-regular untracked path: {name}"
+            )
+        keep_descriptor = True
+        return descriptor
+    except OSError as exc:
+        raise RuntimeError(
+            f"{purpose} could not safely inspect untracked path: {name}"
+        ) from exc
+    finally:
+        if descriptor >= 0 and not keep_descriptor:
+            os.close(descriptor)
+        for directory_descriptor in reversed(directory_descriptors):
+            os.close(directory_descriptor)
+
+
 def untracked_file_hashes(max_bytes: int = 100_000_000) -> dict[str, str]:
     names = git_output("ls-files", "--others", "--exclude-standard", "-z")
     hashes: dict[str, str] = {}
@@ -78,18 +138,8 @@ def untracked_file_hashes(max_bytes: int = 100_000_000) -> dict[str, str]:
                 f"Cannot fingerprint non-regular untracked path: {name}"
             )
         digest = hashlib.sha256()
-        descriptor = -1
+        descriptor = open_untracked_regular(name, purpose="Fingerprint")
         try:
-            descriptor = os.open(
-                resolved,
-                os.O_RDONLY
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_NONBLOCK", 0),
-            )
-            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                raise RuntimeError(
-                    f"Cannot fingerprint non-regular untracked path: {name}"
-                )
             with os.fdopen(descriptor, "rb") as stream:
                 descriptor = -1
                 while chunk := stream.read(1024 * 1024):
@@ -268,13 +318,19 @@ def untracked_review_text(max_bytes: int = 1_000_000) -> str:
                 f"Copilot review refused for unsafe untracked path: {name}"
             ) from exc
         remaining = max_bytes - total
+        descriptor = -1
         try:
-            with path.open("rb") as stream:
+            descriptor = open_untracked_regular(name, purpose="Copilot review")
+            with os.fdopen(descriptor, "rb") as stream:
+                descriptor = -1
                 payload = stream.read(remaining + 1)
         except OSError as exc:
             raise RuntimeError(
                 f"Copilot review could not inspect untracked path: {name}"
             ) from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
         if len(payload) > remaining:
             raise RuntimeError(
                 "Copilot review refused because untracked content exceeds "
