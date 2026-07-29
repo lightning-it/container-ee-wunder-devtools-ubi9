@@ -223,9 +223,7 @@ jobs:
           elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == backsync/release-v*-to-develop ]] \
-            && [ "${PR_BASE}" = "develop" ] \
-            && jq -e 'index("skip-changelog") != null' \
-              <<<"${PR_LABELS}" >/dev/null; then
+            && [ "${PR_BASE}" = "develop" ]; then
             release_tag="${PR_HEAD#backsync/release-}"
             release_tag="${release_tag%-to-develop}"
             if [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
