@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(git rev-parse --show-toplevel)"
+command -v git >/dev/null 2>&1 || {
+  echo "git is required for the host parity probe." >&2
+  exit 1
+}
+command -v python3 >/dev/null 2>&1 || {
+  echo "python3 is required for the host parity probe." >&2
+  exit 1
+}
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "The host parity probe must run inside a Git working tree." >&2
+  exit 1
+}
 cd "$repo_root"
 
 engine="${WUNDER_CONTAINER_ENGINE:-}"

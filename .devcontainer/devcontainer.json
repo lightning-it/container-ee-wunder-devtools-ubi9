@@ -10,6 +10,7 @@
   "containerEnv": {
     "HOME": "/tmp/wunder"
   },
+  "postStartCommand": "mkdir -p /tmp/wunder",
   "runArgs": [
     "--read-only",
     "--cap-drop=ALL",

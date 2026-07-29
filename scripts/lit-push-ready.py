@@ -21,6 +21,8 @@ CONFIG = ROOT / ".lit" / "push-ready.json"
 COPILOT = ROOT / ".github" / "copilot-instructions.md"
 AGENTS = ROOT / "AGENTS.md"
 PASS_MARKER = "PUSH_READY: PASS"
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+CONTRACT_LINE = "<!-- Managed contract: Codex and Copilot must apply AGENTS.md. -->"
 SECRET_PATH_PARTS = {".env", "id_rsa", "id_ed25519", "secrets", "vault-password"}
 SECRET_CONTENT_PATTERNS = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
@@ -87,8 +89,9 @@ def instructions_digest() -> str:
 
 def check_instruction_contract() -> None:
     expected = instructions_digest()
-    marker = f"AGENTS_SHA256: {expected}"
-    if marker not in COPILOT.read_text(encoding="utf-8"):
+    marker = f"<!-- AGENTS_SHA256: {expected} -->"
+    lines = COPILOT.read_text(encoding="utf-8").splitlines()
+    if lines[-2:] != [CONTRACT_LINE, marker]:
         raise RuntimeError(
             "Copilot instructions are stale; run "
             "`python3 scripts/lit-push-ready.py sync-instructions`"
@@ -104,12 +107,14 @@ def sync_instructions() -> None:
         for line in lines
         if not line.startswith("<!-- AGENTS_SHA256:")
         and line
-        != "<!-- Managed contract: Codex and Copilot must apply AGENTS.md. -->"
+        != CONTRACT_LINE
     ]
+    while lines and not lines[-1]:
+        lines.pop()
     lines.extend(
         [
             "",
-            "<!-- Managed contract: Codex and Copilot must apply AGENTS.md. -->",
+            CONTRACT_LINE,
             f"<!-- AGENTS_SHA256: {instructions_digest()} -->",
         ]
     )
@@ -173,7 +178,9 @@ def planned_diff() -> str:
         )
         if candidate:
             return candidate
-    return git_output("show", "--no-ext-diff", "--format=", "--unified=40", "HEAD")
+    return git_output(
+        "diff", "--no-ext-diff", "--unified=40", EMPTY_TREE, "HEAD"
+    )
 
 
 def copilot_review(config: dict) -> dict:
