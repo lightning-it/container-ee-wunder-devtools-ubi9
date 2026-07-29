@@ -99,7 +99,7 @@ jobs:
           driver-opts: image=docker.io/moby/buildkit:buildx-stable-1@sha256:63db51c9b30208a7c2b1c40392c7ebb9ce2f85ba238a18a85420f8f5ea2d4684
 
       - name: Log in to Quay.io
-        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c  # v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7  # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.QUAY_USERNAME }}
@@ -132,6 +132,14 @@ jobs:
             org.opencontainers.image.created=${{ env.CREATED }}
             org.opencontainers.image.title=${{ github.event.repository.name }}
             org.opencontainers.image.description=${{ github.event.repository.description }}
+
+      - name: Reclaim build cache before release assurance
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx prune --all --force
+          docker builder prune --all --force
+          df -h /
 
       - name: Verify, scan, sign, and summarize release image
         shell: bash
