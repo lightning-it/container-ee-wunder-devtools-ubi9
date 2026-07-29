@@ -4,17 +4,24 @@ This repository follows the Lightning IT shared OpenSSF readiness model generate
 
 ## Governing Decisions And Standards
 
-- [Repository Topology and Shared Engineering Assets](https://lit.atlassian.net/wiki/spaces/LIT/pages/2878636297)
-- [Branching, Review and Release Governance](https://lit.atlassian.net/wiki/spaces/LIT/pages/2878603438)
-- [Transitional Self-Approval for Protected Deployments](https://lit.atlassian.net/wiki/spaces/LIT/pages/2888892417)
-- [Mandatory CI Quality and Artifact Assurance](https://lit.atlassian.net/wiki/spaces/LIT/pages/2878636340)
-- [Distributed Test Ownership and Central Heavy Execution](https://lit.atlassian.net/wiki/spaces/LIT/pages/2886566105)
-- [ModuLix Lifecycle, Versioning and Release Evidence](https://lit.atlassian.net/wiki/spaces/LIT/pages/2886926524)
-- [Repository and Secure SDLC Standard](https://lit.atlassian.net/wiki/spaces/LIT/pages/2887778335)
-- [Technology Engineering Standards](https://lit.atlassian.net/wiki/spaces/LIT/pages/2886762765)
-- [Quality Gates and Definition of Done](https://lit.atlassian.net/wiki/spaces/LIT/pages/2887123058)
-- [OpenSSF and Software Supply Chain Assurance](https://lit.atlassian.net/wiki/spaces/LIT/pages/2887024876)
-- [Compliance Gaps and Migration Roadmap](https://lit.atlassian.net/wiki/spaces/LIT/pages/2886926554)
+The controlled internal architecture register contains the following governing
+decisions. Internal knowledge-base locations are deliberately not published in
+this public repository:
+
+- Repository Topology and Shared Engineering Assets
+- Branching, Review and Release Governance
+- Transitional Self-Approval for Protected Deployments
+- Mandatory CI Quality and Artifact Assurance
+- Distributed Test Ownership and Central Heavy Execution
+- ModuLix Lifecycle, Versioning and Release Evidence
+- Repository and Secure SDLC Standard
+- Technology Engineering Standards
+- Quality Gates and Definition of Done
+- OpenSSF and Software Supply Chain Assurance
+- Compliance Gaps and Migration Roadmap
+
+The public implementation is independently reviewable through this repository's
+policy files, protected workflows, required checks, and release evidence.
 
 ## Repository
 
