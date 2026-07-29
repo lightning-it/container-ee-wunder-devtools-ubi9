@@ -341,10 +341,13 @@ def copilot_review(config: dict) -> dict:
         + diff
     )
     started = time.monotonic()
-    try:
-        timeout_seconds = int(
-            config.get("copilot", {}).get("timeout_seconds", 300)
+    raw_timeout = config.get("copilot", {}).get("timeout_seconds", 300)
+    if isinstance(raw_timeout, bool):
+        raise RuntimeError(
+            "Copilot review timeout must be an integer between 1 and 1800 seconds"
         )
+    try:
+        timeout_seconds = int(raw_timeout)
     except (TypeError, ValueError) as exc:
         raise RuntimeError(
             "Copilot review timeout must be an integer between 1 and 1800 seconds"
