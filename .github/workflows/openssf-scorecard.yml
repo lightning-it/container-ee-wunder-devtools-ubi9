@@ -17,6 +17,7 @@ jobs:
     name: OpenSSF Scorecard
     runs-on: ubuntu-24.04
     permissions:
+      actions: write
       contents: read
       issues: read
       pull-requests: read
