@@ -124,6 +124,8 @@ def sync_instructions() -> None:
 def execute_checks(config: dict) -> list[dict]:
     results: list[dict] = []
     for check in config["checks"]:
+        if not isinstance(check, dict):
+            raise RuntimeError("each check must be an object")
         name = check.get("name")
         command = check.get("command")
         if not name or not isinstance(command, list) or not command:
@@ -173,7 +175,7 @@ def changed_paths() -> list[str]:
 
 def ensure_review_safe(diff: str) -> None:
     unsafe = []
-    for path in changed_paths():
+    for path in sorted(set(changed_paths() + planned_paths())):
         lowered = path.lower()
         if any(part in lowered for part in SECRET_PATH_PARTS):
             unsafe.append(path)
@@ -181,8 +183,46 @@ def ensure_review_safe(diff: str) -> None:
         raise RuntimeError(
             "Copilot review refused for secret-like paths: " + ", ".join(sorted(unsafe))
         )
-    if any(pattern.search(diff) for pattern in SECRET_CONTENT_PATTERNS):
-        raise RuntimeError("Copilot review refused because the planned diff contains secret-like content")
+    review_text = diff + "\n" + untracked_review_text()
+    if any(pattern.search(review_text) for pattern in SECRET_CONTENT_PATTERNS):
+        raise RuntimeError(
+            "Copilot review refused because the planned review input "
+            "contains secret-like content"
+        )
+
+
+def untracked_review_text(max_bytes: int = 1_000_000) -> str:
+    names = git_output("ls-files", "--others", "--exclude-standard", "-z")
+    chunks: list[str] = []
+    total = 0
+    for name in (entry for entry in names.split("\0") if entry):
+        path = ROOT / name
+        if path.is_symlink():
+            raise RuntimeError(
+                f"Copilot review refused for untracked symbolic link: {name}"
+            )
+        try:
+            path.resolve().relative_to(ROOT.resolve())
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Copilot review refused for escaping untracked path: {name}"
+            ) from exc
+        remaining = max_bytes - total
+        try:
+            with path.open("rb") as stream:
+                payload = stream.read(remaining + 1)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Copilot review could not inspect untracked path: {name}"
+            ) from exc
+        if len(payload) > remaining:
+            raise RuntimeError(
+                "Copilot review refused because untracked content exceeds "
+                f"{max_bytes} bytes"
+            )
+        total += len(payload)
+        chunks.append(payload.decode("latin-1"))
+    return "\n".join(chunks)
 
 
 def planned_diff() -> str:
@@ -194,14 +234,32 @@ def planned_diff() -> str:
         capture=True,
     )
     if upstream.returncode == 0:
-        candidate = git_output(
+        return git_output(
             "diff", "--no-ext-diff", "--unified=40", f"{upstream.stdout.strip()}...HEAD"
         )
-        if candidate:
-            return candidate
     return git_output(
         "diff", "--no-ext-diff", "--unified=40", EMPTY_TREE, "HEAD"
     )
+
+
+def planned_paths() -> list[str]:
+    worktree = git_output("diff", "--name-only", "-z", "HEAD")
+    if worktree:
+        return [path for path in worktree.split("\0") if path]
+    upstream = run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        capture=True,
+    )
+    if upstream.returncode == 0:
+        names = git_output(
+            "diff",
+            "--name-only",
+            "-z",
+            f"{upstream.stdout.strip()}...HEAD",
+        )
+        return [path for path in names.split("\0") if path]
+    names = git_output("diff", "--name-only", "-z", EMPTY_TREE, "HEAD")
+    return [path for path in names.split("\0") if path]
 
 
 def copilot_review(config: dict) -> dict:
