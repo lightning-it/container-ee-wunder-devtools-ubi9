@@ -154,6 +154,7 @@ jobs:
         run: |
           set -euo pipefail
           tags="$IMAGE_NAME:$RELEASE_TAG,$IMAGE_NAME:$VERSION,$IMAGE_NAME:sha-$SHORT_SHA,$IMAGE_NAME:latest"
+          asset_base="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
           TESTED_MATRIX="ubuntu-latest,docker-buildx,trivy,release-publish" \
           PASSED_JOBS="Build & push image to Quay.io" \
           BUILT_ARTIFACTS="$IMAGE_NAME@$IMAGE_DIGEST" \
@@ -163,6 +164,16 @@ jobs:
           RELEASE_TAG="$RELEASE_TAG" \
           RELEASE_VERSION="$VERSION" \
           SECURITY_SCAN_RESULT="trivy-completed" \
+          TRIVY_STATUS="passed" \
+          TRIVY_RELEASE_GATE="critical-fail-closed" \
+          TRIVY_SEVERITY="CRITICAL" \
+          TRIVY_REPORT="$asset_base/sbom.cdx.json" \
+          SBOM_URL="$asset_base/sbom.cdx.json" \
+          PROVENANCE_URL="$asset_base/release-provenance.intoto.jsonl" \
+          SIGNATURE_URL="$asset_base/SHA256SUMS.sigstore.json" \
+          PUBLISH_STATUS="published" \
+          QUAY_PUBLISH_STATUS="published" \
+          PUBLISHED_IMAGE_URL="$IMAGE_NAME@$IMAGE_DIGEST" \
           python3 scripts/generate-release-evidence.py
 
       - name: Write release provenance
@@ -177,6 +188,7 @@ jobs:
             --commit "$FULL_SHA" \
             --subject dist/release-evidence.json \
             --subject dist/release-evidence.md \
+            --subject dist/sbom.cdx.json \
             --artifact "$IMAGE_NAME@$IMAGE_DIGEST"
 
       - name: Sign release evidence assets
@@ -184,7 +196,12 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum release-evidence.json release-evidence.md release-provenance.intoto.jsonl > SHA256SUMS
+          sha256sum \
+            release-evidence.json \
+            release-evidence.md \
+            release-provenance.intoto.jsonl \
+            sbom.cdx.json \
+            > SHA256SUMS
           cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
 
       - name: Upload release evidence artifact
@@ -196,6 +213,7 @@ jobs:
             dist/release-evidence.json
             dist/release-evidence.md
             dist/release-provenance.intoto.jsonl
+            dist/sbom.cdx.json
             dist/SHA256SUMS
             dist/SHA256SUMS.sigstore.json
           if-no-files-found: error
@@ -263,6 +281,7 @@ jobs:
             dist/release-evidence.json \
             dist/release-evidence.md \
             dist/release-provenance.intoto.jsonl \
+            dist/sbom.cdx.json \
             dist/SHA256SUMS \
             dist/SHA256SUMS.sigstore.json \
             --clobber

@@ -112,6 +112,23 @@ docker run --rm \
   --exit-code 1 \
   "${IMAGE_NAME}:${RELEASE_TAG}"
 
+echo "Generating CycloneDX SBOM with vulnerability and license data..."
+mkdir -p dist
+docker run --rm \
+  "${trivy_container_args[@]}" \
+  "${trivy_workspace_args[@]}" \
+  "$trivy_image" image \
+  --cache-dir /tmp/trivy-cache \
+  --scanners vuln,license \
+  --format cyclonedx \
+  "${trivy_ignore_args[@]}" \
+  "${IMAGE_NAME}:${RELEASE_TAG}" >dist/sbom.cdx.json
+jq -e \
+  '.bomFormat == "CycloneDX"
+   and (.specVersion | type == "string")
+   and (.components | type == "array")' \
+  dist/sbom.cdx.json >/dev/null
+
 echo "Signing ${image_ref} with keyless cosign..."
 cosign sign --yes "$image_ref"
 
