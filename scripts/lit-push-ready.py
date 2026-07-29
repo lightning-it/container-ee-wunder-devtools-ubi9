@@ -263,9 +263,9 @@ def untracked_review_text(max_bytes: int = 1_000_000) -> str:
             )
         try:
             path.resolve().relative_to(ROOT.resolve())
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             raise RuntimeError(
-                f"Copilot review refused for escaping untracked path: {name}"
+                f"Copilot review refused for unsafe untracked path: {name}"
             ) from exc
         remaining = max_bytes - total
         try:
