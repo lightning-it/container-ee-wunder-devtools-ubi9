@@ -236,6 +236,16 @@ jobs:
             trusted_kind=ancestry-backmerge
           elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+            && [[ "${PR_HEAD}" == release/v* ]] \
+            && [ "${PR_BASE}" = "main" ]; then
+            release_tag="${PR_HEAD#release/}"
+            if [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              && [ "${PR_TITLE}" = "Release ${release_tag}" ]; then
+              trusted=true
+              trusted_kind=release-preparation
+            fi
+          elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
+            && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == backsync/release-v*-to-develop ]] \
             && [ "${PR_BASE}" = "develop" ]; then
             release_tag="${PR_HEAD#backsync/release-}"
@@ -293,6 +303,54 @@ jobs:
           git merge-base --is-ancestor "origin/main" "${HEAD_SHA}"
           echo "Verified current protected develop head and main ancestry."
 
+      - name: Verify release preparation commit and bounded files
+        if: steps.trusted-automation.outputs.kind == 'release-preparation'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RELEASE_TAG: ${{ steps.trusted-automation.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git init --quiet .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --quiet --no-tags origin \
+            "${HEAD_SHA}" "${BASE_SHA}" "refs/heads/main"
+          [ "$(git rev-parse origin/main)" = "${BASE_SHA}" ]
+          [ "$(git rev-list --parents -n 1 "${HEAD_SHA}" | wc -w)" -eq 2 ]
+          [ "$(git rev-parse "${HEAD_SHA}^1")" = "${BASE_SHA}" ]
+          [ "$(git log -1 --format=%s "${HEAD_SHA}")" = \
+            "chore(release): prepare ${RELEASE_TAG}" ]
+          if git diff --quiet "${BASE_SHA}" "${HEAD_SHA}"; then
+            echo "Release preparation does not contain generated release changes." >&2
+            exit 1
+          fi
+          unexpected="$(
+            git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" |
+              awk '$0 != "CHANGELOG.rst" && $0 != "galaxy.yml" && $0 !~ /^changelogs\//'
+          )"
+          [ -z "${unexpected}" ] || {
+            echo "Release preparation contains files outside the allowed release paths:" >&2
+            printf '%s\n' "${unexpected}" >&2
+            exit 1
+          }
+          version="${RELEASE_TAG#v}"
+          [ "$(git show "${HEAD_SHA}:galaxy.yml" | awk '$1 == "version:" {print $2; exit}')" = "${version}" ]
+          preparation="$(git show "${HEAD_SHA}:changelogs/release-preparation.json")"
+          jq -e \
+            --arg base "${BASE_SHA}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg version "${version}" \
+            '.schema_version == 1
+             and .base_sha == $base
+             and .next_version == $version
+             and .repository == $repository
+             and .preparer.login == "lightning-it-release-automation[bot]"
+             and .workflow.source_sha == $base' \
+            <<<"${preparation}" >/dev/null
+          echo "Verified single-parent release preparation and bounded generated files."
+
       - name: Verify release back-sync merge and bounded files
         if: steps.trusted-automation.outputs.kind == 'release-backsync'
         env:
@@ -333,6 +391,7 @@ jobs:
         if: >-
           steps.trusted-automation.outputs.trusted == 'true' &&
           steps.trusted-automation.outputs.kind != 'ancestry-backmerge' &&
+          steps.trusted-automation.outputs.kind != 'release-preparation' &&
           steps.trusted-automation.outputs.kind != 'release-promotion' &&
           steps.trusted-automation.outputs.kind != 'release-backsync'
         run: |

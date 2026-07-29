@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -56,16 +57,66 @@ def evidence_path() -> Path:
     return git_dir.resolve() / "lit-push-ready-evidence.json"
 
 
+def untracked_file_hashes(max_bytes: int = 100_000_000) -> dict[str, str]:
+    names = git_output("ls-files", "--others", "--exclude-standard", "-z")
+    hashes: dict[str, str] = {}
+    total = 0
+    root = ROOT.resolve()
+    for name in (entry for entry in names.split("\0") if entry):
+        path = ROOT / name
+        if path.is_symlink():
+            raise RuntimeError(f"Cannot fingerprint untracked symbolic link: {name}")
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"Cannot fingerprint escaping or unresolvable untracked path: {name}"
+            ) from exc
+        if not resolved.is_file():
+            raise RuntimeError(
+                f"Cannot fingerprint non-regular untracked path: {name}"
+            )
+        digest = hashlib.sha256()
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                resolved,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+            )
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise RuntimeError(
+                    f"Cannot fingerprint non-regular untracked path: {name}"
+                )
+            with os.fdopen(descriptor, "rb") as stream:
+                descriptor = -1
+                while chunk := stream.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise RuntimeError(
+                            "Untracked fingerprint input exceeds "
+                            f"{max_bytes} bytes"
+                        )
+                    digest.update(chunk)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Cannot read untracked path for fingerprint: {name}"
+            ) from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        hashes[name] = digest.hexdigest()
+    return hashes
+
+
 def tree_fingerprint() -> str:
-    untracked = git_output("ls-files", "--others", "--exclude-standard").splitlines()
     payload = {
         "head": git_output("rev-parse", "HEAD").strip(),
         "status": git_output("status", "--porcelain=v1", "--untracked-files=all"),
         "diff": git_output("diff", "--no-ext-diff", "--binary", "HEAD"),
-        "untracked": {
-            path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-            for path in untracked
-        },
+        "untracked": untracked_file_hashes(),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -128,8 +179,17 @@ def execute_checks(config: dict) -> list[dict]:
             raise RuntimeError("each check must be an object")
         name = check.get("name")
         command = check.get("command")
-        if not name or not isinstance(command, list) or not command:
-            raise RuntimeError("each check requires a name and non-empty command array")
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(command, list)
+            or not command
+            or any(not isinstance(argument, str) for argument in command)
+        ):
+            raise RuntimeError(
+                "each check requires a non-empty string name and "
+                "non-empty command array of strings"
+            )
         started = time.monotonic()
         print(f"==> {name}: {shlex.join(command)}", flush=True)
         result = run(command)
@@ -281,24 +341,40 @@ def copilot_review(config: dict) -> dict:
         + diff
     )
     started = time.monotonic()
-    with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8") as output:
-        result = subprocess.run(
-            [
-                executable,
-                "-p",
-                prompt,
-                "--silent",
-                "--available-tools",
-                "view,grep,glob",
-                "--allow-tool",
-                "read",
-            ],
-            cwd=ROOT,
-            check=False,
-            text=True,
-            stdout=output,
-            stderr=subprocess.STDOUT,
+    try:
+        timeout_seconds = int(
+            config.get("copilot", {}).get("timeout_seconds", 300)
         )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Copilot review timeout must be an integer between 1 and 1800 seconds"
+        ) from exc
+    if timeout_seconds <= 0 or timeout_seconds > 1800:
+        raise RuntimeError("Copilot review timeout must be between 1 and 1800 seconds")
+    with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8") as output:
+        try:
+            result = subprocess.run(
+                [
+                    executable,
+                    "-p",
+                    prompt,
+                    "--silent",
+                    "--available-tools",
+                    "view,grep,glob",
+                    "--allow-tool",
+                    "read",
+                ],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Copilot review timed out after {timeout_seconds} seconds"
+            ) from exc
         output.seek(0)
         review = output.read()
     final_line = next((line.strip() for line in reversed(review.splitlines()) if line.strip()), "")
