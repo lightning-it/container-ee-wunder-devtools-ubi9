@@ -54,6 +54,7 @@ development. It is based on **Red Hat UBI 9** and includes:
 - yamllint
 - ShellCheck
 - actionlint
+- GitHub Copilot CLI
 - Terraform CLI
 - TFLint
 - terraform-docs
@@ -69,6 +70,10 @@ Use it as a stable execution environment for:
 - CI pipelines
 - Integration tests (e.g. against local Keycloak containers)
 
+The repository also provides a digest-pinned
+[Dev Container and host acceptance matrix](docs/host-parity.md) for RHEL,
+Ubuntu, and macOS pipeline-parity work.
+
 > Current image: `quay.io/l-it/ee-wunder-devtools-ubi9:v1.9.2`
 
 ---
@@ -83,6 +88,7 @@ Use it as a stable execution environment for:
   - `yamllint`
   - `shellcheck`
   - `actionlint`
+  - `copilot`
   - `terraform`
   - `tflint`
   - `terraform-docs`

@@ -12,6 +12,9 @@ ARG TF_DOCS_VERSION=0.24.0
 ARG HELM_VERSION=4.2.3
 ARG GH_VERSION=2.96.0
 ARG ACTIONLINT_VERSION=1.7.12
+ARG NODE_VERSION=22.23.1
+ARG NPM_VERSION=12.0.1
+ARG COPILOT_VERSION=1.0.74
 
 # hadolint ignore=DL3002
 USER 0
@@ -100,6 +103,26 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     install -m 0755 /tmp/actionlint /usr/local/bin/actionlint && \
     rm -f /tmp/actionlint.tar.gz /tmp/actionlint
 
+# Node.js LTS and GitHub Copilot CLI. Node release checksums and npm's
+# package-integrity verification cover both supported target architectures.
+# Copilot's lifecycle script is required to install its bundled native binary.
+RUN source /usr/local/lib/container-download-verified.sh && \
+    source /tmp/arch.env && \
+    case "${ARCH}" in amd64) NODE_ARCH=x64 ;; arm64) NODE_ARCH=arm64 ;; *) exit 1 ;; esac && \
+    download_verified \
+      "https://nodejs.org/download/release/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
+      /tmp/node.tar.xz \
+      "https://nodejs.org/download/release/v${NODE_VERSION}/SHASUMS256.txt" \
+      "node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
+    mkdir -p /opt/node && \
+    tar -xJf /tmp/node.tar.xz --strip-components=1 -C /opt/node && \
+    /opt/node/bin/npm install --global --prefix /opt/node "npm@${NPM_VERSION}" && \
+    /opt/node/bin/npm install --global --prefix /opt/node --ignore-scripts=false "@github/copilot@${COPILOT_VERSION}" && \
+    /opt/node/bin/node --version && \
+    /opt/node/bin/copilot --version && \
+    rm -f /tmp/node.tar.xz && \
+    /opt/node/bin/npm cache clean --force
+
 # Docker CLI + Compose plugin (from docker-ce packages)
 RUN install -m 0755 /usr/bin/docker /usr/local/bin/docker && \
     mkdir -p /usr/local/lib/docker/cli-plugins && \
@@ -173,6 +196,7 @@ COPY --from=tools /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=tools /usr/local/bin/actionlint /usr/local/bin/actionlint
 COPY --from=tools /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=tools /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+COPY --from=tools /opt/node /opt/node
 
 # Python deps: this *is* the right place for pip
 COPY requirements.txt /tmp/requirements.txt
@@ -192,6 +216,7 @@ RUN useradd -m wunder && \
     chmod 1777 /tmp/ansible /tmp/ansible/tmp
 
 ENV HOME=/home/wunder \
+    PATH=/opt/node/bin:$PATH \
     ANSIBLE_LOCAL_TEMP=/tmp/ansible/tmp \
     ANSIBLE_REMOTE_TEMP=/tmp/ansible/tmp
 

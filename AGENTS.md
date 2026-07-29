@@ -12,6 +12,7 @@
   - `LICENSE`
   - `CODE_OF_CONDUCT.md`
   - `scripts/wunder-devtools-ee.sh`
+  - `scripts/lit-push-ready.py`
 - Managed container baseline files from `shared-assets-lit/container/base`:
   - `AGENTS.md`
   - `.gitignore`
@@ -20,6 +21,7 @@
   - `.releaserc`
   - `.yamllint`
   - `CONTRIBUTING.md`
+  - `.lit/push-ready.json`
   - `.github/workflows/container-ci.yml`
   - `.github/workflows/container-build-publish.yml`
   - `.github/workflows/promote-develop-to-main.yml`
@@ -84,6 +86,18 @@
   in a YAML comment and ensure Renovate can maintain the pin.
 - Pin helper container images used by validation scripts; do not use `latest` for CI linters, scanners, or release
   tooling.
+
+## Push-ready validation
+
+- Before push, run `python3 scripts/lit-push-ready.py push-ready`.
+- `AGENTS.md` is the canonical Codex and Copilot contract.
+- `.github/copilot-instructions.md` must contain the current managed
+  `AGENTS_SHA256` binding.
+- A Copilot review is advisory input until Codex has resolved or dispositioned
+  every finding and rerun all affected deterministic checks.
+- Any content change after a successful review invalidates the local evidence.
+- GitHub Actions required checks and the current-head Copilot gate remain
+  authoritative for merge.
 
 ## Repo-specific overrides
 

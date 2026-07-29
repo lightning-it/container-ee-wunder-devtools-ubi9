@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "checks": [
+    {
+      "name": "container-ci-parity",
+      "command": [
+        "bash",
+        "scripts/devtools-container-ci.sh"
+      ]
+    },
+    {
+      "name": "diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ]
+    }
+  ],
+  "remote_only_checks": [
+    "Quay authentication, publishing and release evidence attachment",
+    "GitHub OIDC keyless signing identity",
+    "GitHub-hosted runner and external registry availability",
+    "Required Copilot review on the pull request head SHA"
+  ],
+  "copilot": {
+    "max_diff_bytes": 200000
+  }
+}

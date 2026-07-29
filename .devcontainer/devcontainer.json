@@ -1,0 +1,22 @@
+{
+  "name": "Lightning IT Devtools UBI 9",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "wunder",
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "containerEnv": {
+    "HOME": "/tmp/wunder"
+  },
+  "postStartCommand": "mkdir -p /tmp/wunder",
+  "runArgs": [
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges=true",
+    "--pids-limit=1024",
+    "--tmpfs=/tmp:rw,exec,nosuid,nodev,size=2g",
+    "--tmpfs=/run:rw,nosuid,nodev,size=256m"
+  ]
+}
