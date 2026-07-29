@@ -237,7 +237,9 @@ jobs:
           elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == release/v* ]] \
-            && [ "${PR_BASE}" = "main" ]; then
+            && [ "${PR_BASE}" = "main" ] \
+            && gh api "repos/${REPOSITORY}/contents/galaxy.yml?ref=main" >/dev/null \
+            && gh api "repos/${REPOSITORY}/contents/changelogs/config.yaml?ref=main" >/dev/null; then
             release_tag="${PR_HEAD#release/}"
             if [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
               && [ "${PR_TITLE}" = "Release ${release_tag}" ]; then
