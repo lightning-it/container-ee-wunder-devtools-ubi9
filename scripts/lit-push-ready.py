@@ -240,14 +240,19 @@ def execute_checks(config: dict) -> list[dict]:
                 "each check requires a non-empty string name and "
                 "non-empty command array of strings"
             )
+        runtime_command = (
+            [sys.executable, *command[1:]]
+            if command[0] in {"python", "python3"}
+            else command
+        )
         started = time.monotonic()
-        print(f"==> {name}: {shlex.join(command)}", flush=True)
-        result = run(command)
+        print(f"==> {name}: {shlex.join(runtime_command)}", flush=True)
+        result = run(runtime_command)
         elapsed = round(time.monotonic() - started, 3)
         results.append(
             {
                 "name": name,
-                "command": command,
+                "command": runtime_command,
                 "exit_code": result.returncode,
                 "duration_seconds": elapsed,
             }
