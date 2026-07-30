@@ -75,8 +75,10 @@ A good PR:
 
 - Git
 - Docker or Podman (Buildx recommended if using Docker)
-- Python 3.11+ (for pre-commit and local checks)
-- `pre-commit`
+- Python 3.9+ (for push-ready orchestration and optional pre-commit checks)
+- Codex CLI access and GitHub Copilot CLI entitlement for the required local
+  dual-agent review
+- `pre-commit` (optional fast feedback)
 
 ### Renovate scope for certified RH collections
 
@@ -95,7 +97,7 @@ Policy:
   certified-only requirement files) from Renovate checks/updates.
 - Manage certified collection versions with a controlled manual or CI workflow.
 
-### Install pre-commit hooks
+### Optional: install pre-commit hooks
 
 ```bash
 python -m pip install --user pre-commit
@@ -105,12 +107,39 @@ pre-commit install
 ### Run checks locally
 
 ```bash
-pre-commit run --all-files
+scripts/lit-ci-profile.sh repository-quality
+python3 scripts/lit-push-ready.py review
+
+# After the intended change is committed on a feature branch:
+python3 scripts/lit-push-ready.py push-ready
 ```
 
-The managed pre-commit hook runs the same container CI parity script that GitHub PR checks run, inside the devtools
-container. A local green run should therefore catch the normal PR build, lint, runtime contract, Renovate config, and
-container vulnerability checks before you push.
+The exact profile runs the same complete container CI contract that the
+required GitHub Actions job invokes. `review` supports iteration over
+uncommitted work; the evidence-producing `push-ready` command requires a clean
+committed `HEAD` and adds isolated Copilot CLI and Codex reviews.
+
+`pre-commit run --all-files` remains useful for fast feedback when installed,
+but it is optional and never authorizes a push or substitutes for push-ready
+evidence. The current-head GitHub Copilot review and required GitHub Actions
+checks remain authoritative for merge. The full container parity profile is
+intentionally not a pre-commit hook: ordinary commits have staged changes,
+while the evidence-producing profile must validate a clean committed tree.
+
+The first migration of `.lit/push-ready.json`, its runner, or canonical profile
+cannot trust its own unmerged policy. The runner refuses bootstrap push
+evidence. Run the profile and dual-agent `review` on the exact commit, then
+rely on protected required CI and current-head Copilot for that migration PR.
+It does not count as correction-free first-push evidence.
+
+The matching managed baseline was merged first in `shared-assets-lit`:
+PR #717 (`fd51ea8b982ac054454a7c6ce15036c8b6ceb529`), PR #718
+(`438d221dabc2e07741c8eec0d0bd1cce714c86a6`), and RHEL 9 runtime hardening
+PR #719 (`7f34a57a9b9823d77c6aec3f05b9840334390dec`). Together they carry the
+`AGENTS.md`, `.pre-commit-config.yaml`, `renovate.json`, `CONTRIBUTING.md`,
+`.lit/push-ready.json`, canonical profile, workflow, push-ready engine, and
+Devtool scripts. This is not an emergency ownership exception; permitted
+container-specific rendered differences remain regression-tested.
 
 ## Container Build & Test
 

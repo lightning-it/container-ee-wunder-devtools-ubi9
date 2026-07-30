@@ -1,29 +1,60 @@
 {
-  "version": 1,
+  "version": 2,
+  "base_ref": "refs/remotes/origin/develop",
   "checks": [
     {
-      "name": "container-ci-parity",
+      "name": "repository-quality-profile",
       "command": [
-        "bash",
-        "scripts/devtools-container-ci.sh"
-      ]
-    },
-    {
-      "name": "diff-check",
-      "command": [
-        "git",
-        "diff",
-        "--check"
+        "scripts/lit-ci-profile.sh",
+        "repository-quality"
       ]
     }
   ],
   "remote_only_checks": [
-    "Quay authentication, publishing and release evidence attachment",
-    "GitHub OIDC keyless signing identity",
-    "GitHub-hosted runner and external registry availability",
-    "Required Copilot review on the pull request head SHA"
+    {
+      "id": "github-actions-service-boundary",
+      "workflow": ".github/workflows/container-ci.yml",
+      "job": "validate",
+      "reason": "GitHub event handling, required-check publication, and hosted runner service context exist only in GitHub Actions.",
+      "owner": "Lightning IT Application Platform Maintainers"
+    },
+    {
+      "id": "copilot-current-head-review",
+      "workflow": ".github/workflows/copilot-review.yml",
+      "job": "current-revision-reviewed",
+      "reason": "The authoritative Copilot pull-request review is produced and bound to the current head SHA by GitHub.",
+      "owner": "Lightning IT Application Platform Maintainers"
+    },
+    {
+      "id": "container-release-authorization",
+      "workflow": ".github/workflows/container-build-publish.yml",
+      "job": "build",
+      "reason": "GitHub OIDC, keyless signing identity, release authorization, and external registry publication cannot be exercised by the local profile.",
+      "owner": "Lightning IT Application Platform Maintainers"
+    }
   ],
-  "copilot": {
+  "review": {
     "max_diff_bytes": 200000
+  },
+  "evidence": {
+    "max_age_seconds": 86400
+  },
+  "agents": {
+    "copilot": {
+      "enabled": true,
+      "required": true,
+      "command": [
+        "copilot"
+      ],
+      "timeout_seconds": 600
+    },
+    "codex": {
+      "enabled": true,
+      "required": true,
+      "command": [
+        "codex"
+      ],
+      "timeout_seconds": 900
+    }
   }
 }

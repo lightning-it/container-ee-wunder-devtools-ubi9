@@ -14,6 +14,7 @@ jobs:
   validate:
     name: Validate container repository
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -22,13 +23,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify Codex and Copilot instruction parity
-        run: python3 scripts/lit-push-ready.py instructions
-
-      - name: Run container CI parity checks
+      - name: Refresh authoritative develop ref
         env:
-          WUNDER_DEVTOOLS_DOCKER_SOCKET: required
-          WUNDER_DEVTOOLS_NETWORK: bridge
-          WUNDER_DEVTOOLS_PRUNE_BUILDKIT_CACHE: "true"
-          WUNDER_DEVTOOLS_WORKSPACE_MODE: rw
-        run: bash scripts/wunder-devtools-ee.sh scripts/devtools-container-ci.sh all
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+          GIT_CONFIG_VALUE_0="$auth_header" \
+            git fetch --quiet --no-tags origin \
+              +refs/heads/develop:refs/remotes/origin/develop
+
+      - name: Run canonical repository-quality profile
+        run: scripts/lit-ci-profile.sh repository-quality
