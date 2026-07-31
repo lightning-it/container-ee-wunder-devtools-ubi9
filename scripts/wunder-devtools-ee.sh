@@ -41,7 +41,14 @@ case "$CONTAINER_HOME" in
     ;;
 esac
 
-WORKSPACE_MOUNT="${PWD}:/workspace:${WORKSPACE_MODE}"
+WORKSPACE_ROOT="$(pwd -P)"
+case "$WORKSPACE_ROOT" in
+  *:*|*,*)
+    echo "Error: workspace path contains an unsafe mount delimiter" >&2
+    exit 1
+    ;;
+esac
+WORKSPACE_MOUNT="${WORKSPACE_ROOT}:/workspace:${WORKSPACE_MODE}"
 # Never bind a host home directory here. A fresh tmpfs prevents one invocation
 # or repository from supplying Ansible plugins/configuration to a later run.
 # Molecule stages executable shims below HOME, so make exec explicit while
@@ -67,6 +74,7 @@ fail_closed() {
 }
 
 sanitize_docker_host_env() {
+  local host_sock
   if [[ "${DOCKER_HOST:-}" == unix://* ]]; then
     host_sock="${DOCKER_HOST#unix://}"
     if [ ! -S "$host_sock" ]; then
@@ -291,9 +299,10 @@ if [ -n "$DOCKER_SOCKET" ]; then
   DOCKER_SOCKET_REAL="$DOCKER_SOCKET"
   if command -v python3 >/dev/null 2>&1; then
     DOCKER_SOCKET_REAL="$(
-      python3 - <<PY
+      python3 - "$DOCKER_SOCKET" <<'PY'
 import os
-print(os.path.realpath("${DOCKER_SOCKET}"))
+import sys
+print(os.path.realpath(sys.argv[1]))
 PY
     )"
   fi

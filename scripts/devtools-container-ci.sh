@@ -245,6 +245,7 @@ set_nested_socket_args() {
 set_nested_git_args() {
   local host_gitdir="${WUNDER_DEVTOOLS_HOST_GIT_DIR:-}"
   local host_common="${WUNDER_DEVTOOLS_HOST_GIT_COMMON_DIR:-}"
+  local gitdir_relative
 
   nested_git_args=()
   if [ -z "$host_gitdir" ] && [ -z "$host_common" ]; then
@@ -270,6 +271,19 @@ set_nested_git_args() {
   esac
   case "$host_gitdir" in *:*|*,*) echo "ERROR: unsafe host gitdir." >&2; exit 1 ;; esac
   case "$host_common" in *:*|*,*) echo "ERROR: unsafe host commondir." >&2; exit 1 ;; esac
+  case "$host_gitdir" in
+    "$host_common"/*) gitdir_relative="${host_gitdir#"$host_common"/}" ;;
+    *)
+      echo "ERROR: linked-worktree gitdir is outside its commondir." >&2
+      exit 1
+      ;;
+  esac
+  case "$gitdir_relative" in
+    ""|/*|*:*|*,*|../*|*/../*|*/..)
+      echo "ERROR: unsafe relative linked-worktree gitdir." >&2
+      exit 1
+      ;;
+  esac
 
   if [ -n "${GIT_DIR:-}" ] && [ ! -d "$GIT_DIR" ]; then
     echo "ERROR: mounted linked-worktree gitdir is unavailable." >&2
@@ -282,8 +296,7 @@ set_nested_git_args() {
 
   nested_git_args=(
     -v "${host_common}:/run/wunder-git/common:ro"
-    -v "${host_gitdir}:/run/wunder-git/common/worktrees/current:ro"
-    -e GIT_DIR=/run/wunder-git/common/worktrees/current
+    -e "GIT_DIR=/run/wunder-git/common/${gitdir_relative}"
     -e GIT_COMMON_DIR=/run/wunder-git/common
     -e GIT_WORK_TREE=/repo
   )
@@ -381,6 +394,11 @@ run_contract_tests() {
 
   case "$repo_name" in
     container-ee-wunder-devtools-ubi9)
+      if [ -d tests ] \
+        && find tests -type f -name 'test_*.py' -print -quit | grep -q .
+      then
+        python3 -m unittest discover -s tests -p 'test_*.py'
+      fi
       # Copilot extracts and maps a signed native runtime from its cache.
       docker run --rm "${validation_container_args[@]}" \
         --tmpfs "/copilot-cache:rw,exec,nosuid,nodev,size=256m" \

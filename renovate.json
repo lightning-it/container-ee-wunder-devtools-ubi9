@@ -92,6 +92,19 @@
       "matchStrings": ["-\\s+name:\\s+https://github\\.com/(?<depName>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\\.git\\s*\\n\\s+type:\\s+git\\s*\\n\\s+version:\\s+\"?(?<currentValue>[^\"\\n]+)\"?"],
       "datasourceTemplate": "github-tags",
       "versioningTemplate": "loose"
+    },
+    {
+      "customType": "regex",
+      "description": "ee-wunder-devtools-ubi9 image pins in scripts and README",
+      "managerFilePatterns": [
+        "/(^|.*/)scripts/.*\\.(?:sh|py)$/",
+        "/^README\\.md$/"
+      ],
+      "matchStrings": [
+        "quay\\.io/l-it/ee-wunder-devtools-ubi9:v(?<currentValue>[0-9.]+)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?"
+      ],
+      "datasourceTemplate": "docker",
+      "packageNameTemplate": "quay.io/l-it/ee-wunder-devtools-ubi9"
     }
   ],
   "packageRules": [
