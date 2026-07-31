@@ -1,25 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.9.2@sha256:58d5d45f7ea7405394edb00d4a77bf3e5d770532377fba6d80e8f641d27576b0"
+IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.12.0@sha256:b1189c8d51cb8f9f7b8aa396b8aaf30da7635ebd5d0fc9fe8b0f9f9d3c36d6de"
 CONTAINER_HOME="${CONTAINER_HOME:-/tmp/wunder}"
 WORKSPACE_MODE="${WUNDER_DEVTOOLS_WORKSPACE_MODE:-ro}"
 RUN_AS_HOST_UID_POLICY="${WUNDER_DEVTOOLS_RUN_AS_HOST_UID:-0}"
 NETWORK_MODE="${WUNDER_DEVTOOLS_NETWORK:-none}"
+PRIVILEGED_POLICY="${WUNDER_DEVTOOLS_PRIVILEGED:-0}"
 SOCKET_POLICY="${WUNDER_DEVTOOLS_DOCKER_SOCKET:-disabled}"
 SOURCE_ROOT_POLICY="${WUNDER_DEVTOOLS_MOUNT_SOURCE_ROOT:-disabled}"
 CAPABILITY_POLICY="${WUNDER_DEVTOOLS_CAP_ADD:-}"
 VAGRANT_SSH_POLICY="${WUNDER_DEVTOOLS_FORWARD_VAGRANT_SSH:-disabled}"
 case "$WORKSPACE_MODE" in ro|rw) ;; *) echo "Error: unsupported workspace mode: $WORKSPACE_MODE" >&2; exit 1 ;; esac
+case "$NETWORK_MODE" in none|bridge) ;; *) echo "Error: unsupported network mode: $NETWORK_MODE" >&2; exit 1 ;; esac
+case "$PRIVILEGED_POLICY" in 0|1) ;; *) echo "Error: unsupported privileged policy: $PRIVILEGED_POLICY" >&2; exit 1 ;; esac
 case "$RUN_AS_HOST_UID_POLICY" in 0|1) ;; *) echo "Error: unsupported host UID policy: $RUN_AS_HOST_UID_POLICY" >&2; exit 1 ;; esac
-if [ "$RUN_AS_HOST_UID_POLICY" = "1" ] && [ "$WORKSPACE_MODE" != rw ]; then
-  echo "Error: host UID mapping requires a read-write workspace" >&2
-  exit 1
-fi
 case "$SOCKET_POLICY" in disabled|required|auto) ;; *) echo "Error: unsupported socket policy: $SOCKET_POLICY" >&2; exit 1 ;; esac
 case "$SOURCE_ROOT_POLICY" in disabled|enabled) ;; *) echo "Error: unsupported source-root policy: $SOURCE_ROOT_POLICY" >&2; exit 1 ;; esac
 case "$CAPABILITY_POLICY" in ""|CHOWN,FOWNER|CHOWN,DAC_OVERRIDE,FOWNER) ;; *) echo "Error: unsupported capability policy: $CAPABILITY_POLICY" >&2; exit 1 ;; esac
 case "$VAGRANT_SSH_POLICY" in disabled|enabled) ;; *) echo "Error: unsupported Vagrant SSH forwarding policy: $VAGRANT_SSH_POLICY" >&2; exit 1 ;; esac
+if [ -n "$CAPABILITY_POLICY" ] && {
+  [ "$WORKSPACE_MODE" != ro ] \
+    || [ "$NETWORK_MODE" != none ] \
+    || [ "$SOCKET_POLICY" != disabled ] \
+    || [ "$SOURCE_ROOT_POLICY" != disabled ] \
+    || [ "$VAGRANT_SSH_POLICY" != disabled ] \
+    || [ "$PRIVILEGED_POLICY" != 0 ];
+}; then
+  echo "Error: capability mode requires a read-only, offline, socket-free sandbox" >&2
+  exit 1
+fi
 case "$CONTAINER_HOME" in
   /*) ;;
   *) echo "Error: CONTAINER_HOME must be an absolute container path" >&2; exit 1 ;;
@@ -94,7 +104,7 @@ case "$CONTAINER_BIN" in
     ;;
 esac
 
-if [ "${WUNDER_DEVTOOLS_PRIVILEGED:-0}" = "1" ]; then
+if [ "$PRIVILEGED_POLICY" = "1" ]; then
   DOCKER_ARGS+=(--privileged)
 elif [ "$CAPABILITY_POLICY" = "CHOWN,FOWNER" ]; then
   DOCKER_ARGS+=(--cap-add CHOWN --cap-add FOWNER)
@@ -103,6 +113,7 @@ elif [ "$CAPABILITY_POLICY" = "CHOWN,DAC_OVERRIDE,FOWNER" ]; then
 fi
 
 if [ "$CONTAINER_BIN" = "podman" ] && [ "$(uname -s)" = "Linux" ]; then
+  DOCKER_ARGS+=(--read-only-tmpfs=false)
   WORKSPACE_MOUNT="${WORKSPACE_MOUNT},z"
 fi
 
@@ -114,15 +125,16 @@ DOCKER_ARGS+=(-e "WUNDER_DEVTOOLS_HOST_WORKSPACE=${WORKSPACE_REAL}")
 configure_linked_worktree_git_mounts() {
   local git_file="${WORKSPACE_REAL}/.git"
   local gitdir_raw gitdir_host common_raw common_host reported_gitdir reported_common
-  local gitdir_mount common_mount
-  local -a git_file_lines=() common_file_lines=()
+  local gitdir_relative common_mount
+  local line_count
 
   [ -f "$git_file" ] || return 0
-  mapfile -t git_file_lines <"$git_file"
-  if [ "${#git_file_lines[@]}" -ne 1 ]; then
+  line_count="$(awk 'END { print NR }' "$git_file")"
+  if [ "$line_count" -ne 1 ]; then
     fail_closed "linked-worktree .git must contain exactly one gitdir line"
   fi
-  gitdir_raw="${git_file_lines[0]}"
+  IFS= read -r gitdir_raw <"$git_file" || [ -n "$gitdir_raw" ] \
+    || fail_closed "linked-worktree .git has an empty gitdir declaration"
   case "$gitdir_raw" in
     "gitdir: "*) gitdir_raw="${gitdir_raw#gitdir: }" ;;
     *) fail_closed "linked-worktree .git has an invalid gitdir declaration" ;;
@@ -143,11 +155,12 @@ configure_linked_worktree_git_mounts() {
     fail_closed "linked-worktree gitdir is missing required metadata"
   fi
 
-  mapfile -t common_file_lines <"${gitdir_host}/commondir"
-  if [ "${#common_file_lines[@]}" -ne 1 ]; then
+  line_count="$(awk 'END { print NR }' "${gitdir_host}/commondir")"
+  if [ "$line_count" -ne 1 ]; then
     fail_closed "linked-worktree commondir must contain exactly one path"
   fi
-  common_raw="${common_file_lines[0]}"
+  IFS= read -r common_raw <"${gitdir_host}/commondir" || [ -n "$common_raw" ] \
+    || fail_closed "linked-worktree commondir is empty"
   case "$common_raw" in
     ""|*:*|*,*) fail_closed "linked-worktree commondir contains unsafe mount characters" ;;
   esac
@@ -177,16 +190,22 @@ configure_linked_worktree_git_mounts() {
     fail_closed "linked-worktree metadata does not describe this workspace"
   fi
 
-  gitdir_mount="${gitdir_host}:/run/wunder-git/common/worktrees/current:ro"
+  case "$gitdir_host" in
+    "$common_host"/*) gitdir_relative="${gitdir_host#"$common_host"/}" ;;
+    *) fail_closed "linked-worktree gitdir is outside its common Git directory" ;;
+  esac
+  case "$gitdir_relative" in
+    ""|/*|*:*|*,*|../*|*/../*|*/..)
+      fail_closed "linked-worktree gitdir has an unsafe relative path"
+      ;;
+  esac
   common_mount="${common_host}:/run/wunder-git/common:ro"
   if [ "$CONTAINER_BIN" = "podman" ] && [ "$(uname -s)" = "Linux" ]; then
-    gitdir_mount="${gitdir_mount},z"
     common_mount="${common_mount},z"
   fi
   DOCKER_ARGS+=(
     -v "$common_mount"
-    -v "$gitdir_mount"
-    -e GIT_DIR=/run/wunder-git/common/worktrees/current
+    -e "GIT_DIR=/run/wunder-git/common/${gitdir_relative}"
     -e GIT_COMMON_DIR=/run/wunder-git/common
     -e GIT_WORK_TREE=/workspace
     -e "WUNDER_DEVTOOLS_HOST_GIT_DIR=${gitdir_host}"
@@ -314,6 +333,8 @@ PY
   fi
 elif [ "$RUN_AS_HOST_UID_POLICY" = "0" ] && [ "${PODMAN_ROOTLESS}" = "1" ]; then
   DOCKER_ARGS+=(--user 0:0)
+elif [ "$RUN_AS_HOST_UID_POLICY" = "0" ] && [ -n "$CAPABILITY_POLICY" ]; then
+  DOCKER_ARGS+=(--user 0:0)
 fi
 
 if [ "$(uname -s)" = "Linux" ]; then
@@ -357,5 +378,5 @@ fi
   ${CI:+-e CI} \
   ${GITHUB_ACTIONS:+-e GITHUB_ACTIONS} \
   ${WUNDER_DEVTOOLS_PRUNE_BUILDKIT_CACHE:+-e WUNDER_DEVTOOLS_PRUNE_BUILDKIT_CACHE} \
-  "${VAGRANT_SSH_ENV_ARGS[@]}" \
+  ${VAGRANT_SSH_ENV_ARGS[@]+"${VAGRANT_SSH_ENV_ARGS[@]}"} \
   "$IMAGE" "$@"
