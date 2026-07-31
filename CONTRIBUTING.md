@@ -75,7 +75,7 @@ A good PR:
 
 - Git
 - Docker or Podman (Buildx recommended if using Docker)
-- Python 3.9+ (for push-ready orchestration and optional pre-commit checks)
+- Python 3.10+ (for push-ready orchestration and optional pre-commit checks)
 - Codex CLI access and GitHub Copilot CLI entitlement for the required local
   dual-agent review
 - `pre-commit` (optional fast feedback)
@@ -126,20 +126,12 @@ checks remain authoritative for merge. The full container parity profile is
 intentionally not a pre-commit hook: ordinary commits have staged changes,
 while the evidence-producing profile must validate a clean committed tree.
 
-The first migration of `.lit/push-ready.json`, its runner, or canonical profile
-cannot trust its own unmerged policy. The runner refuses bootstrap push
-evidence. Run the profile and dual-agent `review` on the exact commit, then
-rely on protected required CI and current-head Copilot for that migration PR.
-It does not count as correction-free first-push evidence.
-
-The matching managed baseline was merged first in `shared-assets-lit`:
-PR #717 (`fd51ea8b982ac054454a7c6ce15036c8b6ceb529`), PR #718
-(`438d221dabc2e07741c8eec0d0bd1cce714c86a6`), and RHEL 9 runtime hardening
-PR #719 (`7f34a57a9b9823d77c6aec3f05b9840334390dec`). Together they carry the
-`AGENTS.md`, `.pre-commit-config.yaml`, `renovate.json`, `CONTRIBUTING.md`,
-`.lit/push-ready.json`, canonical profile, workflow, push-ready engine, and
-Devtool scripts. This is not an emergency ownership exception; permitted
-container-specific rendered differences remain regression-tested.
+The first migration of `.lit/push-ready.json`, the push-ready runner, or the
+canonical profile cannot treat its own unmerged policy as a trust root. The
+runner intentionally refuses push evidence for that bootstrap diff. Run the
+new profile and the separate dual-agent `review` command on the exact commit,
+then use the protected required-CI and current-head Copilot gates for that one
+migration PR. It does not count toward correction-free first-push evidence.
 
 ## Container Build & Test
 
