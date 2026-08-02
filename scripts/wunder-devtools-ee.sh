@@ -54,6 +54,12 @@ WORKSPACE_MOUNT="${WORKSPACE_ROOT}:/workspace:${WORKSPACE_MODE}"
 # Molecule stages executable shims below HOME, so make exec explicit while
 # retaining nosuid/nodev for identical Docker and Podman behavior.
 HOME_TMPFS_MOUNT="${CONTAINER_HOME}:rw,exec,nosuid,nodev,size=1g,mode=1777"
+RUN_TMPFS_MOUNT="/run:rw,nosuid,nodev,size=256m"
+if [ "$RUN_AS_HOST_UID_POLICY" = "1" ]; then
+  # The unprivileged controller must be able to create its own isolated
+  # runtime directories without granting it root or extra capabilities.
+  RUN_TMPFS_MOUNT="${RUN_TMPFS_MOUNT},mode=1777"
+fi
 DOCKER_ARGS=(
   -w /workspace
   -e HOME="${CONTAINER_HOME}"
@@ -63,7 +69,7 @@ DOCKER_ARGS=(
   --security-opt no-new-privileges=true
   --pids-limit 1024
   --tmpfs "/tmp:rw,nosuid,nodev,size=2g"
-  --tmpfs "/run:rw,nosuid,nodev,size=256m"
+  --tmpfs "$RUN_TMPFS_MOUNT"
   --tmpfs "$HOME_TMPFS_MOUNT"
 )
 
