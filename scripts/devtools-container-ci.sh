@@ -39,19 +39,19 @@ target_arch="$(detect_targetarch)"
 case "$target_arch" in
   amd64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7"
-    renovate_default="docker.io/renovate/renovate:43.280.5@sha256:2c5fe53717e28e3966ef017b7544d5bccc5ecd083a6d1e2d35ccf49330442704"
+    renovate_default="docker.io/renovate/renovate:43.288.0@sha256:bcde7a061ab42d1ae6d4500769d80727e5694bb889dbcbf1005e9f4e741ab76d"
     trivy_default="docker.io/aquasec/trivy:0.72.0@sha256:c6e969c5662a546ad5de4a73c2a6b7a7c627f86d916903e175aa623af5b97ada"
-    hadolint_image="docker.io/hadolint/hadolint:v2.14.0@sha256:e9dbf5113239ef2bf696d20c8f28d3019a47c26a38c98b89344d3e2846c4d5f8"
-    docker_cli_image="docker.io/library/docker:29-cli@sha256:feb2d49bd65f274b3e4b4620beabe2f4691e5287e496da9fbc9830ed5f780676"
-    node_image="docker.io/library/node:24-bookworm@sha256:4e9cb555d708e0829c9d93e5eeae9dfab0617b832ca436a690680e0fca735ef5"
+    hadolint_image="docker.io/hadolint/hadolint:v2.15.1@sha256:fdf19d026b54834f88c62774fdf2a61ff3b586a42632e5070674d41a796bfdf3"
+    docker_cli_image="docker.io/library/docker:29-cli@sha256:f1069150feb2fb4e09ed208e066c72518bda2fb6782266e294b359fa09408617"
+    node_image="docker.io/library/node:24-bookworm@sha256:87362b5d965240a1bc79f85cec63179d4ee853741413b274a4721f2742eb8393"
     ;;
   arm64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:33ffa3f1ad576165ea9c26f726884defdc411fb1fcb9ccc6a117b2f554ba1723"
-    renovate_default="docker.io/renovate/renovate:43.280.5@sha256:ac9cad76058260ee3475c2000cc330a4b08372f4c3126ff3ca5fd27d58f38fa7"
+    renovate_default="docker.io/renovate/renovate:43.288.0@sha256:63067f15fdb44df7a55a1e65e34df93c8c8dab930677d0a46de8086c6d5b0703"
     trivy_default="docker.io/aquasec/trivy:0.72.0@sha256:405015d1cd07a2630301169e694a5a420afc4dd553fb462189d4f109ba56a6df"
-    hadolint_image="docker.io/hadolint/hadolint:v2.14.0@sha256:12cada422759f74155aabce5c9cfdc279090c2afeb9bc7a5138fe31098ab3093"
-    docker_cli_image="docker.io/library/docker:29-cli@sha256:03ff3183ed048d713b8923026395726f643edc15dce37458ee775b40094a146f"
-    node_image="docker.io/library/node:24-bookworm@sha256:4ff2a3b4ac84d69e1f1a7f49d683e9675babea1828bdeeec1af0c6b7690ed0a4"
+    hadolint_image="docker.io/hadolint/hadolint:v2.15.1@sha256:84179f01a1034d34ea470f1808f055f0a02195ba0e0038d097f8384ae878383f"
+    docker_cli_image="docker.io/library/docker:29-cli@sha256:c1f88946de93f65e482b7559d2f3db8d2acf726478bc3cde231138f481a3c393"
+    node_image="docker.io/library/node:24-bookworm@sha256:9b02ede55039f443ad57453a741813c6cd105873f0f66fee95d25529e1ba0533"
     ;;
 esac
 actionlint_image="${ACTIONLINT_IMAGE:-$actionlint_default}"
