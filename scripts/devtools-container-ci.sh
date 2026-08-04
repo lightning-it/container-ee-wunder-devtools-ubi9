@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 mode="${1:-all}"
 
 detect_targetarch() {
@@ -322,11 +323,20 @@ run_shellcheck() {
 }
 
 run_actionlint() {
+  local -a queue_validator_args=(--workflows-dir .github/workflows)
+  if [ -f .github/workflows/security-release-finalize.yml ]; then
+    queue_validator_args+=(--mlx90-workflows-dir .github/workflows)
+  fi
+  python3 "$script_dir/validate-actionlint-queue-extension.py" \
+    "${queue_validator_args[@]}"
   require_docker
+  # actionlint 1.7.12 predates GitHub's 2026-05-07 concurrency.queue release.
+  # The exact stale diagnostic is ignored only after the validator above passes.
   docker run --rm \
     "${validation_container_args[@]}" \
     "${readonly_workspace_args[@]}" \
-    "$actionlint_image"
+    "$actionlint_image" \
+    -ignore 'unexpected key "queue" for "concurrency" section'
 }
 
 run_hadolint() {
@@ -598,6 +608,7 @@ JS
 }
 
 run_ci() {
+  load_container_inputs
   run_yaml_checks
   run_shellcheck
   run_actionlint
