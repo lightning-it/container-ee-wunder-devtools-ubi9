@@ -124,3 +124,60 @@
   - `shared-assets-lit/container/overrides/<repo>/...`
 - If a file exists in an override path, it supersedes the baseline file from `shared-assets-lit/container/base`.
 - For `.github/workflows/container-build-publish.yml`, always check for an override before changing downstream repo copies.
+- `container-ee-wunder-ansible-ubi9` receives its MLX-90 chain only from the
+  repository-specific override. Its repo-specific `.releaserc` is a read-only
+  version-and-notes plan: the release App persists the draft before it creates
+  or reuses the exact lightweight tag. The managed workflow set is:
+  - `.github/workflows/semantic-release.yml`
+  - `.github/workflows/container-build-publish.yml`
+  - `.github/workflows/security-release-update.yml`
+  - `.github/workflows/security-release-guard.yml`
+  - `.github/workflows/security-release-finalize.yml`
+  - `.github/workflows/security-release-promote-tags.yml`
+- The matching managed MLX-90 scripts include
+  `security-release-consumer.py`, `security-release-container-acceptance.sh`,
+  `enrich-mlx90-release-evidence.py`, `promote-mlx90-convenience-tags.py`,
+  `promote-container-latest.py`, `semantic-release-plan.mjs`,
+  `validate-semantic-release-boundary.sh`, and the repository-specific
+  `devtools-container-release-verify.sh`.
+- Keep these files in the override: the container sync intentionally deletes
+  downstream workflows to match `container/base` before applying this
+  repository-specific layer.
+- Governance Apply and a separate live audit of GitHub Release Immutability are
+  release preconditions. The release App intentionally has no Administration
+  permission and does not call the settings endpoint. The repo-specific
+  workflow uses only the job's read token immediately after checkout to verify
+  source ancestry plus a byte-identical source/live/default critical surface:
+  all workflows, `.releaserc`, `.npmrc`, both package manifests,
+  `npm-shrinkwrap.json`, the planner, and the boundary validator. Optional npm
+  control files are bound by exact presence or absence. Only then may it mint
+  the release App token or install dependencies. Later checks repeat that
+  critical-surface comparison and bind
+  source/live receipt state. It runs the locked
+  semantic-release JS API with `dryRun=true` in an isolated repository, binds
+  the returned source SHA, version, tag, notes, and deterministic plan digest,
+  then creates or exactly reuses the App-authored draft before it creates or
+  verifies the lightweight tag. A shared no-drop concurrency queue serializes
+  the mutating planner job with the publisher while leaving PR dry-runs
+  independent. A current-source retry must reproduce the exact draft body and
+  plan. The exact release name and body SHA-256 remain bound at initial build
+  validation, before registry mutation, during attachment retries, immediately
+  before publication, and atomically in the publish mutation itself. The PATCH
+  response, immutable poll, and finalizer must retain the same name and body
+  digest. An
+  older draft stranded before dispatch blocks vNext and requires
+  human-on-exception completion or reconciliation before rerun.
+- The build uploads and byte-verifies the complete release asset allowlist
+  while the release is still a draft. It publishes by release ID only after
+  the final live receipt and producer-revocation checks, then requires REST
+  `immutable=true` on that concrete release before generic tag promotion or
+  MLX-90 finalization. A false value fails closed after publication; no
+  finalizer, delivered status, or convenience-tag promotion may follow.
+- The MLX-90 Security path is digest-authoritative and is an explicit exception
+  to generic convenience-tag publication. Each build attempt uses a unique
+  `mlx90-candidate-<sha>-<run-id>-<attempt>` tag and never reuses a prior
+  candidate. After durable final acceptance, the callback revalidates the exact
+  accepted digests, signatures, source identities, and revocation state but
+  performs no Quay tag mutation. Quay offers no atomic create-if-absent alias
+  operation, so release/version/source-SHA and `latest` aliases are not created
+  or retargeted by the Security path.
