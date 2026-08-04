@@ -123,9 +123,9 @@ jobs:
           if [ -n "$remote_head" ]; then
             git push \
               --force-with-lease="refs/heads/${sync_branch}:${remote_head}" \
-              origin "HEAD:${sync_branch}"
+              origin "HEAD:refs/heads/${sync_branch}"
           else
-            git push origin "HEAD:${sync_branch}"
+            git push origin "HEAD:refs/heads/${sync_branch}"
           fi
 
           if [ -z "$pr_url" ]; then
