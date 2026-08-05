@@ -138,6 +138,7 @@
   `security-release-consumer.py`, `security-release-container-acceptance.sh`,
   `enrich-mlx90-release-evidence.py`, `promote-mlx90-convenience-tags.py`,
   `promote-container-latest.py`, `semantic-release-plan.mjs`,
+  `mlx90_resolve_consumer_merge.py`,
   `validate-semantic-release-boundary.sh`, and the repository-specific
   `devtools-container-release-verify.sh`.
 - Keep these files in the override: the container sync intentionally deletes
