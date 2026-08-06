@@ -133,6 +133,7 @@
   - `.github/workflows/security-release-update.yml`
   - `.github/workflows/security-release-guard.yml`
   - `.github/workflows/security-release-finalize.yml`
+  - `.github/workflows/security-release-reconcile.yml`
   - `.github/workflows/security-release-promote-tags.yml`
 - The matching managed MLX-90 scripts include
   `security-release-consumer.py`, `security-release-container-acceptance.sh`,
