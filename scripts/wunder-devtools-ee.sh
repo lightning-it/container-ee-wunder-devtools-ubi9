@@ -55,23 +55,6 @@ WORKSPACE_MOUNT="${WORKSPACE_ROOT}:/workspace:${WORKSPACE_MODE}"
 # retaining nosuid/nodev for identical Docker and Podman behavior.
 HOME_TMPFS_MOUNT="${CONTAINER_HOME}:rw,exec,nosuid,nodev,size=1g,mode=1777"
 RUN_TMPFS_MOUNT="/run:rw,nosuid,nodev,size=256m"
-if [ "$RUN_AS_HOST_UID_POLICY" = "1" ]; then
-  # The unprivileged controller must be able to create its own isolated
-  # runtime directories without granting it root or extra capabilities.
-  RUN_TMPFS_MOUNT="${RUN_TMPFS_MOUNT},mode=1777"
-fi
-DOCKER_ARGS=(
-  -w /workspace
-  -e HOME="${CONTAINER_HOME}"
-  --read-only
-  --network "$NETWORK_MODE"
-  --cap-drop ALL
-  --security-opt no-new-privileges=true
-  --pids-limit 1024
-  --tmpfs "/tmp:rw,nosuid,nodev,size=2g"
-  --tmpfs "$RUN_TMPFS_MOUNT"
-  --tmpfs "$HOME_TMPFS_MOUNT"
-)
 
 fail_closed() {
   local msg="$1"
@@ -117,6 +100,44 @@ case "$CONTAINER_BIN" in
     fail_closed "unsupported engine '$CONTAINER_BIN' (use podman|docker)"
     ;;
 esac
+
+PODMAN_ROOTLESS=0
+if [ "$CONTAINER_BIN" = "podman" ]; then
+  if ! podman_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)"; then
+    fail_closed "selected podman engine is not usable"
+  fi
+  if [ "${podman_rootless}" = "true" ]; then
+    PODMAN_ROOTLESS=1
+  fi
+fi
+
+if [ "$RUN_AS_HOST_UID_POLICY" = "1" ]; then
+  if [ "$CONTAINER_BIN" = "podman" ] && [ "$PODMAN_ROOTLESS" = "1" ]; then
+    # Rootless Podman maps container UID/GID 0 to the invoking host user.
+    CONTAINER_UID=0
+    CONTAINER_GID=0
+  else
+    # Hosted Docker and rootful Podman preserve numeric bind-mount ownership.
+    CONTAINER_UID="$(id -u)"
+    CONTAINER_GID="$(id -g)"
+  fi
+  # Keep /run private to the selected controller identity instead of making
+  # it writable by every account in the container.
+  RUN_TMPFS_MOUNT="${RUN_TMPFS_MOUNT},uid=${CONTAINER_UID},gid=${CONTAINER_GID},mode=0755"
+fi
+
+DOCKER_ARGS=(
+  -w /workspace
+  -e HOME="${CONTAINER_HOME}"
+  --read-only
+  --network "$NETWORK_MODE"
+  --cap-drop ALL
+  --security-opt no-new-privileges=true
+  --pids-limit 1024
+  --tmpfs "/tmp:rw,nosuid,nodev,size=2g"
+  --tmpfs "$RUN_TMPFS_MOUNT"
+  --tmpfs "$HOME_TMPFS_MOUNT"
+)
 
 if [ "$PRIVILEGED_POLICY" = "1" ]; then
   DOCKER_ARGS+=(--privileged)
@@ -254,16 +275,6 @@ if [ "$mounted_source_root" = "1" ]; then
   DOCKER_ARGS+=(-e "WUNDER_DEVTOOLS_SOURCE_ROOT=${SOURCE_ROOT_CONTAINER}")
 fi
 
-PODMAN_ROOTLESS=0
-if [ "$CONTAINER_BIN" = "podman" ]; then
-  if ! podman_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)"; then
-    fail_closed "selected podman engine is not usable"
-  fi
-  if [ "${podman_rootless}" = "true" ]; then
-    PODMAN_ROOTLESS=1
-  fi
-fi
-
 DOCKER_SOCKET=""
 if [ "$SOCKET_POLICY" != disabled ] && [[ "${DOCKER_HOST:-}" == unix://* ]]; then
   host_sock="${DOCKER_HOST#unix://}"
@@ -291,14 +302,7 @@ if [ "$VAGRANT_SSH_POLICY" = enabled ]; then
 fi
 
 if [ "$RUN_AS_HOST_UID_POLICY" = "1" ]; then
-  if [ "$CONTAINER_BIN" = "podman" ] && [ "$PODMAN_ROOTLESS" = "1" ]; then
-    # Rootless Podman maps container UID/GID 0 to the invoking host user. Keep
-    # that mapping explicit so a mode-0755 bind-mounted checkout is writable.
-    DOCKER_ARGS+=(--user 0:0)
-  else
-    # Hosted Docker preserves numeric ownership on bind mounts.
-    DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
-  fi
+  DOCKER_ARGS+=(--user "${CONTAINER_UID}:${CONTAINER_GID}")
 fi
 
 if [ -n "$DOCKER_SOCKET" ]; then
