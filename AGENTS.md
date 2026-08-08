@@ -45,6 +45,11 @@
 - Feature, Renovate, and shared-assets sync PRs target `develop`.
 - `main` is the stable production release branch.
 - Promotion from `develop` to `main` happens only through a pull request.
+- Normal promotion PRs remain a human-visible manual checkpoint. In
+  `container-ee-wunder-ansible-ubi9`, that checkpoint is a protected,
+  current-head human environment approval. Its reviewer-free authorization
+  environment is reserved for exact App-authored, evidence-bound MLX-90
+  Security branches and does not bypass any required check or branch rule.
 - Merging `develop` into `main` is the container release trigger.
 - Use merge commits for `develop` to `main` promotion PRs so branch ancestry remains clear.
 - After `main` changes, the shared `sync-main-to-develop` workflow must open a back-sync PR from `main` to `develop` so
@@ -147,10 +152,12 @@
   - `.github/workflows/security-release-finalize.yml`
   - `.github/workflows/security-release-reconcile.yml`
   - `.github/workflows/security-release-promote-tags.yml`
+  - `.github/workflows/main-promotion-authorization.yml`
 - The matching managed MLX-90 scripts include
   `security-release-consumer.py`, `security-release-container-acceptance.sh`,
   `enrich-mlx90-release-evidence.py`, `promote-mlx90-convenience-tags.py`,
   `promote-container-latest.py`, `semantic-release-plan.mjs`,
+  `main-promotion-authorization.py`,
   `mlx90_resolve_consumer_merge.py`,
   `validate-semantic-release-boundary.sh`, and the repository-specific
   `devtools-container-release-verify.sh`.
