@@ -113,8 +113,20 @@
 - A Copilot review is advisory input until Codex has resolved or dispositioned
   every finding and rerun all affected deterministic checks.
 - Any content change after a successful review invalidates the local evidence.
-- GitHub Actions required checks and the current-head Copilot gate remain
-  authoritative for merge.
+- GitHub Actions required checks and the current-head review gate remain
+  authoritative for merge. Human, community, and unknown-automation PRs
+  require an actual Copilot review of the current head. Only explicitly
+  allowlisted Renovate, shared-assets, and release-automation changes may use
+  the documented deterministic, evidence-bound exception; unknown bots fail
+  closed.
+- An exact same-repository PR authored by
+  `lightning-it-release-automation[bot]` that does not satisfy a deterministic
+  exception is not exempt. It may satisfy the gate only through the
+  ADR-defined, history-free current-revision Codex review bound to the live
+  base SHA, head SHA, and complete text-only Git-object diff digest. The
+  built-in `:read-only` permission profile technically denies writes and
+  command network access. This path never applies to human, community, or other
+  automation authors.
 - `pre-commit` may provide fast feedback, but it is optional and never
   authorizes a push or substitutes for push-ready evidence.
 
