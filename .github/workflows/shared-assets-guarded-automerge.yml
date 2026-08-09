@@ -506,9 +506,11 @@ jobs:
               return 1
             fi
             evidence="$(
-              jq -nc \
-                --argjson check_pages "$check_runs" \
-                --argjson status_pages "$status_pages" '
+              printf '%s\n%s\n' "$check_runs" "$status_pages" |
+                jq -s '
+                .[0] as $check_pages
+                | .[1] as $status_pages
+                |
                 (([ $check_pages[] | .check_runs[] ]
                   | sort_by(.name, .app.id, .id)
                   | group_by([.name, .app.id])
