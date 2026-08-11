@@ -11,9 +11,12 @@
 # ---------------------------------------------------------------------------
 # Core Ansible tooling (pinned for reproducibility)
 # ---------------------------------------------------------------------------
-ansible-core==2.21.3
+ansible-core==2.18.19
 ansible-lint==6.22.2
 antsibull-changelog==0.35.1
+
+# Version 50.0.0 fixes CVE-2026-69247 in PKCS#7 EnvelopedData decryption.
+cryptography==50.0.0
 
 # ---------------------------------------------------------------------------
 # YAML linting (allow patch/minor, forbid major)
