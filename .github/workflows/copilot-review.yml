@@ -6,7 +6,7 @@ name: Copilot review gate
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, edited]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
 
 permissions:
   contents: read
@@ -29,13 +29,20 @@ concurrency:
 jobs:
   request-current-revision-review:
     name: Request Copilot review for current revision
+    # Only the narrow non-breaking Renovate class is exempt. The subsequent
+    # live-API classifier binds that exemption to Renovate's own label
+    # history; this event-time filter merely ensures every other Renovate PR
+    # actually receives the review that the verification job requires.
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       !(github.event.pull_request.user.login == 'renovate[bot]' &&
+        github.actor == 'renovate[bot]' &&
         startsWith(github.event.pull_request.head.ref, 'renovate/') &&
-        github.event.pull_request.base.ref == 'develop') &&
+        github.event.pull_request.base.ref == 'develop' &&
+        contains(github.event.pull_request.labels.*.name, 'safe-automerge') &&
+        !contains(github.event.pull_request.labels.*.name, 'breaking-update')) &&
       !(github.event.pull_request.user.login == 'lightning-it-shared-assets-sync[bot]' &&
         startsWith(github.event.pull_request.head.ref, 'chore/sync-shared-assets-lit-') &&
         github.event.pull_request.base.ref == 'develop' &&
@@ -110,6 +117,7 @@ jobs:
     if: github.event.pull_request.draft == false
     permissions:
       contents: read
+      issues: read
       pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -134,6 +142,7 @@ jobs:
           trusted_kind=none
           release_tag=""
           live_pr="{}"
+          policy_label_events="[]"
           if [ "${PR_AUTHOR}" = "renovate[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == renovate/* ]] \
@@ -153,7 +162,55 @@ jobs:
                and ([.labels[].name] | index("dependencies") != null)
                and ([.labels[].name] | index("safe-automerge") != null)
                and ([.labels[].name] | index("breaking-update") == null)' \
-                <<<"${live_pr}" >/dev/null; then
+                <<<"${live_pr}" >/dev/null \
+              && policy_label_events="$(
+                gh api --paginate --slurp \
+                  "repos/${REPOSITORY}/issues/${PR_NUMBER}/events?per_page=100"
+              )" \
+              && jq -e \
+                --arg safe_label "safe-automerge" \
+                --arg breaking_label "breaking-update" \
+                --arg author "${PR_AUTHOR}" '
+                [ .[][]?
+                  | select(
+                      (.event == "labeled" or .event == "unlabeled")
+                      and (
+                        .label.name == $safe_label
+                        or .label.name == $breaking_label
+                      )
+                    )
+                  | {
+                      event: .event,
+                      actor: (.actor.login // ""),
+                      created_at: (.created_at // ""),
+                      event_id: (.id // 0),
+                      label: .label.name
+                    }
+                ]
+                | sort_by(.created_at, .event_id) as $events
+                | ([ range(0; ($events | length))
+                    | select(
+                        $events[.].label == $safe_label
+                        and $events[.].event == "labeled"
+                      )
+                  ] | last) as $last_safe_index
+                | $last_safe_index != null
+                and $events[$last_safe_index].actor == $author
+                and ([
+                    $events[]
+                    | select(
+                        .label == $breaking_label
+                        and .event == "labeled"
+                      )
+                  ] | length == 0)
+                and ([
+                    $events[]
+                    | select(
+                        .label == $safe_label
+                          and .actor != $author
+                      )
+                  ] | length == 0)' \
+                <<<"${policy_label_events}" >/dev/null; then
               trusted=true
               trusted_kind=renovate
             fi
