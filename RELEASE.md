@@ -20,6 +20,7 @@ This repository follows the Lightning IT shared release and quality model.
 - A `develop` to `main` promotion PR is created automatically when releasable changes exist.
 - The `develop` to `main` PR is a manual gate and must never be auto-merged.
 - After `main` changes, a `main` to `develop` backmerge PR is created or updated automatically.
+- When that backmerge is file-identical, automation uses a `backmerge/container-<main>-<develop>-main` branch to preserve release ancestry without changing the `develop` tree.
 - Integration and backmerge PRs may auto-merge only after required checks pass, all review conversations are resolved, and there are no conflicts.
 
 ## Mandatory Quality Gates
@@ -38,7 +39,38 @@ This repository follows the Lightning IT shared release and quality model.
 - Quay.io credentials are read only by the trusted release workflow.
 - Images are tagged with immutable version tags, git SHA tags, and `latest` for stable `main` releases.
 - Container validation includes build, start, smoke, healthcheck where applicable, labels, and vulnerability scanning.
-- SBOM, provenance, and signing are enabled where configured.
+- Every release records the immutable image digest and attaches a CycloneDX SBOM, SLSA provenance statement, checksum manifest, and Sigstore bundle.
+- The immutable GitHub Release contains at least these required consumer-verifiable evidence assets:
+  - `release-evidence.json`
+  - `release-evidence.md`
+  - `release-provenance.intoto.jsonl`
+  - `sbom.cdx.json`
+  - `SHA256SUMS`
+  - `SHA256SUMS.sigstore.json`
+
+## Consumer Verification
+
+Download the six release-evidence assets from the selected immutable version tag, then verify their checksums and the keyless signature before trusting them:
+
+```bash
+sha256sum -c SHA256SUMS
+cosign verify-blob \
+  --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity-regexp \
+  '^https://github\.com/lightning-it/container-ee-wunder-devtools-ubi9/\.github/workflows/container-build-publish\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS
+```
+
+Use the exact `image_digest` from `release-evidence.json`, not a mutable tag, and verify the image signature against the same release workflow identity:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp \
+  '^https://github\.com/lightning-it/container-ee-wunder-devtools-ubi9/\.github/workflows/container-build-publish\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  'quay.io/l-it/IMAGE@sha256:DIGEST'
+```
 
 ## Release Evidence
 

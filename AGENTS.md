@@ -13,6 +13,9 @@
   - `CODE_OF_CONDUCT.md`
   - `scripts/wunder-devtools-ee.sh`
   - `scripts/lit-push-ready.py`
+- The push-ready engine is upgraded only together with the matching
+  `.lit/push-ready.json` schema and `scripts/lit-ci-profile.sh`; specialized
+  container sync must not replace the engine by itself during the v2 bootstrap.
 - Managed container baseline files from `shared-assets-lit/container/base`:
   - `AGENTS.md`
   - `.gitignore`
@@ -22,6 +25,7 @@
   - `.yamllint`
   - `CONTRIBUTING.md`
   - `.lit/push-ready.json`
+  - `scripts/lit-ci-profile.sh`
   - `.github/workflows/container-ci.yml`
   - `.github/workflows/container-build-publish.yml`
   - `.github/workflows/promote-develop-to-main.yml`
@@ -41,6 +45,11 @@
 - Feature, Renovate, and shared-assets sync PRs target `develop`.
 - `main` is the stable production release branch.
 - Promotion from `develop` to `main` happens only through a pull request.
+- Normal promotion PRs remain a human-visible manual checkpoint. In
+  `container-ee-wunder-ansible-ubi9`, that checkpoint is a protected,
+  current-head human environment approval. Its reviewer-free authorization
+  environment is reserved for exact App-authored, evidence-bound MLX-90
+  Security branches and does not bypass any required check or branch rule.
 - Merging `develop` into `main` is the container release trigger.
 - Use merge commits for `develop` to `main` promotion PRs so branch ancestry remains clear.
 - After `main` changes, the shared `sync-main-to-develop` workflow must open a back-sync PR from `main` to `develop` so
@@ -65,8 +74,13 @@
 - Release images must be signed by digest with keyless Sigstore/Cosign using GitHub OIDC.
 - Release verification must inspect all expected tags, compare them to the pushed digest, verify the Cosign identity for
   the repository workflow/tag ref, and record the digest in the workflow summary.
-- PR CI and local pre-commit must run the shared container CI parity script through the devtools container. Add new PR
-  checks there first so local validation and GitHub validation stay aligned.
+- The repository-specific canonical `scripts/lit-ci-profile.sh repository-quality`
+  entrypoint used by PR CI and local push readiness must run the shared
+  `scripts/devtools-container-ci.sh all` parity script through the devtools
+  container. The workflow uses that canonical profile as its only full-parity
+  invocation; prerequisite checkout/ref-refresh steps may precede it, but must
+  not duplicate the parity script. Add new PR checks to the parity script first
+  so local validation and GitHub validation stay aligned.
 - Container vulnerability scans fail on `CRITICAL` findings and report `HIGH` findings without failing unless a stricter
   policy is deliberately added in `shared-assets-lit`.
 - Dockerfiles must not download executable tools without checksum or signature verification. Use the shared
@@ -90,14 +104,36 @@
 ## Push-ready validation
 
 - Before push, run `python3 scripts/lit-push-ready.py push-ready`.
+- The only deterministic push-ready and required-CI entrypoint is
+  `scripts/lit-ci-profile.sh repository-quality`.
+- The profile runs the complete container CI contract through the pinned
+  Devtool wrapper. It uses a required local container socket, bridge networking,
+  and a read-write workspace only for the nested build/test lifecycle, then
+  fails if that lifecycle leaves any Git worktree change behind.
+- BuildKit cache pruning is GitHub Actions cleanup, not a local validation
+  result. Local runs retain their developer cache.
 - `AGENTS.md` is the canonical Codex and Copilot contract.
 - `.github/copilot-instructions.md` must contain the current managed
   `AGENTS_SHA256` binding.
 - A Copilot review is advisory input until Codex has resolved or dispositioned
   every finding and rerun all affected deterministic checks.
 - Any content change after a successful review invalidates the local evidence.
-- GitHub Actions required checks and the current-head Copilot gate remain
-  authoritative for merge.
+- GitHub Actions required checks and the current-head review gate remain
+  authoritative for merge. Human, community, and unknown-automation PRs
+  require an actual Copilot review of the current head. Only explicitly
+  allowlisted Renovate, shared-assets, and release-automation changes may use
+  the documented deterministic, evidence-bound exception; unknown bots fail
+  closed.
+- An exact same-repository PR authored by
+  `lightning-it-release-automation[bot]` that does not satisfy a deterministic
+  exception is not exempt. It may satisfy the gate only through the
+  ADR-defined, history-free current-revision Codex review bound to the live
+  base SHA, head SHA, and complete text-only Git-object diff digest. The
+  built-in `:read-only` permission profile technically denies writes and
+  command network access. This path never applies to human, community, or other
+  automation authors.
+- `pre-commit` may provide fast feedback, but it is optional and never
+  authorizes a push or substitutes for push-ready evidence.
 
 ## Repo-specific overrides
 
@@ -105,3 +141,64 @@
   - `shared-assets-lit/container/overrides/<repo>/...`
 - If a file exists in an override path, it supersedes the baseline file from `shared-assets-lit/container/base`.
 - For `.github/workflows/container-build-publish.yml`, always check for an override before changing downstream repo copies.
+- `container-ee-wunder-ansible-ubi9` receives its MLX-90 chain only from the
+  repository-specific override. Its repo-specific `.releaserc` is a read-only
+  version-and-notes plan: the release App persists the draft before it creates
+  or reuses the exact lightweight tag. The managed workflow set is:
+  - `.github/workflows/semantic-release.yml`
+  - `.github/workflows/container-build-publish.yml`
+  - `.github/workflows/security-release-update.yml`
+  - `.github/workflows/security-release-guard.yml`
+  - `.github/workflows/security-release-finalize.yml`
+  - `.github/workflows/security-release-reconcile.yml`
+  - `.github/workflows/security-release-promote-tags.yml`
+  - `.github/workflows/main-promotion-authorization.yml`
+- The matching managed MLX-90 scripts include
+  `security-release-consumer.py`, `security-release-container-acceptance.sh`,
+  `enrich-mlx90-release-evidence.py`, `promote-mlx90-convenience-tags.py`,
+  `promote-container-latest.py`, `semantic-release-plan.mjs`,
+  `main-promotion-authorization.py`,
+  `mlx90_resolve_consumer_merge.py`,
+  `validate-semantic-release-boundary.sh`, and the repository-specific
+  `devtools-container-release-verify.sh`.
+- Keep these files in the override: the container sync intentionally deletes
+  downstream workflows to match `container/base` before applying this
+  repository-specific layer.
+- Governance Apply and a separate live audit of GitHub Release Immutability are
+  release preconditions. The release App intentionally has no Administration
+  permission and does not call the settings endpoint. The repo-specific
+  workflow uses only the job's read token immediately after checkout to verify
+  source ancestry plus a byte-identical source/live/default critical surface:
+  all workflows, `.releaserc`, `.npmrc`, both package manifests,
+  `npm-shrinkwrap.json`, the planner, and the boundary validator. Optional npm
+  control files are bound by exact presence or absence. Only then may it mint
+  the release App token or install dependencies. Later checks repeat that
+  critical-surface comparison and bind
+  source/live receipt state. It runs the locked
+  semantic-release JS API with `dryRun=true` in an isolated repository, binds
+  the returned source SHA, version, tag, notes, and deterministic plan digest,
+  then creates or exactly reuses the App-authored draft before it creates or
+  verifies the lightweight tag. A shared no-drop concurrency queue serializes
+  the mutating planner job with the publisher while leaving PR dry-runs
+  independent. A current-source retry must reproduce the exact draft body and
+  plan. The exact release name and body SHA-256 remain bound at initial build
+  validation, before registry mutation, during attachment retries, immediately
+  before publication, and atomically in the publish mutation itself. The PATCH
+  response, immutable poll, and finalizer must retain the same name and body
+  digest. An
+  older draft stranded before dispatch blocks vNext and requires
+  human-on-exception completion or reconciliation before rerun.
+- The build uploads and byte-verifies the complete release asset allowlist
+  while the release is still a draft. It publishes by release ID only after
+  the final live receipt and producer-revocation checks, then requires REST
+  `immutable=true` on that concrete release before generic tag promotion or
+  MLX-90 finalization. A false value fails closed after publication; no
+  finalizer, delivered status, or convenience-tag promotion may follow.
+- The MLX-90 Security path is digest-authoritative and is an explicit exception
+  to generic convenience-tag publication. Each build attempt uses a unique
+  `mlx90-candidate-<sha>-<run-id>-<attempt>` tag and never reuses a prior
+  candidate. After durable final acceptance, the callback revalidates the exact
+  accepted digests, signatures, source identities, and revocation state but
+  performs no Quay tag mutation. Quay offers no atomic create-if-absent alias
+  operation, so release/version/source-SHA and `latest` aliases are not created
+  or retargeted by the Security path.
