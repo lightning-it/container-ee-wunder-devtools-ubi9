@@ -11,7 +11,7 @@
 # ---------------------------------------------------------------------------
 # Core Ansible tooling (pinned for reproducibility)
 # ---------------------------------------------------------------------------
-ansible-core==2.21.2
+ansible-core==2.21.3
 ansible-lint==6.22.2
 antsibull-changelog==0.35.1
 
