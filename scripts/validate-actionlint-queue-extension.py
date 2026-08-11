@@ -15,8 +15,16 @@ https://github.blog/changelog/2026-05-07-github-actions-concurrency-groups-now-a
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
+
+try:
+    import yaml
+    from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
+except ImportError:
+    raise SystemExit(
+        "ERROR: PyYAML is required to validate workflow queue extensions; "
+        "install the repository's pinned requirements before running this script."
+    )
 
 
 SHARED_GROUP = "mlx90-container-release-${{ github.repository }}"
@@ -39,41 +47,60 @@ EXPECTED = {
 
 
 def parse_mapping_paths(workflow: Path) -> dict[tuple[str, ...], str | None]:
-    """Parse mapping paths while deliberately ignoring YAML block scalar bodies."""
+    """Parse every YAML mapping path without losing alternate key syntax."""
+
+    try:
+        root = yaml.compose(
+            workflow.read_text(encoding="utf-8"),
+            Loader=yaml.SafeLoader,
+        )
+    except yaml.YAMLError as error:
+        raise ValueError(f"invalid YAML: {workflow}: {error}") from error
+    if root is None:
+        return {}
+    if not isinstance(root, MappingNode):
+        raise ValueError(f"workflow root must be a mapping: {workflow}")
 
     values: dict[tuple[str, ...], str | None] = {}
-    stack: list[tuple[int, str]] = []
-    block_indent: int | None = None
-    mapping = re.compile(r"^(?P<indent> *)(?P<key>[A-Za-z0-9_-]+):(?:[ ]*(?P<value>.*))?$")
-    for line_number, raw_line in enumerate(
-        workflow.read_text(encoding="utf-8").splitlines(), start=1
-    ):
-        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
-            continue
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        if "\t" in raw_line[:indent]:
-            raise ValueError(f"tabs are not allowed: {workflow}:{line_number}")
-        if block_indent is not None:
-            if indent > block_indent:
-                continue
-            block_indent = None
-        while stack and indent <= stack[-1][0]:
-            stack.pop()
-        match = mapping.match(raw_line)
-        if match is None:
-            if raw_line.lstrip().startswith("-"):
-                continue
-            continue
-        key = match.group("key")
-        value = (match.group("value") or "").strip()
-        if " #" in value:
-            value = value.split(" #", maxsplit=1)[0].rstrip()
-        path = (*[item[1] for item in stack], key)
-        values[path] = value or None
-        if value.startswith(("|", ">")):
-            block_indent = indent
-        elif not value:
-            stack.append((indent, key))
+
+    def walk(node: Node, path: tuple[str, ...], ancestors: frozenset[int]) -> None:
+        if id(node) in ancestors:
+            raise ValueError(f"recursive YAML aliases are not allowed: {workflow}")
+        descendants = ancestors | {id(node)}
+        if isinstance(node, MappingNode):
+            seen: set[str] = set()
+            for key_node, value_node in node.value:
+                if not isinstance(key_node, ScalarNode):
+                    raise ValueError(f"mapping keys must be scalar: {workflow}")
+                key = key_node.value
+                if key == "<<":
+                    raise ValueError(f"YAML merge keys are not allowed: {workflow}")
+                if key in seen:
+                    raise ValueError(f"duplicate mapping key {key!r}: {workflow}")
+                seen.add(key)
+                child = (*path, key)
+                if isinstance(value_node, ScalarNode):
+                    values[child] = value_node.value or None
+                elif isinstance(value_node, (MappingNode, SequenceNode)):
+                    values[child] = None
+                    walk(value_node, child, descendants)
+                else:  # pragma: no cover - SafeLoader currently has three node types.
+                    raise ValueError(f"unsupported YAML node: {workflow}")
+            return
+        if isinstance(node, SequenceNode):
+            for index, item in enumerate(node.value):
+                child = (*path, f"[{index}]")
+                if isinstance(item, ScalarNode):
+                    values[child] = item.value or None
+                elif isinstance(item, (MappingNode, SequenceNode)):
+                    values[child] = None
+                    walk(item, child, descendants)
+                else:  # pragma: no cover - SafeLoader currently has three node types.
+                    raise ValueError(f"unsupported YAML node: {workflow}")
+            return
+        raise ValueError(f"unsupported YAML document: {workflow}")
+
+    walk(root, (), frozenset())
     return values
 
 
