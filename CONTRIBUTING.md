@@ -75,8 +75,10 @@ A good PR:
 
 - Git
 - Docker or Podman (Buildx recommended if using Docker)
-- Python 3.11+ (for pre-commit and local checks)
-- `pre-commit`
+- Python 3.10+ (for push-ready orchestration and optional pre-commit checks)
+- Codex CLI access and GitHub Copilot CLI entitlement for the required local
+  dual-agent review
+- `pre-commit` (optional fast feedback)
 
 ### Renovate scope for certified RH collections
 
@@ -95,7 +97,7 @@ Policy:
   certified-only requirement files) from Renovate checks/updates.
 - Manage certified collection versions with a controlled manual or CI workflow.
 
-### Install pre-commit hooks
+### Optional: install pre-commit hooks
 
 ```bash
 python -m pip install --user pre-commit
@@ -105,12 +107,31 @@ pre-commit install
 ### Run checks locally
 
 ```bash
-pre-commit run --all-files
+scripts/lit-ci-profile.sh repository-quality
+python3 scripts/lit-push-ready.py review
+
+# After the intended change is committed on a feature branch:
+python3 scripts/lit-push-ready.py push-ready
 ```
 
-The managed pre-commit hook runs the same container CI parity script that GitHub PR checks run, inside the devtools
-container. A local green run should therefore catch the normal PR build, lint, runtime contract, Renovate config, and
-container vulnerability checks before you push.
+The exact profile runs the same complete container CI contract that the
+required GitHub Actions job invokes. `review` supports iteration over
+uncommitted work; the evidence-producing `push-ready` command requires a clean
+committed `HEAD` and adds isolated Copilot CLI and Codex reviews.
+
+`pre-commit run --all-files` remains useful for fast feedback when installed,
+but it is optional and never authorizes a push or substitutes for push-ready
+evidence. The current-head GitHub Copilot review and required GitHub Actions
+checks remain authoritative for merge. The full container parity profile is
+intentionally not a pre-commit hook: ordinary commits have staged changes,
+while the evidence-producing profile must validate a clean committed tree.
+
+The first migration of `.lit/push-ready.json`, the push-ready runner, or the
+canonical profile cannot treat its own unmerged policy as a trust root. The
+runner intentionally refuses push evidence for that bootstrap diff. Run the
+new profile and the separate dual-agent `review` command on the exact commit,
+then use the protected required-CI and current-head Copilot gates for that one
+migration PR. It does not count toward correction-free first-push evidence.
 
 ## Container Build & Test
 

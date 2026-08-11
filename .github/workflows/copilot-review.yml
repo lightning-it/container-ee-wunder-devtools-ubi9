@@ -6,7 +6,7 @@ name: Copilot review gate
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, edited]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
 
 permissions:
   contents: read
@@ -23,22 +23,37 @@ concurrency:
   group: copilot-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# The stable main-to-develop sync branch can carry release content, is never
+# ancestry-exempt, and uses the history-free exact-revision AI path. Only dynamically named
+# backmerge/*-main PRs may use the exact file-identical ancestry exemption.
 jobs:
   request-current-revision-review:
     name: Request Copilot review for current revision
+    # Only the narrow non-breaking Renovate class is exempt. The subsequent
+    # live-API classifier binds that exemption to Renovate's own label
+    # history; this event-time filter merely ensures every other Renovate PR
+    # actually receives the review that the verification job requires.
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       !(github.event.pull_request.user.login == 'renovate[bot]' &&
+        github.actor == 'renovate[bot]' &&
         startsWith(github.event.pull_request.head.ref, 'renovate/') &&
-        github.event.pull_request.base.ref == 'develop') &&
+        github.event.pull_request.base.ref == 'develop' &&
+        contains(github.event.pull_request.labels.*.name, 'safe-automerge') &&
+        !contains(github.event.pull_request.labels.*.name, 'breaking-update')) &&
+      !(github.event.pull_request.user.login == 'lightning-it-shared-assets-sync[bot]' &&
+        startsWith(github.event.pull_request.head.ref, 'chore/sync-shared-assets-lit-') &&
+        github.event.pull_request.base.ref == 'develop' &&
+        (github.event.pull_request.title == 'chore: sync shared-assets-lit' ||
+          github.event.pull_request.title == 'chore: sync shared assets')) &&
+      !(github.event.pull_request.user.login == 'lightning-it-shared-assets-sync[bot]' &&
+        startsWith(github.event.pull_request.head.ref, 'chore/sync-repository-quality-') &&
+        github.event.pull_request.base.ref == 'develop' &&
+        github.event.pull_request.title == 'chore: sync repository quality assets') &&
       !(github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
-        github.event.pull_request.head.ref == 'chore/sync-main-to-develop' &&
-        github.event.pull_request.base.ref == 'develop' &&
-        github.event.pull_request.title == 'chore: sync main back to develop') &&
-      !(github.event.pull_request.head.repo.full_name == github.repository &&
         startsWith(github.event.pull_request.head.ref, 'backmerge/') &&
         endsWith(github.event.pull_request.head.ref, '-main') &&
         github.event.pull_request.base.ref == 'develop' &&
@@ -61,43 +76,10 @@ jobs:
       - name: Request Copilot review for the current revision
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BASE: ${{ github.event.pull_request.base.ref }}
-          PR_HEAD: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ] \
-            && [ "${PR_BASE}" = "develop" ] \
-            && { { [[ "${PR_HEAD}" == chore/sync-shared-assets-lit-* ]] \
-                && { [ "${PR_TITLE}" = "chore: sync shared-assets-lit" ] \
-                  || [ "${PR_TITLE}" = "chore: sync shared assets" ]; }; } \
-              || { [[ "${PR_HEAD}" == chore/sync-repository-quality-* ]] \
-                && [ "${PR_TITLE}" = "chore: sync repository quality assets" ]; }; }; then
-            for attempt in {1..6}; do
-              if ! live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"; then
-                echo "Live PR metadata unavailable; falling back to Copilot review."
-                break
-              fi
-              if jq -e --arg author "${PR_AUTHOR}" --arg base "${PR_BASE}" \
-                --arg head "${PR_HEAD}" --arg head_sha "${PR_HEAD_SHA}" \
-                --arg repo "${REPOSITORY}" --arg title "${PR_TITLE}" \
-                '(.state == "open") and (.draft == false) and (.user.login == $author)
-                 and (.base.ref == $base) and (.head.ref == $head)
-                 and (.head.sha == $head_sha) and (.head.repo.full_name == $repo)
-                 and (.title == $title)
-                 and ([.labels[].name] | index("chore") != null)
-                 and ([.labels[].name] | index("shared-assets-lit") != null)' \
-                <<<"${live_pr}" >/dev/null; then
-                echo "Trusted sync PR verified from live metadata; Copilot request skipped."
-                exit 0
-              fi
-              [ "${attempt}" -eq 6 ] || sleep 5
-            done
-          fi
           reviewer_login="${COPILOT_REVIEWER_LOGIN%\[bot\]}"
           reviewer="${reviewer_login}[bot]"
           requested_reviewers_url="repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers"
@@ -135,6 +117,7 @@ jobs:
     if: github.event.pull_request.draft == false
     permissions:
       contents: read
+      issues: read
       pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -159,6 +142,7 @@ jobs:
           trusted_kind=none
           release_tag=""
           live_pr="{}"
+          policy_label_events="[]"
           if [ "${PR_AUTHOR}" = "renovate[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == renovate/* ]] \
@@ -178,7 +162,55 @@ jobs:
                and ([.labels[].name] | index("dependencies") != null)
                and ([.labels[].name] | index("safe-automerge") != null)
                and ([.labels[].name] | index("breaking-update") == null)' \
-                <<<"${live_pr}" >/dev/null; then
+                <<<"${live_pr}" >/dev/null \
+              && policy_label_events="$(
+                gh api --paginate --slurp \
+                  "repos/${REPOSITORY}/issues/${PR_NUMBER}/events?per_page=100"
+              )" \
+              && jq -e \
+                --arg safe_label "safe-automerge" \
+                --arg breaking_label "breaking-update" \
+                --arg author "${PR_AUTHOR}" '
+                [ .[][]?
+                  | select(
+                      (.event == "labeled" or .event == "unlabeled")
+                      and (
+                        .label.name == $safe_label
+                        or .label.name == $breaking_label
+                      )
+                    )
+                  | {
+                      event: .event,
+                      actor: (.actor.login // ""),
+                      created_at: (.created_at // ""),
+                      event_id: (.id // 0),
+                      label: .label.name
+                    }
+                ]
+                | sort_by(.created_at, .event_id) as $events
+                | ([ range(0; ($events | length))
+                    | select(
+                        $events[.].label == $safe_label
+                        and $events[.].event == "labeled"
+                      )
+                  ] | last) as $last_safe_index
+                | $last_safe_index != null
+                and $events[$last_safe_index].actor == $author
+                and ([
+                    $events[]
+                    | select(
+                        .label == $breaking_label
+                        and .event == "labeled"
+                      )
+                  ] | length == 0)
+                and ([
+                    $events[]
+                    | select(
+                        .label == $safe_label
+                          and .actor != $author
+                      )
+                  ] | length == 0)' \
+                <<<"${policy_label_events}" >/dev/null; then
               trusted=true
               trusted_kind=renovate
             fi
@@ -223,12 +255,6 @@ jobs:
             trusted_kind=repository-quality
           elif [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
-            && [ "${PR_HEAD}" = "chore/sync-main-to-develop" ] \
-            && [ "${PR_BASE}" = "develop" ] \
-            && [ "${PR_TITLE}" = "chore: sync main back to develop" ]; then
-            trusted=true
-            trusted_kind=ancestry-backmerge
-          elif [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == backmerge/*-main ]] \
             && [ "${PR_BASE}" = "develop" ] \
             && [[ "${PR_TITLE}" == "chore(governance): record main ancestry before "* ]]; then
@@ -283,11 +309,11 @@ jobs:
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git fetch --quiet --no-tags origin \
             "${HEAD_SHA}" "refs/heads/main" "refs/heads/develop"
-          git merge-base --is-ancestor "origin/main" "${HEAD_SHA}"
-          git merge-base --is-ancestor "origin/develop" "${HEAD_SHA}"
           [ "$(git rev-list --parents -n 1 "${HEAD_SHA}" | wc -w)" -eq 3 ]
+          [ "$(git rev-parse "${HEAD_SHA}^1")" = "$(git rev-parse origin/develop)" ]
+          [ "$(git rev-parse "${HEAD_SHA}^2")" = "$(git rev-parse origin/main)" ]
           git diff --quiet "origin/develop" "${HEAD_SHA}"
-          echo "Verified a develop-tree-preserving two-parent merge of current main and develop."
+          echo "Verified an exact develop-tree-preserving merge of current develop and main tips."
 
       - name: Verify protected release promotion
         if: steps.trusted-automation.outputs.kind == 'release-promotion'
@@ -404,12 +430,21 @@ jobs:
               echo "Copilot review is not required for this exact-head trusted Renovate PR."
               echo "Trusted identity and policy verification succeeded."
             } >>"${GITHUB_STEP_SUMMARY}"
+          elif [[ "${{ steps.trusted-automation.outputs.kind }}" =~ ^(shared-assets|repository-quality)$ ]]; then
+            {
+              echo "### Provenance-verified managed distribution"
+              echo
+              echo "The canonical source change was reviewed before distribution."
+              echo "Exact App identity, source SHA/run provenance, and target gates are enforced by the required guarded-automerge policy."
+            } >>"${GITHUB_STEP_SUMMARY}"
           else
             echo "Trusted automation PR; Copilot review is delegated to its required guarded-automerge policy."
           fi
 
       - name: Verify current Copilot review and resolved findings
-        if: steps.trusted-automation.outputs.trusted != 'true'
+        if: >-
+          steps.trusted-automation.outputs.trusted != 'true' &&
+          github.event.pull_request.user.login != 'lightning-it-release-automation[bot]'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -784,3 +819,162 @@ jobs:
           fi
 
           echo "GitHub Copilot reviewed current head ${head_sha}; no unresolved Copilot findings remain."
+
+      - name: Materialize bounded history-free exact-head review input
+        if: >-
+          steps.trusted-automation.outputs.trusted != 'true' &&
+          github.event.pull_request.user.login == 'lightning-it-release-automation[bot]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "${PR_AUTHOR}" in
+            lightning-it-release-automation\[bot\]) ;;
+            *)
+              echo "Untrusted bot author ${PR_AUTHOR}; refusing credentialed AI review." >&2
+              exit 1
+              ;;
+          esac
+          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg author "${PR_AUTHOR}" \
+            --arg base_sha "${PR_BASE_SHA}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            --arg repository "${REPOSITORY}" \
+            '(.state == "open") and (.draft == false)
+             and (.user.login == $author) and (.user.type == "Bot")
+             and (.base.sha == $base_sha) and (.head.sha == $head_sha)
+             and (.head.repo.full_name == $repository)' \
+            <<<"${live_pr}" >/dev/null
+
+          install -d -m 0700 exact-head-review
+          git_dir="$(mktemp -d "${RUNNER_TEMP:?}/exact-head-git.XXXXXX")"
+          cleanup_git_dir() {
+            case "${git_dir}" in
+              "${RUNNER_TEMP}/exact-head-git."*) rm -rf -- "${git_dir}" ;;
+              *) echo "Refusing to clean unexpected Git directory: ${git_dir}" >&2; return 1 ;;
+            esac
+          }
+          trap cleanup_git_dir EXIT
+          git init --bare "${git_dir}"
+          git -C "${git_dir}" config credential.helper '!gh auth git-credential'
+          git -C "${git_dir}" remote add origin "https://github.com/${REPOSITORY}.git"
+          git -C "${git_dir}" fetch --no-tags --depth=1 origin \
+            "${PR_BASE_SHA}" "${EXPECTED_HEAD}"
+          git -C "${git_dir}" cat-file -e "${PR_BASE_SHA}^{commit}"
+          git -C "${git_dir}" cat-file -e "${EXPECTED_HEAD}^{commit}"
+          git -C "${git_dir}" diff --quiet "${PR_BASE_SHA}" "${EXPECTED_HEAD}" && {
+            echo "Exact base/head Git trees contain no reviewable change." >&2
+            exit 1
+          }
+          if git -C "${git_dir}" diff --numstat "${PR_BASE_SHA}" "${EXPECTED_HEAD}" \
+            | awk '$1 == "-" || $2 == "-" { binary = 1 } END { exit !binary }'; then
+            echo "Binary changes are not eligible for the exact-head AI review path." >&2
+            exit 1
+          fi
+          git -C "${git_dir}" diff --binary --full-index --no-ext-diff \
+            "${PR_BASE_SHA}" "${EXPECTED_HEAD}" \
+            >exact-head-review/change.patch
+          cleanup_git_dir
+          trap - EXIT
+          materialized_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg base_sha "${PR_BASE_SHA}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            '(.base.sha == $base_sha) and (.head.sha == $head_sha)' \
+            <<<"${materialized_pr}" >/dev/null
+          patch_sha256="$(sha256sum exact-head-review/change.patch | awk '{print $1}')"
+          [[ "${patch_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          review_bytes="$(wc -c <exact-head-review/change.patch | tr -d ' ')"
+          if ! [[ "${review_bytes}" =~ ^[0-9]+$ ]] \
+            || [ "${review_bytes}" -le 0 ] \
+            || [ "${review_bytes}" -ge 200000 ]; then
+            echo "Exact-head review input must contain 1..199999 bytes; observed ${review_bytes}." >&2
+            exit 1
+          fi
+          jq -n \
+            --arg base_sha "${PR_BASE_SHA}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            --arg patch_sha256 "${patch_sha256}" \
+            --arg repository "${REPOSITORY}" \
+            --argjson pull_request "${PR_NUMBER}" \
+            --argjson review_bytes "${review_bytes}" \
+            '{schema_version:1,repository:$repository,pull_request:$pull_request,
+              base_sha:$base_sha,head_sha:$head_sha,patch_sha256:$patch_sha256,
+              review_bytes:$review_bytes}' \
+            >exact-head-review/review-metadata.json
+          gh api \
+            "repos/${REPOSITORY}/contents/.github/codex/prompts/review-exact-head.md?ref=${PR_BASE_SHA}" \
+            --jq .content | base64 --decode >exact-head-review/review-prompt.md
+          gh api \
+            "repos/${REPOSITORY}/contents/.github/codex/schemas/exact-head-review.schema.json?ref=${PR_BASE_SHA}" \
+            --jq .content | base64 --decode >exact-head-review/review-schema.json
+          test -s exact-head-review/review-prompt.md
+          jq -e '.type == "object"' exact-head-review/review-schema.json >/dev/null
+
+      - name: Run history-free exact-head Codex review for unmatched release bot PR
+        id: bot-ai-review
+        if: >-
+          steps.trusted-automation.outputs.trusted != 'true' &&
+          github.event.pull_request.user.login == 'lightning-it-release-automation[bot]'
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: exact-head-review/review-prompt.md
+          output-file: exact-head-review/result.json
+          output-schema-file: exact-head-review/review-schema.json
+          working-directory: exact-head-review
+          # The built-in profile technically denies writes and command network access.
+          permission-profile: :read-only
+          safety-strategy: drop-sudo
+          codex-args: '["--ephemeral"]'
+          allow-bots: "true"
+          allow-bot-users: lightning-it-release-automation
+
+      - name: Enforce exact-revision AI verdict and unchanged pull request
+        if: >-
+          steps.trusted-automation.outputs.trusted != 'true' &&
+          github.event.pull_request.user.login == 'lightning-it-release-automation[bot]'
+        env:
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg base_sha "${EXPECTED_BASE}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            '(.base.sha == $base_sha) and (.head.sha == $head_sha)' \
+            <<<"${live_pr}" >/dev/null
+          patch_sha256="$(sha256sum exact-head-review/change.patch | awk '{print $1}')"
+          [[ "${patch_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          jq -e \
+            --arg base_sha "${EXPECTED_BASE}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            --arg patch_sha256 "${patch_sha256}" \
+            '(.base_sha == $base_sha)
+             and (.head_sha == $head_sha)
+             and (.patch_sha256 == $patch_sha256)
+             and ((.verdict == "PASS" and (.findings | length) == 0)
+               or (.verdict == "FAIL" and (.findings | length) > 0))' \
+            exact-head-review/result.json >/dev/null
+          verdict="$(jq -r .verdict exact-head-review/result.json)"
+          findings="$(jq '.findings | length' exact-head-review/result.json)"
+          {
+            echo "### History-free exact-head AI review"
+            echo
+            echo "- Base: \`${EXPECTED_BASE}\`"
+            echo "- Head: \`${EXPECTED_HEAD}\`"
+            echo "- Patch SHA-256: \`${patch_sha256}\`"
+            echo "- Verdict: \`${verdict}\`"
+            echo "- Findings: \`${findings}\`"
+          } >>"${GITHUB_STEP_SUMMARY}"
+          test "${verdict}" = PASS

@@ -2,7 +2,7 @@
   "branches": ["main"],
   "preset": "conventionalcommits",
   "plugins": [
-    "@semantic-release/commit-analyzer",
+    ["@semantic-release/commit-analyzer", {"releaseRules": [{"type": "chore", "scope": "deps", "release": "patch"}, {"type": "fix", "scope": "security", "release": "patch"}]}],
     "@semantic-release/release-notes-generator",
     ["@semantic-release/github", { "assets": [] }]
   ]

@@ -83,35 +83,50 @@ jobs:
           fi
 
           git fetch origin main develop
-          sync_branch="chore/sync-main-to-develop"
-          title="chore: sync main back to develop"
-
-          pr_url="$(GH_TOKEN="$pr_token" gh pr list \
-            --repo "$REPO" \
-            --base develop \
-            --head "$sync_branch" \
-            --state open \
-            --json url \
-            --jq '.[0].url')"
+          stable_sync_branch="chore/sync-main-to-develop"
+          stable_pr_url="$(GH_TOKEN="$pr_token" gh pr list \
+            --repo "$REPO" --base develop --head "$stable_sync_branch" \
+            --state open --json url --jq '.[0].url // empty')"
 
           if git merge-base --is-ancestor origin/main origin/develop; then
             echo "develop already contains main; nothing to sync."
-            if [ -n "$pr_url" ]; then
-              GH_TOKEN="$pr_token" gh pr close "$pr_url" \
+            if [ -n "$stable_pr_url" ]; then
+              GH_TOKEN="$pr_token" gh pr close "$stable_pr_url" \
                 --repo "$REPO" \
                 --comment "Closing empty back-sync PR: develop already contains main."
             fi
             exit 0
           fi
 
-          git checkout -B "$sync_branch" origin/develop
+          main_short="$(git rev-parse --short=12 origin/main)"
+          develop_short="$(git rev-parse --short=12 origin/develop)"
+          git checkout --detach origin/develop
           git merge --no-ff origin/main -m "chore: sync main back to develop"
-          git push --force-with-lease origin "HEAD:${sync_branch}"
-
+          sync_branch="$stable_sync_branch"
+          title="chore: sync main back to develop"
           body=$'Back-sync PR from `main` to `develop`.\n\n'
           body+=$'This keeps `develop` ancestry current after a production '
           body+=$'promotion merge into `main`, so the next `develop` to `main` '
           body+=$'promotion PR can open cleanly.'
+          superseded_pr_url=""
+          if git diff --quiet origin/develop HEAD; then
+            sync_branch="backmerge/container-${main_short}-${develop_short}-main"
+            title="chore(governance): record main ancestry before ${main_short}"
+            body='Automated develop-tree-preserving ancestry backmerge after a protected main promotion.'
+            superseded_pr_url="$stable_pr_url"
+          fi
+
+          pr_url="$(GH_TOKEN="$pr_token" gh pr list \
+            --repo "$REPO" --base develop --head "$sync_branch" \
+            --state open --json url --jq '.[0].url // empty')"
+          remote_head="$(git ls-remote --heads origin "refs/heads/${sync_branch}" | awk '{print $1}')"
+          if [ -n "$remote_head" ]; then
+            git push \
+              --force-with-lease="refs/heads/${sync_branch}:${remote_head}" \
+              origin "HEAD:refs/heads/${sync_branch}"
+          else
+            git push origin "HEAD:refs/heads/${sync_branch}"
+          fi
 
           if [ -z "$pr_url" ]; then
             GH_TOKEN="$pr_token" gh pr create \
@@ -125,4 +140,9 @@ jobs:
               --repo "$REPO" \
               --title "$title" \
               --body "$body"
+          fi
+          if [ -n "$superseded_pr_url" ]; then
+            GH_TOKEN="$pr_token" gh pr close "$superseded_pr_url" \
+              --repo "$REPO" \
+              --comment "Superseded by exact file-identical ancestry backmerge ${sync_branch}."
           fi
