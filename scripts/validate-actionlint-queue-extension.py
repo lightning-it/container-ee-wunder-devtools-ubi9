@@ -17,8 +17,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import yaml
-from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
+try:
+    import yaml
+    from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
+except ImportError:
+    raise SystemExit(
+        "ERROR: PyYAML is required to validate workflow queue extensions; "
+        "install the repository's pinned requirements before running this script."
+    )
 
 
 SHARED_GROUP = "mlx90-container-release-${{ github.repository }}"

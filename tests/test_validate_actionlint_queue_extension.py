@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +80,21 @@ class ParseMappingPathsTest(unittest.TestCase):
         )
 
         self.assertNotIn(("queue",), document)
+
+
+class DependencyErrorTest(unittest.TestCase):
+    def test_missing_pyyaml_has_actionable_error_without_traceback(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-S", str(SCRIPT), "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ERROR: PyYAML is required", result.stderr)
+        self.assertIn("pinned requirements", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
 
 if __name__ == "__main__":
