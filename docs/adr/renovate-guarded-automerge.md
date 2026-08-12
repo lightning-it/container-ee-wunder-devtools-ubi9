@@ -2,6 +2,7 @@
 id: adr-renovate-guarded-automerge
 title: Guarded automatic merge for Renovate
 description: Defines the exact trust and CI boundary for unattended Renovate merges.
+slug: /adr/renovate-guarded-automerge/
 document:
   status: maintained
   approval_status: approved
