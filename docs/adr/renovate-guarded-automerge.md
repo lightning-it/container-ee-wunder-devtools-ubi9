@@ -65,7 +65,10 @@ The workflow must not create or imitate an approving review. It uses the
 least-privilege repository token to enable or revoke GitHub auto-merge and
 binds the request to the exact head commit. GitHub performs the eventual merge
 only after every protected-branch requirement and required current-head check
-passes. A later event that makes the pull request unsafe revokes auto-merge.
+passes. The workflow job runs only for pull requests authored by
+`renovate[bot]`; it must never enable, inspect, or revoke auto-merge for human,
+community, release-automation, or other non-Renovate pull requests. A later
+event that makes a Renovate pull request unsafe revokes auto-merge.
 A `synchronize` event triggered by any actor other than `renovate[bot]`
 revokes auto-merge unconditionally, even when the labels remain unchanged.
 The commit-provenance check applies again on every later event, so a bot event
