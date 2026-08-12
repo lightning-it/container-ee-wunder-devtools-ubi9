@@ -54,4 +54,4 @@ pyvmomi==9.1.0.0
 # ---------------------------------------------------------------------------
 # COPR CLI (needed to configure/build COPR packages from inside the container)
 # ---------------------------------------------------------------------------
-copr-cli==2.5
+copr-cli==2.6

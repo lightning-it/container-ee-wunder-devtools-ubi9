@@ -129,6 +129,11 @@
   exception is not exempt. It may satisfy the gate only through the
   ADR-defined, history-free current-revision Codex review bound to the live
   base SHA, head SHA, and complete text-only Git-object diff digest. The
+  review MUST run from the protected default-branch copy of
+  `.github/workflows/release-bot-exact-head-review.yml`; the pull-request
+  workflow may only consume its successful exact-revision workflow-run result
+  and MUST NOT expose review credentials to pull-request-controlled workflow
+  code. The
   built-in `:read-only` permission profile technically denies writes and
   command network access. This path never applies to human, community, or other
   automation authors.

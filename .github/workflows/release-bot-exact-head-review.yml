@@ -1,0 +1,285 @@
+# Managed by lightning-it/shared-assets-lit.
+# Do not edit downstream copies directly.
+# yamllint disable rule:truthy rule:line-length
+---
+name: Base-controlled release bot exact-head review
+run-name: >-
+  Base-controlled exact-head PR #${{ github.event.pull_request.number }}
+  ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+
+on:
+  pull_request_target:
+    types:
+      [
+        opened,
+        synchronize,
+        reopened,
+        ready_for_review,
+        labeled,
+        unlabeled,
+        edited,
+      ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: base-controlled-exact-head-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Security boundary: pull_request_target loads this workflow from the protected
+# default branch. These jobs never check out or execute pull-request code. The
+# review job fetches exact base/head objects only to materialize a bounded diff.
+jobs:
+  classify:
+    name: Classify deterministic release-bot exemption
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' &&
+      github.event.pull_request.user.type == 'Bot' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    outputs:
+      requires-review: ${{ steps.classify.outputs.requires-review }}
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Classify exact deterministic exemption
+        id: classify
+        env:
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg author "${PR_AUTHOR}" \
+            --arg base_ref "${PR_BASE_REF}" \
+            --arg base_sha "${EXPECTED_BASE}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            --arg repository "${REPOSITORY}" \
+            '(.state == "open") and (.draft == false)
+             and (.user.login == $author) and (.user.type == "Bot")
+             and (.base.ref == $base_ref) and (.base.sha == $base_sha)
+             and (.head.sha == $head_sha)
+             and (.base.repo.full_name == $repository)
+             and (.head.repo.full_name == $repository)' \
+            <<<"${live_pr}" >/dev/null
+
+          pr_head="$(jq -r '.head.ref // ""' <<<"${live_pr}")"
+          pr_title="$(jq -r '.title // ""' <<<"${live_pr}")"
+          requires_review=true
+          exemption=none
+          if [[ "${pr_head}" == backmerge/*-main ]] \
+            && [ "${PR_BASE_REF}" = develop ] \
+            && [[ "${pr_title}" == "chore(governance): record main ancestry before "* ]]; then
+            requires_review=false
+            exemption=ancestry-backmerge
+          elif [[ "${pr_head}" == release/v* ]] \
+            && [ "${PR_BASE_REF}" = main ]; then
+            release_tag="${pr_head#release/}"
+            if [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              && [ "${pr_title}" = "Release ${release_tag}" ] \
+              && gh api "repos/${REPOSITORY}/contents/galaxy.yml?ref=main" >/dev/null \
+              && gh api "repos/${REPOSITORY}/contents/changelogs/config.yaml?ref=main" >/dev/null; then
+              requires_review=false
+              exemption=release-preparation
+            fi
+          elif [[ "${pr_head}" == backsync/release-v*-to-develop ]] \
+            && [ "${PR_BASE_REF}" = develop ]; then
+            release_tag="${pr_head#backsync/release-}"
+            release_tag="${release_tag%-to-develop}"
+            if [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              && [ "${pr_title}" = "chore: sync ${release_tag} release back to develop" ]; then
+              requires_review=false
+              exemption=release-backsync
+            fi
+          elif [ "${pr_head}" = develop ] \
+            && [ "${PR_BASE_REF}" = main ] \
+            && [ "${pr_title}" = "chore(release): promote develop to main" ]; then
+            requires_review=false
+            exemption=release-promotion
+          fi
+          {
+            echo "requires-review=${requires_review}"
+            echo "exemption=${exemption}"
+          } >>"${GITHUB_OUTPUT}"
+
+  exact-head-review:
+    name: Base-controlled exact-head Codex review
+    needs: classify
+    if: needs.classify.outputs.requires-review == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Materialize bounded exact-head review input without checkout
+        env:
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "${TRUSTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg author "${PR_AUTHOR}" \
+            --arg base_ref "${PR_BASE_REF}" \
+            --arg base_sha "${EXPECTED_BASE}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            --arg repository "${REPOSITORY}" \
+            '(.state == "open") and (.draft == false)
+             and (.user.login == $author) and (.user.type == "Bot")
+             and (.base.ref == $base_ref)
+             and (.base.sha == $base_sha) and (.head.sha == $head_sha)
+             and (.base.repo.full_name == $repository)
+             and (.head.repo.full_name == $repository)' \
+            <<<"${live_pr}" >/dev/null
+
+          test ! -e exact-head-review
+          install -d -m 0700 exact-head-review
+          git_dir="$(mktemp -d "${RUNNER_TEMP:?}/exact-head-git.XXXXXX")"
+          cleanup_git_dir() {
+            case "${git_dir}" in
+              "${RUNNER_TEMP}/exact-head-git."*) rm -rf -- "${git_dir}" ;;
+              *) echo "Refusing to clean unexpected Git directory: ${git_dir}" >&2; return 1 ;;
+            esac
+          }
+          trap cleanup_git_dir EXIT
+          git init --bare "${git_dir}"
+          git -C "${git_dir}" config credential.helper '!gh auth git-credential'
+          git -C "${git_dir}" remote add origin "https://github.com/${REPOSITORY}.git"
+          git -C "${git_dir}" fetch --no-tags --depth=1 origin \
+            "+${EXPECTED_BASE}:refs/review/base" \
+            "+${EXPECTED_HEAD}:refs/review/head"
+          git -C "${git_dir}" cat-file -e "${EXPECTED_BASE}^{commit}"
+          git -C "${git_dir}" cat-file -e "${EXPECTED_HEAD}^{commit}"
+          git -C "${git_dir}" diff --quiet "${EXPECTED_BASE}" "${EXPECTED_HEAD}" && {
+            echo "Exact base/head Git trees contain no reviewable change." >&2
+            exit 1
+          }
+          if git -C "${git_dir}" diff --numstat "${EXPECTED_BASE}" "${EXPECTED_HEAD}" \
+            | awk '$1 == "-" || $2 == "-" { binary = 1 } END { exit !binary }'; then
+            echo "Binary changes are not eligible for the exact-head AI review path." >&2
+            exit 1
+          fi
+          git -C "${git_dir}" diff --binary --full-index --no-ext-diff \
+            "${EXPECTED_BASE}" "${EXPECTED_HEAD}" \
+            >exact-head-review/change.patch
+          cleanup_git_dir
+          trap - EXIT
+
+          materialized_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg base_ref "${PR_BASE_REF}" \
+            --arg base_sha "${EXPECTED_BASE}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            '(.state == "open") and (.draft == false)
+             and (.base.ref == $base_ref)
+             and (.base.sha == $base_sha) and (.head.sha == $head_sha)' \
+            <<<"${materialized_pr}" >/dev/null
+          patch_sha256="$(sha256sum exact-head-review/change.patch | awk '{print $1}')"
+          [[ "${patch_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          review_bytes="$(wc -c <exact-head-review/change.patch | tr -d ' ')"
+          if ! [[ "${review_bytes}" =~ ^[0-9]+$ ]] \
+            || [ "${review_bytes}" -le 0 ] \
+            || [ "${review_bytes}" -ge 200000 ]; then
+            echo "Exact-head review input must contain 1..199999 bytes; observed ${review_bytes}." >&2
+            exit 1
+          fi
+          jq -n \
+            --arg base_sha "${EXPECTED_BASE}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            --arg patch_sha256 "${patch_sha256}" \
+            --arg repository "${REPOSITORY}" \
+            --arg trusted_workflow_sha "${TRUSTED_WORKFLOW_SHA}" \
+            --argjson pull_request "${PR_NUMBER}" \
+            --argjson review_bytes "${review_bytes}" \
+            '{schema_version:1,repository:$repository,pull_request:$pull_request,
+              base_sha:$base_sha,head_sha:$head_sha,patch_sha256:$patch_sha256,
+              review_bytes:$review_bytes,trusted_workflow_sha:$trusted_workflow_sha}' \
+            >exact-head-review/review-metadata.json
+          gh api \
+            "repos/${REPOSITORY}/contents/.github/codex/prompts/review-exact-head.md?ref=${TRUSTED_WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >exact-head-review/review-prompt.md
+          gh api \
+            "repos/${REPOSITORY}/contents/.github/codex/schemas/exact-head-review.schema.json?ref=${TRUSTED_WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >exact-head-review/review-schema.json
+          test -s exact-head-review/review-prompt.md
+          jq -e '.type == "object"' exact-head-review/review-schema.json >/dev/null
+
+      - name: Run base-controlled history-free exact-head Codex review
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: exact-head-review/review-prompt.md
+          output-file: exact-head-review/result.json
+          output-schema-file: exact-head-review/review-schema.json
+          working-directory: exact-head-review
+          # The built-in profile technically denies writes and command network access.
+          permission-profile: :read-only
+          safety-strategy: drop-sudo
+          codex-args: '["--ephemeral"]'
+          allow-bots: "true"
+          allow-bot-users: lightning-it-release-automation
+
+      - name: Enforce exact-revision verdict and unchanged pull request
+        env:
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg base_ref "${PR_BASE_REF}" \
+            --arg base_sha "${EXPECTED_BASE}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            '(.state == "open") and (.draft == false)
+             and (.base.ref == $base_ref)
+             and (.base.sha == $base_sha) and (.head.sha == $head_sha)' \
+            <<<"${live_pr}" >/dev/null
+          patch_sha256="$(sha256sum exact-head-review/change.patch | awk '{print $1}')"
+          [[ "${patch_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          jq -e \
+            --arg base_sha "${EXPECTED_BASE}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            --arg patch_sha256 "${patch_sha256}" \
+            '(.base_sha == $base_sha)
+             and (.head_sha == $head_sha)
+             and (.patch_sha256 == $patch_sha256)
+             and ((.verdict == "PASS" and (.findings | length) == 0)
+               or (.verdict == "FAIL" and (.findings | length) > 0))' \
+            exact-head-review/result.json >/dev/null
+          verdict="$(jq -r .verdict exact-head-review/result.json)"
+          findings="$(jq '.findings | length' exact-head-review/result.json)"
+          {
+            echo "### Base-controlled exact-head AI review"
+            echo
+            echo "- Base: \`${EXPECTED_BASE}\`"
+            echo "- Head: \`${EXPECTED_HEAD}\`"
+            echo "- Patch SHA-256: \`${patch_sha256}\`"
+            echo "- Verdict: \`${verdict}\`"
+            echo "- Findings: \`${findings}\`"
+          } >>"${GITHUB_STEP_SUMMARY}"
+          test "${verdict}" = PASS
