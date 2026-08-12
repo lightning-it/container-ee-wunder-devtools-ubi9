@@ -6,7 +6,16 @@ name: Copilot review gate
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
+    types:
+      [
+        opened,
+        synchronize,
+        reopened,
+        ready_for_review,
+        labeled,
+        unlabeled,
+        edited,
+      ]
 
 permissions:
   contents: read
@@ -24,8 +33,8 @@ concurrency:
   cancel-in-progress: true
 
 # The stable main-to-develop sync branch can carry release content, is never
-# ancestry-exempt, and uses the history-free exact-revision AI path. Only dynamically named
-# backmerge/*-main PRs may use the exact file-identical ancestry exemption.
+# ancestry-exempt, and uses the base-controlled exact-revision AI path. Only
+# dynamically named backmerge/*-main PRs may use the file-identical exemption.
 jobs:
   request-current-revision-review:
     name: Request Copilot review for current revision
@@ -116,11 +125,12 @@ jobs:
     name: Successful Copilot review
     if: github.event.pull_request.draft == false
     permissions:
+      actions: read
       contents: read
       issues: read
       pull-requests: read
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Classify trusted automation pull request
@@ -820,161 +830,105 @@ jobs:
 
           echo "GitHub Copilot reviewed current head ${head_sha}; no unresolved Copilot findings remain."
 
-      - name: Materialize bounded history-free exact-head review input
-        if: >-
-          steps.trusted-automation.outputs.trusted != 'true' &&
-          github.event.pull_request.user.login == 'lightning-it-release-automation[bot]'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          case "${PR_AUTHOR}" in
-            lightning-it-release-automation\[bot\]) ;;
-            *)
-              echo "Untrusted bot author ${PR_AUTHOR}; refusing credentialed AI review." >&2
-              exit 1
-              ;;
-          esac
-          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          jq -e \
-            --arg author "${PR_AUTHOR}" \
-            --arg base_sha "${PR_BASE_SHA}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            --arg repository "${REPOSITORY}" \
-            '(.state == "open") and (.draft == false)
-             and (.user.login == $author) and (.user.type == "Bot")
-             and (.base.sha == $base_sha) and (.head.sha == $head_sha)
-             and (.head.repo.full_name == $repository)' \
-            <<<"${live_pr}" >/dev/null
-
-          install -d -m 0700 exact-head-review
-          git_dir="$(mktemp -d "${RUNNER_TEMP:?}/exact-head-git.XXXXXX")"
-          cleanup_git_dir() {
-            case "${git_dir}" in
-              "${RUNNER_TEMP}/exact-head-git."*) rm -rf -- "${git_dir}" ;;
-              *) echo "Refusing to clean unexpected Git directory: ${git_dir}" >&2; return 1 ;;
-            esac
-          }
-          trap cleanup_git_dir EXIT
-          git init --bare "${git_dir}"
-          git -C "${git_dir}" config credential.helper '!gh auth git-credential'
-          git -C "${git_dir}" remote add origin "https://github.com/${REPOSITORY}.git"
-          git -C "${git_dir}" fetch --no-tags --depth=1 origin \
-            "${PR_BASE_SHA}" "${EXPECTED_HEAD}"
-          git -C "${git_dir}" cat-file -e "${PR_BASE_SHA}^{commit}"
-          git -C "${git_dir}" cat-file -e "${EXPECTED_HEAD}^{commit}"
-          git -C "${git_dir}" diff --quiet "${PR_BASE_SHA}" "${EXPECTED_HEAD}" && {
-            echo "Exact base/head Git trees contain no reviewable change." >&2
-            exit 1
-          }
-          if git -C "${git_dir}" diff --numstat "${PR_BASE_SHA}" "${EXPECTED_HEAD}" \
-            | awk '$1 == "-" || $2 == "-" { binary = 1 } END { exit !binary }'; then
-            echo "Binary changes are not eligible for the exact-head AI review path." >&2
-            exit 1
-          fi
-          git -C "${git_dir}" diff --binary --full-index --no-ext-diff \
-            "${PR_BASE_SHA}" "${EXPECTED_HEAD}" \
-            >exact-head-review/change.patch
-          cleanup_git_dir
-          trap - EXIT
-          materialized_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          jq -e \
-            --arg base_sha "${PR_BASE_SHA}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            '(.base.sha == $base_sha) and (.head.sha == $head_sha)' \
-            <<<"${materialized_pr}" >/dev/null
-          patch_sha256="$(sha256sum exact-head-review/change.patch | awk '{print $1}')"
-          [[ "${patch_sha256}" =~ ^[0-9a-f]{64}$ ]]
-          review_bytes="$(wc -c <exact-head-review/change.patch | tr -d ' ')"
-          if ! [[ "${review_bytes}" =~ ^[0-9]+$ ]] \
-            || [ "${review_bytes}" -le 0 ] \
-            || [ "${review_bytes}" -ge 200000 ]; then
-            echo "Exact-head review input must contain 1..199999 bytes; observed ${review_bytes}." >&2
-            exit 1
-          fi
-          jq -n \
-            --arg base_sha "${PR_BASE_SHA}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            --arg patch_sha256 "${patch_sha256}" \
-            --arg repository "${REPOSITORY}" \
-            --argjson pull_request "${PR_NUMBER}" \
-            --argjson review_bytes "${review_bytes}" \
-            '{schema_version:1,repository:$repository,pull_request:$pull_request,
-              base_sha:$base_sha,head_sha:$head_sha,patch_sha256:$patch_sha256,
-              review_bytes:$review_bytes}' \
-            >exact-head-review/review-metadata.json
-          gh api \
-            "repos/${REPOSITORY}/contents/.github/codex/prompts/review-exact-head.md?ref=${PR_BASE_SHA}" \
-            --jq .content | base64 --decode >exact-head-review/review-prompt.md
-          gh api \
-            "repos/${REPOSITORY}/contents/.github/codex/schemas/exact-head-review.schema.json?ref=${PR_BASE_SHA}" \
-            --jq .content | base64 --decode >exact-head-review/review-schema.json
-          test -s exact-head-review/review-prompt.md
-          jq -e '.type == "object"' exact-head-review/review-schema.json >/dev/null
-
-      - name: Run history-free exact-head Codex review for unmatched release bot PR
-        id: bot-ai-review
-        if: >-
-          steps.trusted-automation.outputs.trusted != 'true' &&
-          github.event.pull_request.user.login == 'lightning-it-release-automation[bot]'
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: exact-head-review/review-prompt.md
-          output-file: exact-head-review/result.json
-          output-schema-file: exact-head-review/review-schema.json
-          working-directory: exact-head-review
-          # The built-in profile technically denies writes and command network access.
-          permission-profile: :read-only
-          safety-strategy: drop-sudo
-          codex-args: '["--ephemeral"]'
-          allow-bots: "true"
-          allow-bot-users: lightning-it-release-automation
-
-      - name: Enforce exact-revision AI verdict and unchanged pull request
+      - name: Verify base-controlled exact-head Codex review
         if: >-
           steps.trusted-automation.outputs.trusted != 'true' &&
           github.event.pull_request.user.login == 'lightning-it-release-automation[bot]'
         env:
           EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-          GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          jq -e \
-            --arg base_sha "${EXPECTED_BASE}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            '(.base.sha == $base_sha) and (.head.sha == $head_sha)' \
-            <<<"${live_pr}" >/dev/null
-          patch_sha256="$(sha256sum exact-head-review/change.patch | awk '{print $1}')"
-          [[ "${patch_sha256}" =~ ^[0-9a-f]{64}$ ]]
-          jq -e \
-            --arg base_sha "${EXPECTED_BASE}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            --arg patch_sha256 "${patch_sha256}" \
-            '(.base_sha == $base_sha)
-             and (.head_sha == $head_sha)
-             and (.patch_sha256 == $patch_sha256)
-             and ((.verdict == "PASS" and (.findings | length) == 0)
-               or (.verdict == "FAIL" and (.findings | length) > 0))' \
-            exact-head-review/result.json >/dev/null
-          verdict="$(jq -r .verdict exact-head-review/result.json)"
-          findings="$(jq '.findings | length' exact-head-review/result.json)"
-          {
-            echo "### History-free exact-head AI review"
-            echo
-            echo "- Base: \`${EXPECTED_BASE}\`"
-            echo "- Head: \`${EXPECTED_HEAD}\`"
-            echo "- Patch SHA-256: \`${patch_sha256}\`"
-            echo "- Verdict: \`${verdict}\`"
-            echo "- Findings: \`${findings}\`"
-          } >>"${GITHUB_STEP_SUMMARY}"
-          test "${verdict}" = PASS
+          expected_run_name="Base-controlled exact-head PR #${PR_NUMBER} ${EXPECTED_BASE}..${EXPECTED_HEAD}"
+          live_pr_matches() {
+            local live_pr
+            live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")" || return 1
+            jq -e \
+              --arg author "${PR_AUTHOR}" \
+              --arg base_ref "${PR_BASE_REF}" \
+              --arg base_sha "${EXPECTED_BASE}" \
+              --arg head_sha "${EXPECTED_HEAD}" \
+              --arg repository "${REPOSITORY}" \
+              '(.state == "open") and (.draft == false)
+               and (.user.login == $author) and (.user.type == "Bot")
+               and (.base.ref == $base_ref) and (.base.sha == $base_sha)
+               and (.head.sha == $head_sha)
+               and (.base.repo.full_name == $repository)
+               and (.head.repo.full_name == $repository)' \
+              <<<"${live_pr}" >/dev/null
+          }
+          live_pr_matches
+
+          for attempt in $(seq 1 100); do
+            response="$(
+              gh api --method GET \
+                "repos/${REPOSITORY}/actions/workflows/release-bot-exact-head-review.yml/runs" \
+                -f event=pull_request_target \
+                -f per_page=100
+            )"
+            trusted_run="$(
+              jq -c \
+                --arg display_title "${expected_run_name}" \
+                --arg workflow_name "Base-controlled release bot exact-head review" \
+                '[.workflow_runs[]?
+                  | select(
+                      .event == "pull_request_target"
+                      and .name == $workflow_name
+                      and .path == ".github/workflows/release-bot-exact-head-review.yml"
+                      and .display_title == $display_title
+                    )]
+                 | sort_by(.id)
+                 | last // {}' <<<"${response}"
+            )"
+            status="$(jq -r '.status // "missing"' <<<"${trusted_run}")"
+            conclusion="$(jq -r '.conclusion // "pending"' <<<"${trusted_run}")"
+            run_url="$(jq -r '.html_url // "unavailable"' <<<"${trusted_run}")"
+            if [ "${status}" = completed ]; then
+              live_pr_matches
+              if [ "${conclusion}" = success ]; then
+                run_id="$(jq -r '.id // ""' <<<"${trusted_run}")"
+                [[ "${run_id}" =~ ^[0-9]+$ ]] || {
+                  echo "Trusted workflow run returned an invalid run id." >&2
+                  exit 1
+                }
+                jobs_response="$(
+                  gh api --method GET \
+                    "repos/${REPOSITORY}/actions/runs/${run_id}/jobs" \
+                    -f filter=latest \
+                    -f per_page=100
+                )"
+                review_job="$(
+                  jq -c \
+                    --arg job_name "Base-controlled exact-head Codex review" \
+                    '[.jobs[]? | select(.name == $job_name)]
+                     | sort_by(.id)
+                     | last // {}' <<<"${jobs_response}"
+                )"
+                if jq -e \
+                  '(.status == "completed") and (.conclusion == "success")' \
+                  <<<"${review_job}" >/dev/null; then
+                  echo "Trusted exact-head review job passed for ${EXPECTED_HEAD}: ${run_url}"
+                  exit 0
+                fi
+                review_conclusion="$(jq -r '.conclusion // "missing"' <<<"${review_job}")"
+                echo "Trusted workflow completed without a successful exact-head review job (${review_conclusion}): ${run_url}" >&2
+                exit 1
+              fi
+              if [ "${conclusion}" != cancelled ]; then
+                echo "Trusted base-controlled run concluded ${conclusion}: ${run_url}" >&2
+                exit 1
+              fi
+              echo "A matching run was cancelled; waiting for its exact-revision replacement."
+            fi
+            if [ "${attempt}" -eq 100 ]; then
+              echo "No successful trusted workflow run arrived for ${EXPECTED_HEAD}." >&2
+              exit 1
+            fi
+            echo "Waiting for trusted base-controlled workflow (attempt ${attempt}/100)."
+            sleep 15
+          done
