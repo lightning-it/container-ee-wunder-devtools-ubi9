@@ -71,6 +71,15 @@ revokes auto-merge unconditionally, even when the labels remain unchanged.
 The commit-provenance check applies again on every later event, so a bot event
 cannot rehabilitate a head whose history contains a human-authored commit.
 
+Mutable digest values are intentionally not duplicated as fixed literals in
+tests. The consuming workflow or script is the authoritative pin location,
+and Renovate updates that real reference. Tests instead require every image
+reference to remain immutable, every architecture-specific pair to use two
+distinct digests, every duplicated operational consumer to agree exactly, and
+every managed reference to match exactly one Renovate custom manager. This
+keeps digest changes visible in the pull-request diff without making a valid
+bot update depend on a manually edited test constant.
+
 Major updates, community or human-authored pull requests, cross-repository
 pull requests, drafts, updates to `main`, and `develop`-to-`main` promotions
 remain manual and are not admitted by this decision.
