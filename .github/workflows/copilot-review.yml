@@ -411,10 +411,6 @@ jobs:
           main_sha="$(git rev-parse origin/main)"
           [ "$(git rev-parse "${HEAD_SHA}^2")" = "${main_sha}" ]
           git merge-base --is-ancestor "${release_sha}" "${main_sha}"
-          if git diff --quiet "${BASE_SHA}" "${HEAD_SHA}"; then
-            echo "Release back-sync does not contain release-generated changes." >&2
-            exit 1
-          fi
           unexpected="$(
             git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" |
               awk '$0 != "CHANGELOG.rst" && $0 != "galaxy.yml" && $0 !~ /^changelogs\//'
@@ -424,7 +420,11 @@ jobs:
             printf '%s\n' "${unexpected}" >&2
             exit 1
           }
-          echo "Verified current-main merge, release ancestry, and bounded release-generated files."
+          if git diff --quiet "${BASE_SHA}" "${HEAD_SHA}"; then
+            echo "Verified ancestry-only current-main back-sync; release files already match."
+          else
+            echo "Verified current-main merge, release ancestry, and bounded release-generated files."
+          fi
 
       - name: Accept trusted automation exemption
         if: >-
