@@ -408,8 +408,9 @@ jobs:
           [ "$(git rev-list --parents -n 1 "${HEAD_SHA}" | wc -w)" -eq 3 ]
           [ "$(git rev-parse "${HEAD_SHA}^1")" = "${BASE_SHA}" ]
           release_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
-          [ "$(git rev-parse "${HEAD_SHA}^2")" = "${release_sha}" ]
-          git merge-base --is-ancestor "${release_sha}" origin/main
+          main_sha="$(git rev-parse origin/main)"
+          [ "$(git rev-parse "${HEAD_SHA}^2")" = "${main_sha}" ]
+          git merge-base --is-ancestor "${release_sha}" "${main_sha}"
           if git diff --quiet "${BASE_SHA}" "${HEAD_SHA}"; then
             echo "Release back-sync does not contain release-generated changes." >&2
             exit 1
@@ -423,7 +424,7 @@ jobs:
             printf '%s\n' "${unexpected}" >&2
             exit 1
           }
-          echo "Verified release-tag merge and bounded release-generated files."
+          echo "Verified current-main merge, release ancestry, and bounded release-generated files."
 
       - name: Accept trusted automation exemption
         if: >-
