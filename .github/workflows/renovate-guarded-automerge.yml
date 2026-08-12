@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  approve-renovate:
-    name: Approve trusted Renovate PR
+  enable-trusted-renovate-automerge:
+    name: Enable auto-merge for trusted Renovate PR
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -39,6 +39,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          renovate_owns_head() {
+            local author commits committer expected_head last_sha reason sha verified
+            expected_head="$1"
+            commits="$(
+              gh api --paginate \
+                "repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" \
+                --jq '.[] | [.sha, (.author.login // ""), (.committer.login // ""), (.commit.verification.verified | tostring), (.commit.verification.reason // "")] | @tsv'
+            )" || return 1
+            [ -n "$commits" ] || return 1
+            last_sha=""
+            while IFS=$'\t' read -r sha author committer verified reason; do
+              [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+              [ "$author" = "renovate[bot]" ] || return 1
+              [ "$committer" = "web-flow" ] || return 1
+              [ "$verified" = "true" ] || return 1
+              [ "$reason" = "valid" ] || return 1
+              last_sha="$sha"
+            done <<<"$commits"
+            [ "$last_sha" = "$expected_head" ]
+          }
 
           labels="$(jq -r '.[]' <<<"$PR_LABELS")"
 
@@ -67,6 +88,9 @@ jobs:
              and ([.labels[].name] | index("safe-automerge") != null)
              and ([.labels[].name] | index("breaking-update") == null)' \
             >/dev/null <<<"$live_pr"; then
+            trusted=false
+          fi
+          if ! renovate_owns_head "$PR_HEAD_SHA"; then
             trusted=false
           fi
 
@@ -109,10 +133,12 @@ jobs:
               '$2 == "safe-automerge" && ($1 == "labeled" || $1 == "unlabeled") { latest=$0 } END { print latest }' \
               <<<"$label_events"
           )"
-          if [ "$safe_event" != $'labeled\tsafe-automerge\trenovate[bot]' ]; then
+          expected_safe_event=$'labeled\tsafe-automerge\trenovate[bot]'
+          breaking_event_pattern=$'labeled\tbreaking-update\t'
+          if [ "$safe_event" != "$expected_safe_event" ]; then
             trusted=false
           fi
-          if grep -Fq $'labeled\tbreaking-update\t' <<<"$label_events"; then
+          if grep -Fq "$breaking_event_pattern" <<<"$label_events"; then
             trusted=false
           fi
 
@@ -122,14 +148,37 @@ jobs:
         if: steps.guard.outputs.trusted != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_ACTION: ${{ github.event.action }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           REPO: ${{ github.repository }}
+          TRIGGER_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
 
+          renovate_owns_head() {
+            local author commits committer expected_head last_sha reason sha verified
+            expected_head="$1"
+            commits="$(
+              gh api --paginate \
+                "repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" \
+                --jq '.[] | [.sha, (.author.login // ""), (.committer.login // ""), (.commit.verification.verified | tostring), (.commit.verification.reason // "")] | @tsv'
+            )" || return 1
+            [ -n "$commits" ] || return 1
+            last_sha=""
+            while IFS=$'\t' read -r sha author committer verified reason; do
+              [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+              [ "$author" = "renovate[bot]" ] || return 1
+              [ "$committer" = "web-flow" ] || return 1
+              [ "$verified" = "true" ] || return 1
+              [ "$reason" = "valid" ] || return 1
+              last_sha="$sha"
+            done <<<"$commits"
+            [ "$last_sha" = "$expected_head" ]
+          }
+
           current_live_is_safe() {
-            local label_events live_pr safe_event
+            local breaking_event_pattern expected_safe_event label_events live_head_sha live_pr safe_event
             if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
               return 1
             fi
@@ -147,6 +196,10 @@ jobs:
               >/dev/null <<<"$live_pr"; then
               return 1
             fi
+            live_head_sha="$(jq -r '.head.sha' <<<"$live_pr")"
+            if ! renovate_owns_head "$live_head_sha"; then
+              return 1
+            fi
             if ! label_events="$(
               gh api --paginate \
                 "repos/${REPO}/issues/${PR_NUMBER}/events?per_page=100" \
@@ -159,11 +212,19 @@ jobs:
                 '$2 == "safe-automerge" && ($1 == "labeled" || $1 == "unlabeled") { latest=$0 } END { print latest }' \
                 <<<"$label_events"
             )"
-            [ "$safe_event" = $'labeled\tsafe-automerge\trenovate[bot]' ] \
-              && ! grep -Fq $'labeled\tbreaking-update\t' <<<"$label_events"
+            expected_safe_event=$'labeled\tsafe-automerge\trenovate[bot]'
+            breaking_event_pattern=$'labeled\tbreaking-update\t'
+            [ "$safe_event" = "$expected_safe_event" ] \
+              && ! grep -Fq "$breaking_event_pattern" <<<"$label_events"
           }
 
-          if current_live_is_safe; then
+          force_revoke=false
+          if [ "$PR_ACTION" = "synchronize" ] \
+            && [ "$TRIGGER_ACTOR" != "renovate[bot]" ]; then
+            force_revoke=true
+          fi
+
+          if [ "$force_revoke" != "true" ] && current_live_is_safe; then
             echo "Current live PR state is safe; no revocation is needed."
             exit 0
           fi
@@ -187,7 +248,7 @@ jobs:
               ;;
           esac
 
-      - name: Approve and enable auto-merge
+      - name: Enable auto-merge after live-state verification
         if: steps.guard.outputs.trusted == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -201,8 +262,29 @@ jobs:
         run: |
           set -euo pipefail
 
+          renovate_owns_head() {
+            local author commits committer expected_head last_sha reason sha verified
+            expected_head="$1"
+            commits="$(
+              gh api --paginate \
+                "repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" \
+                --jq '.[] | [.sha, (.author.login // ""), (.committer.login // ""), (.commit.verification.verified | tostring), (.commit.verification.reason // "")] | @tsv'
+            )" || return 1
+            [ -n "$commits" ] || return 1
+            last_sha=""
+            while IFS=$'\t' read -r sha author committer verified reason; do
+              [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+              [ "$author" = "renovate[bot]" ] || return 1
+              [ "$committer" = "web-flow" ] || return 1
+              [ "$verified" = "true" ] || return 1
+              [ "$reason" = "valid" ] || return 1
+              last_sha="$sha"
+            done <<<"$commits"
+            [ "$last_sha" = "$expected_head" ]
+          }
+
           assert_live_safe() {
-            local label_events live_pr safe_event
+            local breaking_event_pattern expected_safe_event label_events live_pr safe_event
             if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
               return 1
             fi
@@ -223,6 +305,9 @@ jobs:
               >/dev/null <<<"$live_pr"; then
               return 1
             fi
+            if ! renovate_owns_head "$PR_HEAD_SHA"; then
+              return 1
+            fi
             if ! label_events="$(
               gh api --paginate \
                 "repos/${REPO}/issues/${PR_NUMBER}/events?per_page=100" \
@@ -235,8 +320,10 @@ jobs:
                 '$2 == "safe-automerge" && ($1 == "labeled" || $1 == "unlabeled") { latest=$0 } END { print latest }' \
                 <<<"$label_events"
             )"
-            [ "$safe_event" = $'labeled\tsafe-automerge\trenovate[bot]' ] \
-              && ! grep -Fq $'labeled\tbreaking-update\t' <<<"$label_events"
+            expected_safe_event=$'labeled\tsafe-automerge\trenovate[bot]'
+            breaking_event_pattern=$'labeled\tbreaking-update\t'
+            [ "$safe_event" = "$expected_safe_event" ] \
+              && ! grep -Fq "$breaking_event_pattern" <<<"$label_events"
           }
 
           disable_auto_merge() {
@@ -259,13 +346,9 @@ jobs:
             disable_auto_merge
             exit 1
           fi
-          gh pr review "$PR_URL" \
-            --approve \
-            --body "Approved a bot-triggered non-major Renovate update with a bot-applied safe-automerge label and no breaking-update history."
-
-          if ! assert_live_safe; then
-            disable_auto_merge
-            exit 1
-          fi
+          # The protected develop branch requires zero approving reviews. Its
+          # governance policy deliberately prohibits Actions from submitting
+          # reviews, so a synthetic self-approval would only make this path
+          # fail. Auto-merge still waits for every required current-head check.
           gh pr merge "$PR_URL" --auto --merge --delete-branch \
             --match-head-commit "$PR_HEAD_SHA"

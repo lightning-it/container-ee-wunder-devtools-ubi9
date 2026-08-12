@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "base_sha": { "pattern": "^[0-9a-f]{40}$", "type": "string" },
+    "findings": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "body": { "minLength": 1, "type": "string" },
+          "line": { "minimum": 1, "type": ["integer", "null"] },
+          "path": { "minLength": 1, "type": "string" },
+          "severity": {
+            "enum": ["critical", "high", "medium", "low"]
+          },
+          "title": { "minLength": 1, "type": "string" }
+        },
+        "required": ["severity", "path", "line", "title", "body"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "head_sha": { "pattern": "^[0-9a-f]{40}$", "type": "string" },
+    "patch_sha256": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+    "summary": { "minLength": 1, "type": "string" },
+    "verdict": { "enum": ["PASS", "FAIL"] }
+  },
+  "required": [
+    "verdict",
+    "base_sha",
+    "head_sha",
+    "patch_sha256",
+    "summary",
+    "findings"
+  ],
+  "type": "object"
+}
