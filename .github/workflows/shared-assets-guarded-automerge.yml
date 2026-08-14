@@ -26,6 +26,10 @@ concurrency:
 jobs:
   verify-shared-assets:
     name: Verify trusted shared-assets PR
+    if: >-
+      github.event.pull_request.user.login
+        == 'lightning-it-shared-assets-sync[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -325,16 +329,27 @@ jobs:
 
           owner="${REPO%%/*}"
           name="${REPO#*/}"
-          auto_merge_enabled="$(
+          query_auto_merge() {
             gh api graphql \
               -f query="query(\$owner:String!,\$name:String!,\$number:Int!){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){autoMergeRequest{__typename}}}}" \
               -f owner="$owner" \
               -f name="$name" \
               -F number="$PR_NUMBER" \
               --jq '.data.repository.pullRequest.autoMergeRequest != null'
-          )"
+          }
+          auto_merge_enabled="$(query_auto_merge)"
           case "$auto_merge_enabled" in
-            true) gh pr merge "$PR_URL" --disable-auto ;;
+            true)
+              if ! disable_error="$(
+                gh pr merge "$PR_URL" --disable-auto 2>&1
+              )"; then
+                auto_merge_enabled="$(query_auto_merge)"
+                if [ "$auto_merge_enabled" != false ]; then
+                  printf '%s\n' "$disable_error" >&2
+                  exit 1
+                fi
+              fi
+              ;;
             false) ;;
             *)
               echo "ERROR: unable to determine auto-merge state for ${PR_URL}." >&2
@@ -435,19 +450,28 @@ jobs:
           }
 
           disable_auto_merge() {
-            local auto_merge_enabled name owner
+            local auto_merge_enabled disable_error name owner
             owner="${REPO%%/*}"
             name="${REPO#*/}"
-            auto_merge_enabled="$(
+            query_auto_merge() {
               gh api graphql \
                 -f query="query(\$owner:String!,\$name:String!,\$number:Int!){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){autoMergeRequest{__typename}}}}" \
                 -f owner="$owner" \
                 -f name="$name" \
                 -F number="$PR_NUMBER" \
                 --jq '.data.repository.pullRequest.autoMergeRequest != null'
-            )"
-            [ "$auto_merge_enabled" = false ] \
-              || gh pr merge "$PR_URL" --disable-auto
+            }
+            auto_merge_enabled="$(query_auto_merge)"
+            [ "$auto_merge_enabled" = false ] && return 0
+            if ! disable_error="$(
+              gh pr merge "$PR_URL" --disable-auto 2>&1
+            )"; then
+              auto_merge_enabled="$(query_auto_merge)"
+              if [ "$auto_merge_enabled" != false ]; then
+                printf '%s\n' "$disable_error" >&2
+                return 1
+              fi
+            fi
           }
 
           if ! assert_live_safe; then
