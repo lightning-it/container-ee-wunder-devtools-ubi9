@@ -42,6 +42,9 @@ jobs:
           client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Resolve release automation App bot identity
         id: release-bot
@@ -61,6 +64,7 @@ jobs:
           echo "email=${bot_id}+${login}@users.noreply.github.com" >>"$GITHUB_OUTPUT"
 
       - name: Create or update sync PR
+        id: exact-review-target
         env:
           BOT_TOKEN: ${{ steps.release-app.outputs.token }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -129,18 +133,40 @@ jobs:
           fi
 
           if [ -z "$pr_url" ]; then
-            GH_TOKEN="$pr_token" gh pr create \
+            pr_url="$(GH_TOKEN="$pr_token" gh pr create \
               --repo "$REPO" \
               --base develop \
               --head "$sync_branch" \
               --title "$title" \
-              --body "$body"
+              --body "$body")"
           else
             GH_TOKEN="$pr_token" gh pr edit "$pr_url" \
               --repo "$REPO" \
               --title "$title" \
               --body "$body"
           fi
+          sync_pr="$(GH_TOKEN="$pr_token" gh pr view "$pr_url" \
+            --repo "$REPO" \
+            --json author,baseRefName,baseRefOid,headRefName,headRefOid,headRepositoryOwner,isDraft,number,title)"
+          jq -e \
+            --arg branch "$sync_branch" \
+            --arg expected_head "$(git rev-parse HEAD)" \
+            --arg owner "$GITHUB_REPOSITORY_OWNER" \
+            --arg title "$title" '
+              .author.login == "app/lightning-it-release-automation"
+              and .baseRefName == "develop"
+              and .headRefName == $branch
+              and .headRefOid == $expected_head
+              and .headRepositoryOwner.login == $owner
+              and .isDraft == false
+              and .title == $title
+            ' <<< "$sync_pr" >/dev/null
+          {
+            echo "pr_number=$(jq -r .number <<<"$sync_pr")"
+            echo "base_ref=$(jq -r .baseRefName <<<"$sync_pr")"
+            echo "expected_base=$(jq -r .baseRefOid <<<"$sync_pr")"
+            echo "expected_head=$(jq -r .headRefOid <<<"$sync_pr")"
+          } >>"$GITHUB_OUTPUT"
           if [ -n "$superseded_pr_url" ]; then
             GH_TOKEN="$pr_token" gh pr close "$superseded_pr_url" \
               --repo "$REPO" \

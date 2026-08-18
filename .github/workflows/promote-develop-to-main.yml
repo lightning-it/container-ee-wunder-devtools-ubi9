@@ -34,6 +34,9 @@ jobs:
           client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Resolve release automation App bot identity
         id: release-bot
@@ -53,6 +56,7 @@ jobs:
           echo "email=${bot_id}+${login}@users.noreply.github.com" >>"$GITHUB_OUTPUT"
 
       - name: Create or update promotion PR
+        id: exact-review-target
         env:
           BOT_TOKEN: ${{ steps.release-app.outputs.token }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -139,3 +143,56 @@ jobs:
               --title "$title" \
               --body "$body"
           fi
+          promotion="$(GH_TOKEN="$pr_token" gh pr view "$pr_url" \
+            --repo "$REPO" \
+            --json author,baseRefName,baseRefOid,headRefName,headRefOid,headRepositoryOwner,isDraft,number,title)"
+          jq -e \
+            --arg expected_head "$(git rev-parse origin/develop)" \
+            --arg title "$title" '
+              .author.login == "app/lightning-it-release-automation"
+              and .baseRefName == "main"
+              and .headRefName == "develop"
+              and .headRefOid == $expected_head
+              and .headRepositoryOwner.login == "lightning-it"
+              and .isDraft == false
+              and .title == $title
+            ' <<< "$promotion" >/dev/null
+          {
+            echo "pr_number=$(jq -r .number <<<"$promotion")"
+            echo "base_ref=$(jq -r .baseRefName <<<"$promotion")"
+            echo "expected_base=$(jq -r .baseRefOid <<<"$promotion")"
+            echo "expected_head=$(jq -r .headRefOid <<<"$promotion")"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Mint protected review dispatch token
+        if: steps.exact-review-target.outputs.pr_number != ''
+        id: review-dispatch-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: write
+          permission-contents: read
+
+      - name: Dispatch protected Exact-Revision review
+        if: steps.exact-review-target.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ steps.review-dispatch-app.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.exact-review-target.outputs.pr_number }}
+          BASE_REF: ${{ steps.exact-review-target.outputs.base_ref }}
+          EXPECTED_BASE: ${{ steps.exact-review-target.outputs.expected_base }}
+          EXPECTED_HEAD: ${{ steps.exact-review-target.outputs.expected_head }}
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_BASE}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ ]]
+          gh workflow run release-bot-exact-head-review.yml \
+            --repo "${REPO}" \
+            --ref "${BASE_REF}" \
+            -f "pr_number=${PR_NUMBER}" \
+            -f "base_ref=${BASE_REF}" \
+            -f "expected_base=${EXPECTED_BASE}" \
+            -f "expected_head=${EXPECTED_HEAD}"

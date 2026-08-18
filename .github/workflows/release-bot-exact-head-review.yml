@@ -42,7 +42,7 @@ concurrency:
 # the full binary diff, protected prompt, and protected schema.
 jobs:
   exact-revision-codex-review:
-    name: Protected Exact-Revision Codex review
+    name: Current revision review
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.actor == 'lightning-it-release-automation[bot]'
@@ -371,7 +371,8 @@ jobs:
             named="$(jq -c \
               --arg name "${check_name}" \
               '[.[].check_runs[]? |
-                select(.name == $name)]' \
+                select(.name == $name) |
+                select(.app.id == 15368 and .app.slug == "github-actions")]' \
               <<<"${checks}")"
             count="$(jq 'length' <<<"${named}")"
             if [ "${count}" -gt 1 ]; then
@@ -379,11 +380,6 @@ jobs:
               exit 1
             fi
             if [ "${count}" -eq 1 ]; then
-              if ! jq -e '.[0].app.id == 15368 and .[0].app.slug == "github-actions"' \
-                <<<"${named}" >/dev/null; then
-                echo "${check_name} exists under an unauthorized GitHub App." >&2
-                exit 1
-              fi
               check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${named}")"
               check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
               current_external_id="$(jq -r '.[0].external_id // empty' <<<"${named}")"
@@ -416,14 +412,12 @@ jobs:
                 return
               fi
               jq -e \
-                --arg check_name "${check_name}" \
                 --arg evidence "${evidence}" \
                 --arg external_id "${external_id}" \
                 --arg head "${EXPECTED_HEAD}" \
                 --arg url "${check_url}" \
                 --argjson check_id "${check_id}" '
                   .[0].id == $check_id
-                  and .[0].name == $check_name
                   and .[0].app.id == 15368
                   and .[0].app.slug == "github-actions"
                   and .[0].head_sha == $head
@@ -448,14 +442,12 @@ jobs:
             created="$(gh api --method PATCH "repos/${REPOSITORY}/check-runs/${check_id}" \
               -f "details_url=${check_url}")"
             jq -e \
-              --arg check_name "${check_name}" \
               --arg evidence "${evidence}" \
               --arg external_id "${external_id}" \
               --arg head "${EXPECTED_HEAD}" \
               --arg url "${check_url}" \
               --argjson check_id "${check_id}" '
                 .id == $check_id
-                and .name == $check_name
                 and .app.id == 15368
                 and .app.slug == "github-actions"
                 and .head_sha == $head
@@ -470,18 +462,6 @@ jobs:
             'Current revision review' \
             "mlx90-current-revision:v4:${producer_run_id}:${input_sha256}" \
             'Protected Exact-Revision Codex review passed'
-          # One-time compatibility alias for protected Shared Assets promotion
-          # PR #1047. It is derived from this same Codex PASS and never starts a
-          # second reviewer. The develop version replaces this bootstrap file
-          # during the promotion, removing the legacy Copilot-named context.
-          if [ "${REPOSITORY}" = lightning-it/shared-assets-lit ] \
-            && [ "${PR_NUMBER}" = 1047 ] \
-            && [ "${BASE_REF}" = main ]; then
-            publish_once \
-              'Successful Copilot review' \
-              "mlx90-legacy-transition:v4:${producer_run_id}:${input_sha256}" \
-              'Exact-Revision Codex PASS (temporary legacy context; no Copilot)'
-          fi
 
   request-protected-verifier-reevaluation:
     name: Request protected verifier re-evaluation
