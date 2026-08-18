@@ -1,285 +1,511 @@
 # Managed by lightning-it/shared-assets-lit.
 # Do not edit downstream copies directly.
+# Canonical protected MLX-90 §7.2 Exact-Revision Codex controller.
 # yamllint disable rule:truthy rule:line-length
 ---
-name: Base-controlled release bot exact-head review
+name: Protected Exact-Revision Codex review
 run-name: >-
-  Base-controlled exact-head PR #${{ github.event.pull_request.number }}
-  ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+  Exact-Revision Codex PR #${{ inputs.pr_number }}
+  ${{ inputs.expected_base }}..${{ inputs.expected_head }}
 
 on:
-  pull_request_target:
-    types:
-      [
-        opened,
-        synchronize,
-        reopened,
-        ready_for_review,
-        labeled,
-        unlabeled,
-        edited,
-      ]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Release-App pull request to review
+        required: true
+        type: number
+      base_ref:
+        description: Frozen protected pull-request base ref
+        required: true
+        type: string
+      expected_base:
+        description: Frozen full pull-request base SHA
+        required: true
+        type: string
+      expected_head:
+        description: Frozen full pull-request head SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: base-controlled-exact-head-${{ github.repository }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: >-
+    exact-revision-codex-${{ github.repository }}-${{ inputs.pr_number }}-${{ inputs.expected_head }}
+  cancel-in-progress: false
 
-# Security boundary: pull_request_target loads this workflow from the protected
-# default branch. These jobs never check out or execute pull-request code. The
-# review job fetches exact base/head objects only to materialize a bounded diff.
+# The workflow is accepted only as a Release-App-authenticated dispatch from the
+# exact protected PR base ref/SHA. Candidate code is never checked out or
+# executed. Codex sees one bounded directory containing only immutable metadata,
+# the full binary diff, protected prompt, and protected schema.
 jobs:
-  classify:
-    name: Classify deterministic release-bot exemption
+  exact-revision-codex-review:
+    name: Protected Exact-Revision Codex review
     if: >-
-      github.event_name == 'pull_request_target' &&
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' &&
-      github.event.pull_request.user.type == 'Bot' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    outputs:
-      requires-review: ${{ steps.classify.outputs.requires-review }}
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == 'lightning-it-release-automation[bot]'
     permissions:
+      actions: read
+      checks: write
       contents: read
       pull-requests: read
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
+
+    env:
+      BASE_REF: ${{ inputs.base_ref }}
+      DISPATCH_REF: ${{ github.ref }}
+      EXPECTED_BASE: ${{ inputs.expected_base }}
+      EXPECTED_HEAD: ${{ inputs.expected_head }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      REPOSITORY: ${{ github.repository }}
+      TRIGGER: app_dispatch
+      TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
 
     steps:
-      - name: Classify exact deterministic exemption
-        id: classify
+      - name: Load protected materializer, prompt, and schema
         env:
-          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ github.token }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          jq -e \
-            --arg author "${PR_AUTHOR}" \
-            --arg base_ref "${PR_BASE_REF}" \
-            --arg base_sha "${EXPECTED_BASE}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            --arg repository "${REPOSITORY}" \
-            '(.state == "open") and (.draft == false)
-             and (.user.login == $author) and (.user.type == "Bot")
-             and (.base.ref == $base_ref) and (.base.sha == $base_sha)
-             and (.head.sha == $head_sha)
-             and (.base.repo.full_name == $repository)
-             and (.head.repo.full_name == $repository)' \
-            <<<"${live_pr}" >/dev/null
-
-          pr_head="$(jq -r '.head.ref // ""' <<<"${live_pr}")"
-          pr_title="$(jq -r '.title // ""' <<<"${live_pr}")"
-          requires_review=true
-          exemption=none
-          if [[ "${pr_head}" == backmerge/*-main ]] \
-            && [ "${PR_BASE_REF}" = develop ] \
-            && [[ "${pr_title}" == "chore(governance): record main ancestry before "* ]]; then
-            requires_review=false
-            exemption=ancestry-backmerge
-          elif [[ "${pr_head}" == release/v* ]] \
-            && [ "${PR_BASE_REF}" = main ]; then
-            release_tag="${pr_head#release/}"
-            if [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-              && [ "${pr_title}" = "Release ${release_tag}" ] \
-              && gh api "repos/${REPOSITORY}/contents/galaxy.yml?ref=main" >/dev/null \
-              && gh api "repos/${REPOSITORY}/contents/changelogs/config.yaml?ref=main" >/dev/null; then
-              requires_review=false
-              exemption=release-preparation
-            fi
-          elif [[ "${pr_head}" == backsync/release-v*-to-develop ]] \
-            && [ "${PR_BASE_REF}" = develop ]; then
-            release_tag="${pr_head#backsync/release-}"
-            release_tag="${release_tag%-to-develop}"
-            if [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-              && [ "${pr_title}" = "chore: sync ${release_tag} release back to develop" ]; then
-              requires_review=false
-              exemption=release-backsync
-            fi
-          elif [ "${pr_head}" = develop ] \
-            && [ "${PR_BASE_REF}" = main ] \
-            && [ "${pr_title}" = "chore(release): promote develop to main" ]; then
-            requires_review=false
-            exemption=release-promotion
-          fi
-          {
-            echo "requires-review=${requires_review}"
-            echo "exemption=${exemption}"
-          } >>"${GITHUB_OUTPUT}"
-
-  exact-head-review:
-    name: Base-controlled exact-head Codex review
-    needs: classify
-    if: needs.classify.outputs.requires-review == 'true'
-    permissions:
-      contents: read
-      pull-requests: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Materialize bounded exact-head review input without checkout
-        env:
-          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-          GH_TOKEN: ${{ github.token }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-          TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           [[ "${TRUSTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
-          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          jq -e \
-            --arg author "${PR_AUTHOR}" \
-            --arg base_ref "${PR_BASE_REF}" \
-            --arg base_sha "${EXPECTED_BASE}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            --arg repository "${REPOSITORY}" \
-            '(.state == "open") and (.draft == false)
-             and (.user.login == $author) and (.user.type == "Bot")
-             and (.base.ref == $base_ref)
-             and (.base.sha == $base_sha) and (.head.sha == $head_sha)
-             and (.base.repo.full_name == $repository)
-             and (.head.repo.full_name == $repository)' \
-            <<<"${live_pr}" >/dev/null
-
-          test ! -e exact-head-review
-          install -d -m 0700 exact-head-review
-          git_dir="$(mktemp -d "${RUNNER_TEMP:?}/exact-head-git.XXXXXX")"
-          cleanup_git_dir() {
-            case "${git_dir}" in
-              "${RUNNER_TEMP}/exact-head-git."*) rm -rf -- "${git_dir}" ;;
-              *) echo "Refusing to clean unexpected Git directory: ${git_dir}" >&2; return 1 ;;
-            esac
-          }
-          trap cleanup_git_dir EXIT
-          git init --bare "${git_dir}"
-          git -C "${git_dir}" config credential.helper '!gh auth git-credential'
-          git -C "${git_dir}" remote add origin "https://github.com/${REPOSITORY}.git"
-          git -C "${git_dir}" fetch --no-tags --depth=1 origin \
-            "+${EXPECTED_BASE}:refs/review/base" \
-            "+${EXPECTED_HEAD}:refs/review/head"
-          git -C "${git_dir}" cat-file -e "${EXPECTED_BASE}^{commit}"
-          git -C "${git_dir}" cat-file -e "${EXPECTED_HEAD}^{commit}"
-          git -C "${git_dir}" diff --quiet "${EXPECTED_BASE}" "${EXPECTED_HEAD}" && {
-            echo "Exact base/head Git trees contain no reviewable change." >&2
-            exit 1
-          }
-          if git -C "${git_dir}" diff --numstat "${EXPECTED_BASE}" "${EXPECTED_HEAD}" \
-            | awk '$1 == "-" || $2 == "-" { binary = 1 } END { exit !binary }'; then
-            echo "Binary changes are not eligible for the exact-head AI review path." >&2
-            exit 1
-          fi
-          git -C "${git_dir}" diff --binary --full-index --no-ext-diff \
-            "${EXPECTED_BASE}" "${EXPECTED_HEAD}" \
-            >exact-head-review/change.patch
-          cleanup_git_dir
-          trap - EXIT
-
-          materialized_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          jq -e \
-            --arg base_ref "${PR_BASE_REF}" \
-            --arg base_sha "${EXPECTED_BASE}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            '(.state == "open") and (.draft == false)
-             and (.base.ref == $base_ref)
-             and (.base.sha == $base_sha) and (.head.sha == $head_sha)' \
-            <<<"${materialized_pr}" >/dev/null
-          patch_sha256="$(sha256sum exact-head-review/change.patch | awk '{print $1}')"
-          [[ "${patch_sha256}" =~ ^[0-9a-f]{64}$ ]]
-          review_bytes="$(wc -c <exact-head-review/change.patch | tr -d ' ')"
-          if ! [[ "${review_bytes}" =~ ^[0-9]+$ ]] \
-            || [ "${review_bytes}" -le 0 ] \
-            || [ "${review_bytes}" -ge 200000 ]; then
-            echo "Exact-head review input must contain 1..199999 bytes; observed ${review_bytes}." >&2
-            exit 1
-          fi
-          jq -n \
-            --arg base_sha "${EXPECTED_BASE}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            --arg patch_sha256 "${patch_sha256}" \
-            --arg repository "${REPOSITORY}" \
-            --arg trusted_workflow_sha "${TRUSTED_WORKFLOW_SHA}" \
-            --argjson pull_request "${PR_NUMBER}" \
-            --argjson review_bytes "${review_bytes}" \
-            '{schema_version:1,repository:$repository,pull_request:$pull_request,
-              base_sha:$base_sha,head_sha:$head_sha,patch_sha256:$patch_sha256,
-              review_bytes:$review_bytes,trusted_workflow_sha:$trusted_workflow_sha}' \
-            >exact-head-review/review-metadata.json
+          test "${TRUSTED_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
+          install -d -m 0700 trusted-controller
+          gh api \
+            "repos/${REPOSITORY}/contents/scripts/materialize-exact-revision-review.py?ref=${TRUSTED_WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >trusted-controller/materialize.py
+          chmod 0500 trusted-controller/materialize.py
+          python3 trusted-controller/materialize.py materialize \
+            --repository "${REPOSITORY}" \
+            --pull-request "${PR_NUMBER}" \
+            --base-ref "${BASE_REF}" \
+            --expected-base "${EXPECTED_BASE}" \
+            --expected-head "${EXPECTED_HEAD}" \
+            --trusted-workflow-sha "${TRUSTED_WORKFLOW_SHA}" \
+            --trigger "${TRIGGER}" \
+            --dispatch-ref "${DISPATCH_REF}" \
+            --review-directory exact-revision-review >/dev/null
           gh api \
             "repos/${REPOSITORY}/contents/.github/codex/prompts/review-exact-head.md?ref=${TRUSTED_WORKFLOW_SHA}" \
-            --jq .content | base64 --decode >exact-head-review/review-prompt.md
+            --jq .content | base64 --decode >exact-revision-review/review-prompt.md
           gh api \
             "repos/${REPOSITORY}/contents/.github/codex/schemas/exact-head-review.schema.json?ref=${TRUSTED_WORKFLOW_SHA}" \
-            --jq .content | base64 --decode >exact-head-review/review-schema.json
-          test -s exact-head-review/review-prompt.md
-          jq -e '.type == "object"' exact-head-review/review-schema.json >/dev/null
+            --jq .content | base64 --decode >exact-revision-review/review-schema.json
+          gh api \
+            "repos/${REPOSITORY}/contents/.github/workflows/release-bot-exact-head-review.yml?ref=${TRUSTED_WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >trusted-controller/workflow.yml
+          test -s exact-revision-review/review-prompt.md
+          jq -e '.type == "object"' exact-revision-review/review-schema.json >/dev/null
+          python3 trusted-controller/materialize.py bind-assets \
+            --repository "${REPOSITORY}" \
+            --pull-request "${PR_NUMBER}" \
+            --base-ref "${BASE_REF}" \
+            --expected-base "${EXPECTED_BASE}" \
+            --expected-head "${EXPECTED_HEAD}" \
+            --trusted-workflow-sha "${TRUSTED_WORKFLOW_SHA}" \
+            --trigger "${TRIGGER}" \
+            --dispatch-ref "${DISPATCH_REF}" \
+            --review-directory exact-revision-review \
+            --materializer-path trusted-controller/materialize.py \
+            --prompt-path exact-revision-review/review-prompt.md \
+            --schema-path exact-revision-review/review-schema.json \
+            --workflow-path trusted-controller/workflow.yml >/dev/null
+          chmod 0400 \
+            exact-revision-review/change.patch \
+            exact-revision-review/review-metadata.json \
+            exact-revision-review/review-prompt.md \
+            exact-revision-review/review-schema.json \
+            trusted-controller/workflow.yml
 
-      - name: Run base-controlled history-free exact-head Codex review
+      - name: Reserve one immutable review input or reuse its protected PASS
+        id: dedupe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          input_sha256="$(jq -er .input_sha256 exact-revision-review/review-metadata.json)"
+          external_prefix="mlx90-exact-revision:v4:${input_sha256}:"
+          external_id="${external_prefix}${GITHUB_RUN_ID}"
+          checks="$(gh api --paginate --slurp \
+            "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20Exact-Revision%20Codex%20result&per_page=100")"
+          matching="$(jq -c \
+            --arg external_prefix "${external_prefix}" \
+            '[.[].check_runs[]? |
+              select(.name == "Protected Exact-Revision Codex result") |
+              select(.app.id == 15368 and .app.slug == "github-actions") |
+              select((.external_id // "") | startswith($external_prefix))]' <<<"${checks}")"
+          count="$(jq 'length' <<<"${matching}")"
+          if [ "${count}" -gt 1 ]; then
+            echo "Multiple protected review reservations exist for one immutable input." >&2
+            exit 1
+          fi
+          if [ "${count}" -eq 1 ]; then
+            status="$(jq -r '.[0].status' <<<"${matching}")"
+            conclusion="$(jq -r '.[0].conclusion // ""' <<<"${matching}")"
+            prior_check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${matching}")"
+            details_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${prior_check_id}"
+            test "$(jq -r '.[0].details_url // empty' <<<"${matching}")" = "${details_url}"
+            prior_external_id="$(jq -r '.[0].external_id // empty' <<<"${matching}")"
+            prior_run_id="${prior_external_id#"${external_prefix}"}"
+            [[ "${prior_run_id}" =~ ^[1-9][0-9]*$ ]]
+            test "${prior_external_id}" = "${external_prefix}${prior_run_id}"
+            producer_run_url="${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${prior_run_id}"
+            prior_run="$(gh api "repos/${REPOSITORY}/actions/runs/${prior_run_id}")"
+            expected_title="Exact-Revision Codex PR #${PR_NUMBER} ${EXPECTED_BASE}..${EXPECTED_HEAD}"
+            jq -e \
+              --arg actor 'lightning-it-release-automation[bot]' \
+              --arg base_ref "${BASE_REF}" \
+              --arg base_sha "${EXPECTED_BASE}" \
+              --arg run_url "${producer_run_url}" \
+              --arg title "${expected_title}" '
+                .event == "workflow_dispatch"
+                and .head_branch == $base_ref
+                and .head_sha == $base_sha
+                and .path == ".github/workflows/release-bot-exact-head-review.yml"
+                and .display_title == $title
+                and .html_url == $run_url
+                and .actor.login == $actor
+                and .triggering_actor.login == $actor
+              ' <<<"${prior_run}" >/dev/null
+            if [ "${status}" = in_progress ]; then
+              prior_run_status="$(jq -r .status <<<"${prior_run}")"
+              prior_run_conclusion="$(jq -r '.conclusion // ""' <<<"${prior_run}")"
+              if [ "${prior_run_status}" = completed ]; then
+                stale_summary="Immutable input SHA-256: ${input_sha256}. The producer run ${producer_run_url} completed before finalizing its reservation."
+                stale="$(gh api --method PATCH "repos/${REPOSITORY}/check-runs/${prior_check_id}" \
+                  -f status=completed \
+                  -f conclusion=failure \
+                  -f 'output[title]=Protected Exact-Revision Codex review was interrupted' \
+                  -f "output[summary]=${stale_summary}")"
+                jq -e \
+                  --arg external_id "${prior_external_id}" \
+                  --arg head "${EXPECTED_HEAD}" \
+                  --arg summary "${stale_summary}" \
+                  --arg url "${details_url}" \
+                  --argjson check_id "${prior_check_id}" '
+                    .id == $check_id
+                    and .name == "Protected Exact-Revision Codex result"
+                    and .app.id == 15368
+                    and .app.slug == "github-actions"
+                    and .head_sha == $head
+                    and .details_url == $url
+                    and .external_id == $external_id
+                    and .status == "completed"
+                    and .conclusion == "failure"
+                    and .output.summary == $summary
+                  ' <<<"${stale}" >/dev/null
+                echo "Closed a stale immutable review reservation because producer run ${prior_run_id} completed/${prior_run_conclusion:-none}." >&2
+                exit 1
+              fi
+              echo "The protected attempt for this immutable input is still active in producer run ${prior_run_id}." >&2
+              exit 1
+            fi
+            if [ "${status}" = completed ] && [ "${conclusion}" = success ]; then
+              jq -e '.status == "completed" and .conclusion == "success"' <<<"${prior_run}" >/dev/null
+              jq -e \
+                --arg input_sha256 "${input_sha256}" \
+                --arg run_url "${producer_run_url}" '
+                  .[0].output.summary
+                  | fromjson
+                  | .input_sha256 == $input_sha256
+                    and .run_url == $run_url
+                ' <<<"${matching}" >/dev/null
+              echo "Reusing the protected PASS for identical input ${input_sha256}."
+              {
+                echo "reuse=true"
+                echo "check_id=$(jq -r '.[0].id' <<<"${matching}")"
+                echo "input_sha256=${input_sha256}"
+                echo "external_id=${external_id}"
+                echo "producer_run_id=${prior_run_id}"
+              } >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            echo "A prior protected attempt for this immutable input is ${status}/${conclusion:-none}; automatic retry is forbidden." >&2
+            exit 1
+          fi
+          reservation="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
+            -f name='Protected Exact-Revision Codex result' \
+            -f head_sha="${EXPECTED_HEAD}" \
+            -f status=in_progress \
+            -f external_id="${external_id}" \
+            -f 'output[title]=Protected Exact-Revision Codex review in progress' \
+            -f "output[summary]=Immutable input SHA-256: ${input_sha256}.")"
+          check_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${reservation}")"
+          check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
+          reservation="$(gh api --method PATCH "repos/${REPOSITORY}/check-runs/${check_id}" \
+            -f "details_url=${check_url}")"
+          jq -e \
+            --arg external_id "${external_id}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --arg url "${check_url}" \
+            --argjson check_id "${check_id}" '
+              .id == $check_id
+              and .head_sha == $head
+              and .details_url == $url
+              and .external_id == $external_id
+              and .status == "in_progress"
+              and .app.id == 15368
+              and .app.slug == "github-actions"
+            ' <<<"${reservation}" >/dev/null
+          {
+            echo "reuse=false"
+            echo "check_id=${check_id}"
+            echo "input_sha256=${input_sha256}"
+            echo "external_id=${external_id}"
+            echo "producer_run_id=${GITHUB_RUN_ID}"
+          } >>"${GITHUB_OUTPUT}"
+
+      - name: Run protected history-free Exact-Revision Codex review
+        if: steps.dedupe.outputs.reuse != 'true'
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: exact-head-review/review-prompt.md
-          output-file: exact-head-review/result.json
-          output-schema-file: exact-head-review/review-schema.json
-          working-directory: exact-head-review
-          # The built-in profile technically denies writes and command network access.
+          prompt-file: exact-revision-review/review-prompt.md
+          output-file: exact-revision-review/result.json
+          output-schema-file: exact-revision-review/review-schema.json
+          working-directory: exact-revision-review
           permission-profile: :read-only
           safety-strategy: drop-sudo
           codex-args: '["--ephemeral"]'
           allow-bots: "true"
           allow-bot-users: lightning-it-release-automation
 
-      - name: Enforce exact-revision verdict and unchanged pull request
+      - name: Re-prove exact revision and enforce the Codex verdict
         env:
-          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ github.token }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          jq -e \
-            --arg base_ref "${PR_BASE_REF}" \
-            --arg base_sha "${EXPECTED_BASE}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            '(.state == "open") and (.draft == false)
-             and (.base.ref == $base_ref)
-             and (.base.sha == $base_sha) and (.head.sha == $head_sha)' \
-            <<<"${live_pr}" >/dev/null
-          patch_sha256="$(sha256sum exact-head-review/change.patch | awk '{print $1}')"
-          [[ "${patch_sha256}" =~ ^[0-9a-f]{64}$ ]]
-          jq -e \
-            --arg base_sha "${EXPECTED_BASE}" \
-            --arg head_sha "${EXPECTED_HEAD}" \
-            --arg patch_sha256 "${patch_sha256}" \
-            '(.base_sha == $base_sha)
-             and (.head_sha == $head_sha)
-             and (.patch_sha256 == $patch_sha256)
-             and ((.verdict == "PASS" and (.findings | length) == 0)
-               or (.verdict == "FAIL" and (.findings | length) > 0))' \
-            exact-head-review/result.json >/dev/null
-          verdict="$(jq -r .verdict exact-head-review/result.json)"
-          findings="$(jq '.findings | length' exact-head-review/result.json)"
+          python3 trusted-controller/materialize.py verify \
+            --repository "${REPOSITORY}" \
+            --pull-request "${PR_NUMBER}" \
+            --base-ref "${BASE_REF}" \
+            --expected-base "${EXPECTED_BASE}" \
+            --expected-head "${EXPECTED_HEAD}" \
+            --trusted-workflow-sha "${TRUSTED_WORKFLOW_SHA}" \
+            --trigger "${TRIGGER}" \
+            --dispatch-ref "${DISPATCH_REF}" \
+            --review-directory exact-revision-review \
+            --materializer-path trusted-controller/materialize.py \
+            --prompt-path exact-revision-review/review-prompt.md \
+            --schema-path exact-revision-review/review-schema.json \
+            --workflow-path trusted-controller/workflow.yml >/dev/null
+          metadata=exact-revision-review/review-metadata.json
+          verdict=PASS
+          findings=0
+          if [ "${{ steps.dedupe.outputs.reuse }}" != 'true' ]; then
+            result=exact-revision-review/result.json
+            jq -e \
+              --slurpfile metadata "${metadata}" \
+              '. as $result | $metadata[0] as $bound |
+               ($result.base_sha == $bound.base_sha) and
+               ($result.head_sha == $bound.head_sha) and
+               ($result.merge_base_sha == $bound.merge_base_sha) and
+               ($result.integration_tree_sha == $bound.integration_tree_sha) and
+               ($result.diff_sha256 == $bound.diff_sha256) and
+               ($result.input_sha256 == $bound.input_sha256) and
+               (($result.verdict == "PASS" and ($result.findings | length) == 0) or
+                ($result.verdict == "FAIL" and ($result.findings | length) > 0))' \
+              "${result}" >/dev/null
+            verdict="$(jq -r .verdict "${result}")"
+            findings="$(jq '.findings | length' "${result}")"
+          fi
+          base_sha="$(jq -r .base_sha "${metadata}")"
+          head_sha="$(jq -r .head_sha "${metadata}")"
+          merge_base_sha="$(jq -r .merge_base_sha "${metadata}")"
+          integration_tree_sha="$(jq -r .integration_tree_sha "${metadata}")"
+          diff_sha256="$(jq -r .diff_sha256 "${metadata}")"
+          input_sha256="$(jq -r .input_sha256 "${metadata}")"
+          review_bytes="$(jq -r .review_bytes "${metadata}")"
+          producer_run_id="${{ steps.dedupe.outputs.producer_run_id }}"
+          [[ "${producer_run_id}" =~ ^[1-9][0-9]*$ ]]
+          producer_run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${producer_run_id}"
+          evidence="$(jq -cn \
+            --arg base "${base_sha}" \
+            --arg head "${head_sha}" \
+            --arg merge_base "${merge_base_sha}" \
+            --arg integration_tree "${integration_tree_sha}" \
+            --arg diff_sha256 "${diff_sha256}" \
+            --arg input_sha256 "${input_sha256}" \
+            --arg workflow_sha "${TRUSTED_WORKFLOW_SHA}" \
+            --argjson run_id "${producer_run_id}" \
+            --arg run_url "${producer_run_url}" \
+            '{schema:4,base_sha:$base,head_sha:$head,merge_base_sha:$merge_base,
+              integration_tree_sha:$integration_tree,diff_sha256:$diff_sha256,
+              input_sha256:$input_sha256,workflow_sha:$workflow_sha,
+              producer_run_id:$run_id,run_url:$run_url}')"
           {
-            echo "### Base-controlled exact-head AI review"
+            echo "### Protected Exact-Revision Codex review"
             echo
-            echo "- Base: \`${EXPECTED_BASE}\`"
-            echo "- Head: \`${EXPECTED_HEAD}\`"
-            echo "- Patch SHA-256: \`${patch_sha256}\`"
+            echo "- Reviewer path: \`MLX-90 §7.2 Exact-Revision Codex exception\`"
+            echo "- Base: \`${base_sha}\`"
+            echo "- Head: \`${head_sha}\`"
+            echo "- Merge base: \`${merge_base_sha}\`"
+            echo "- Integration tree: \`${integration_tree_sha}\`"
+            echo "- Full diff SHA-256: \`${diff_sha256}\` (${review_bytes} bytes)"
+            echo "- Complete input SHA-256: \`${input_sha256}\`"
             echo "- Verdict: \`${verdict}\`"
             echo "- Findings: \`${findings}\`"
+            echo "- Producer run: \`${producer_run_url}\`"
           } >>"${GITHUB_STEP_SUMMARY}"
-          test "${verdict}" = PASS
+          if [ "${{ steps.dedupe.outputs.reuse }}" != 'true' ]; then
+            conclusion=failure
+            title='Protected Exact-Revision Codex review failed'
+            if [ "${verdict}" = PASS ] && [ "${findings}" -eq 0 ]; then
+              conclusion=success
+              title='Protected Exact-Revision Codex review passed'
+            fi
+            gh api --method PATCH "repos/${REPOSITORY}/check-runs/${{ steps.dedupe.outputs.check_id }}" \
+              -f status=completed \
+              -f conclusion="${conclusion}" \
+              -f "output[title]=${title}" \
+              -f "output[summary]=${evidence}" >/dev/null
+            test "${conclusion}" = success
+          fi
+          publish_once() {
+            local check_name="$1" external_id="$2" title="$3"
+            local checks named count check_id check_url created current_external_id updated
+            checks="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=$(jq -rn --arg value "${check_name}" '$value|@uri')&per_page=100")"
+            named="$(jq -c \
+              --arg name "${check_name}" \
+              '[.[].check_runs[]? |
+                select(.name == $name)]' \
+              <<<"${checks}")"
+            count="$(jq 'length' <<<"${named}")"
+            if [ "${count}" -gt 1 ]; then
+              echo "Multiple ${check_name} checks exist for this head." >&2
+              exit 1
+            fi
+            if [ "${count}" -eq 1 ]; then
+              if ! jq -e '.[0].app.id == 15368 and .[0].app.slug == "github-actions"' \
+                <<<"${named}" >/dev/null; then
+                echo "${check_name} exists under an unauthorized GitHub App." >&2
+                exit 1
+              fi
+              check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${named}")"
+              check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
+              current_external_id="$(jq -r '.[0].external_id // empty' <<<"${named}")"
+              if [ "${current_external_id}" != "${external_id}" ]; then
+                updated="$(gh api --method PATCH "repos/${REPOSITORY}/check-runs/${check_id}" \
+                  -f status=completed \
+                  -f conclusion=success \
+                  -f "details_url=${check_url}" \
+                  -f "external_id=${external_id}" \
+                  -f "output[title]=${title}" \
+                  -f "output[summary]=${evidence}")"
+                jq -e \
+                  --arg check_name "${check_name}" \
+                  --arg evidence "${evidence}" \
+                  --arg external_id "${external_id}" \
+                  --arg head "${EXPECTED_HEAD}" \
+                  --arg url "${check_url}" \
+                  --argjson check_id "${check_id}" '
+                    .id == $check_id
+                    and .name == $check_name
+                    and .app.id == 15368
+                    and .app.slug == "github-actions"
+                    and .head_sha == $head
+                    and .details_url == $url
+                    and .external_id == $external_id
+                    and .status == "completed"
+                    and .conclusion == "success"
+                    and .output.summary == $evidence
+                  ' <<<"${updated}" >/dev/null
+                return
+              fi
+              jq -e \
+                --arg check_name "${check_name}" \
+                --arg evidence "${evidence}" \
+                --arg external_id "${external_id}" \
+                --arg head "${EXPECTED_HEAD}" \
+                --arg url "${check_url}" \
+                --argjson check_id "${check_id}" '
+                  .[0].id == $check_id
+                  and .[0].name == $check_name
+                  and .[0].app.id == 15368
+                  and .[0].app.slug == "github-actions"
+                  and .[0].head_sha == $head
+                  and .[0].details_url == $url
+                  and .[0].external_id == $external_id
+                  and .[0].status == "completed"
+                  and .[0].conclusion == "success"
+                  and .[0].output.summary == $evidence
+                ' <<<"${named}" >/dev/null
+              return
+            fi
+            created="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
+              -f name="${check_name}" \
+              -f head_sha="${EXPECTED_HEAD}" \
+              -f status=completed \
+              -f conclusion=success \
+              -f external_id="${external_id}" \
+              -f "output[title]=${title}" \
+              -f "output[summary]=${evidence}")"
+            check_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${created}")"
+            check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
+            created="$(gh api --method PATCH "repos/${REPOSITORY}/check-runs/${check_id}" \
+              -f "details_url=${check_url}")"
+            jq -e \
+              --arg check_name "${check_name}" \
+              --arg evidence "${evidence}" \
+              --arg external_id "${external_id}" \
+              --arg head "${EXPECTED_HEAD}" \
+              --arg url "${check_url}" \
+              --argjson check_id "${check_id}" '
+                .id == $check_id
+                and .name == $check_name
+                and .app.id == 15368
+                and .app.slug == "github-actions"
+                and .head_sha == $head
+                and .details_url == $url
+                and .external_id == $external_id
+                and .status == "completed"
+                and .conclusion == "success"
+                and .output.summary == $evidence
+              ' <<<"${created}" >/dev/null
+          }
+          publish_once \
+            'Current revision review' \
+            "mlx90-current-revision:v4:${producer_run_id}:${input_sha256}" \
+            'Protected Exact-Revision Codex review passed'
+          # One-time compatibility alias for protected Shared Assets promotion
+          # PR #1047. It is derived from this same Codex PASS and never starts a
+          # second reviewer. The develop version replaces this bootstrap file
+          # during the promotion, removing the legacy Copilot-named context.
+          if [ "${REPOSITORY}" = lightning-it/shared-assets-lit ] \
+            && [ "${PR_NUMBER}" = 1047 ] \
+            && [ "${BASE_REF}" = main ]; then
+            publish_once \
+              'Successful Copilot review' \
+              "mlx90-legacy-transition:v4:${producer_run_id}:${input_sha256}" \
+              'Exact-Revision Codex PASS (temporary legacy context; no Copilot)'
+          fi
+
+  request-protected-verifier-reevaluation:
+    name: Request protected verifier re-evaluation
+    needs: exact-revision-codex-review
+    if: needs.exact-revision-codex-review.result == 'success'
+    permissions:
+      actions: write
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Dispatch the protected re-evaluation helper from develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPOSITORY: ${{ github.repository }}
+          EXPECTED_BASE: ${{ inputs.expected_base }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            "repos/${REPOSITORY}/actions/workflows/current-revision-rerun.yml/dispatches" \
+            -f ref=develop \
+            -f "inputs[pr_number]=${PR_NUMBER}" \
+            -f "inputs[expected_base]=${EXPECTED_BASE}" \
+            -f "inputs[expected_head]=${EXPECTED_HEAD}" >/dev/null
