@@ -30,6 +30,16 @@ jobs:
       github.event.pull_request.user.login
         == 'lightning-it-shared-assets-sync[bot]'
       && github.event.pull_request.head.repo.full_name == github.repository
+      && !(
+        github.repository == 'lightning-it/.github'
+        && github.event.pull_request.base.ref == 'develop'
+        && startsWith(github.event.pull_request.head.ref, 'backmerge/')
+        && endsWith(github.event.pull_request.head.ref, '-main')
+        && startsWith(
+          github.event.pull_request.title,
+          'chore(governance): record main ancestry before '
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -48,16 +58,20 @@ jobs:
           && github.event.pull_request.head.repo.full_name == github.repository
           && github.event.pull_request.base.ref == 'develop'
           && (
-            github.event.pull_request.head.ref
-              == format(
-                'chore/sync-shared-assets-lit-{0}',
+            startsWith(
+              github.event.pull_request.head.ref,
+              format(
+                'chore/sync-shared-assets-lit-{0}-',
                 github.event.repository.name
               )
-            || github.event.pull_request.head.ref
-              == format(
-                'chore/sync-repository-quality-{0}',
+            )
+            || startsWith(
+              github.event.pull_request.head.ref,
+              format(
+                'chore/sync-repository-quality-{0}-',
                 github.event.repository.name
               )
+            )
           )
           && (
             github.event.pull_request.title == 'chore: sync shared-assets-lit'
@@ -102,6 +116,8 @@ jobs:
           sync_kind=none
           expected_subject=""
           repo_name="${REPO#*/}"
+          repository_quality_prefix="chore/sync-repository-quality-${repo_name}-"
+          shared_assets_prefix="chore/sync-shared-assets-lit-${repo_name}-"
 
           if [ "$PR_DRAFT" != "false" ]; then
             trusted=false
@@ -127,11 +143,15 @@ jobs:
             trusted=false
           fi
 
-          if [ "$PR_HEAD" = "chore/sync-repository-quality-${repo_name}" ] \
+          if [[ "$PR_HEAD" == "$repository_quality_prefix"* ]] \
+            && [[ "${PR_HEAD#"$repository_quality_prefix"}" \
+              =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]] \
             && [ "$PR_TITLE" = "chore: sync repository quality assets" ]; then
             sync_kind=repository-quality
             expected_subject="chore: sync repository quality assets"
-          elif [ "$PR_HEAD" = "chore/sync-shared-assets-lit-${repo_name}" ] \
+          elif [[ "$PR_HEAD" == "$shared_assets_prefix"* ]] \
+            && [[ "${PR_HEAD#"$shared_assets_prefix"}" \
+              =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]] \
             && { [ "$PR_TITLE" = "chore: sync shared-assets-lit" ] \
               || [ "$PR_TITLE" = "chore: sync shared assets" ]; }; then
             sync_kind=shared-assets
@@ -193,10 +213,16 @@ jobs:
               '/^Shared-Assets-Source-SHA: [0-9a-f]{40}$/ { count++ }
                END { print count + 0 }' <<<"$commit_message")"
             source_run_count="$(awk \
-              '/^Shared-Assets-Source-Run: [0-9]+$/ { count++ }
+              '/^Shared-Assets-Source-Run: [1-9][0-9]*$/ { count++ }
+               END { print count + 0 }' <<<"$commit_message")"
+            source_attempt_count="$(awk \
+              '/^Shared-Assets-Source-Attempt: [1-9][0-9]*$/ { count++ }
                END { print count + 0 }' <<<"$commit_message")"
             app_id_count="$(awk -v expected="$SYNC_APP_ID" \
               '$0 == "Shared-Assets-Sync-App-ID: " expected { count++ }
+               END { print count + 0 }' <<<"$commit_message")"
+            managed_trailer_count="$(awk \
+              '/^Shared-Assets-/ { count++ }
                END { print count + 0 }' <<<"$commit_message")"
             if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
               || [ "$commit_author" != "$SYNC_APP_BOT" ] \
@@ -204,7 +230,9 @@ jobs:
               || [ "$first_line" != "$expected_subject" ] \
               || [ "$source_sha_count" -ne 1 ] \
               || [ "$source_run_count" -ne 1 ] \
-              || [ "$app_id_count" -ne 1 ]; then
+              || [ "$source_attempt_count" -ne 1 ] \
+              || [ "$app_id_count" -ne 1 ] \
+              || [ "$managed_trailer_count" -ne 4 ]; then
               trusted=false
             fi
             last_commit_sha="$commit_sha"
@@ -236,6 +264,7 @@ jobs:
             local commit_message commit_rows commit_sha expected_commits first_line
             local expected_subject last_commit_sha live_head live_head_sha live_pr
             local live_title repo_name source_run_count source_app_id_count
+            local managed_trailer_count source_attempt_count
             local source_sha_count
 
             if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
@@ -261,13 +290,19 @@ jobs:
             live_head="$(jq -r '.head.ref // ""' <<<"$live_pr")"
             live_title="$(jq -r '.title // ""' <<<"$live_pr")"
             repo_name="${REPO#*/}"
+            repository_quality_prefix="chore/sync-repository-quality-${repo_name}-"
+            shared_assets_prefix="chore/sync-shared-assets-lit-${repo_name}-"
             if ! [[ "$live_head_sha" =~ ^[0-9a-f]{40}$ ]]; then
               return 1
             fi
-            if [ "$live_head" = "chore/sync-repository-quality-${repo_name}" ] \
+            if [[ "$live_head" == "$repository_quality_prefix"* ]] \
+              && [[ "${live_head#"$repository_quality_prefix"}" \
+                =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]] \
               && [ "$live_title" = "chore: sync repository quality assets" ]; then
               expected_subject="chore: sync repository quality assets"
-            elif [ "$live_head" = "chore/sync-shared-assets-lit-${repo_name}" ] \
+            elif [[ "$live_head" == "$shared_assets_prefix"* ]] \
+              && [[ "${live_head#"$shared_assets_prefix"}" \
+                =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]] \
               && { [ "$live_title" = "chore: sync shared-assets-lit" ] \
                 || [ "$live_title" = "chore: sync shared assets" ]; }; then
               expected_subject="chore: sync shared assets from lightning-it/shared-assets-lit"
@@ -303,10 +338,16 @@ jobs:
                 '/^Shared-Assets-Source-SHA: [0-9a-f]{40}$/ { count++ }
                  END { print count + 0 }' <<<"$commit_message")"
               source_run_count="$(awk \
-                '/^Shared-Assets-Source-Run: [0-9]+$/ { count++ }
+                '/^Shared-Assets-Source-Run: [1-9][0-9]*$/ { count++ }
+                 END { print count + 0 }' <<<"$commit_message")"
+              source_attempt_count="$(awk \
+                '/^Shared-Assets-Source-Attempt: [1-9][0-9]*$/ { count++ }
                  END { print count + 0 }' <<<"$commit_message")"
               source_app_id_count="$(awk -v expected="$SYNC_APP_ID" \
                 '$0 == "Shared-Assets-Sync-App-ID: " expected { count++ }
+                 END { print count + 0 }' <<<"$commit_message")"
+              managed_trailer_count="$(awk \
+                '/^Shared-Assets-/ { count++ }
                  END { print count + 0 }' <<<"$commit_message")"
               if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
                 || [ "$commit_author" != "$SYNC_APP_BOT" ] \
@@ -314,7 +355,9 @@ jobs:
                 || [ "$first_line" != "$expected_subject" ] \
                 || [ "$source_sha_count" -ne 1 ] \
                 || [ "$source_run_count" -ne 1 ] \
-                || [ "$source_app_id_count" -ne 1 ]; then
+                || [ "$source_attempt_count" -ne 1 ] \
+                || [ "$source_app_id_count" -ne 1 ] \
+                || [ "$managed_trailer_count" -ne 4 ]; then
                 return 1
               fi
               last_commit_sha="$commit_sha"
@@ -381,6 +424,7 @@ jobs:
             local actual_commits commit_author commit_committer commit_json
             local commit_message commit_rows commit_sha expected_commits first_line
             local last_commit_sha live_pr source_run_count source_sha_count source_app_id_count
+            local managed_trailer_count source_attempt_count
 
             if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
               return 1
@@ -430,10 +474,16 @@ jobs:
                 '/^Shared-Assets-Source-SHA: [0-9a-f]{40}$/ { count++ }
                  END { print count + 0 }' <<<"$commit_message")"
               source_run_count="$(awk \
-                '/^Shared-Assets-Source-Run: [0-9]+$/ { count++ }
+                '/^Shared-Assets-Source-Run: [1-9][0-9]*$/ { count++ }
+                 END { print count + 0 }' <<<"$commit_message")"
+              source_attempt_count="$(awk \
+                '/^Shared-Assets-Source-Attempt: [1-9][0-9]*$/ { count++ }
                  END { print count + 0 }' <<<"$commit_message")"
               source_app_id_count="$(awk -v expected="$SYNC_APP_ID" \
                 '$0 == "Shared-Assets-Sync-App-ID: " expected { count++ }
+                 END { print count + 0 }' <<<"$commit_message")"
+              managed_trailer_count="$(awk \
+                '/^Shared-Assets-/ { count++ }
                  END { print count + 0 }' <<<"$commit_message")"
               if ! [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] \
                 || [ "$commit_author" != "$SYNC_APP_BOT" ] \
@@ -441,7 +491,9 @@ jobs:
                 || [ "$first_line" != "$EXPECTED_SUBJECT" ] \
                 || [ "$source_sha_count" -ne 1 ] \
                 || [ "$source_run_count" -ne 1 ] \
-                || [ "$source_app_id_count" -ne 1 ]; then
+                || [ "$source_attempt_count" -ne 1 ] \
+                || [ "$source_app_id_count" -ne 1 ] \
+                || [ "$managed_trailer_count" -ne 4 ]; then
                 return 1
               fi
               last_commit_sha="$commit_sha"
