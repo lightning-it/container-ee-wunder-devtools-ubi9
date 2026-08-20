@@ -1,6 +1,6 @@
 # Managed by lightning-it/shared-assets-lit.
 # Do not edit downstream copies directly.
-# Canonical protected MLX-90 §7.2 Exact-Revision Codex controller.
+# Protected per-repository MLX-90 §7.2 Exact-Revision Codex controller.
 # yamllint disable rule:truthy rule:line-length
 ---
 name: Protected Exact-Revision Codex review
@@ -42,7 +42,7 @@ concurrency:
 # the full binary diff, protected prompt, and protected schema.
 jobs:
   exact-revision-codex-review:
-    name: Protected Exact-Revision Codex review
+    name: Current revision review
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.actor == 'lightning-it-release-automation[bot]'
@@ -70,6 +70,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
           [[ "${TRUSTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
           test "${TRUSTED_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
           install -d -m 0700 trusted-controller
@@ -129,7 +130,7 @@ jobs:
           external_prefix="mlx90-exact-revision:v4:${input_sha256}:"
           external_id="${external_prefix}${GITHUB_RUN_ID}"
           checks="$(gh api --paginate --slurp \
-            "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20Exact-Revision%20Codex%20result&per_page=100")"
+            "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20Exact-Revision%20Codex%20result&filter=all&per_page=100")"
           matching="$(jq -c \
             --arg external_prefix "${external_prefix}" \
             '[.[].check_runs[]? |
@@ -233,6 +234,13 @@ jobs:
             -f 'output[title]=Protected Exact-Revision Codex review in progress' \
             -f "output[summary]=Immutable input SHA-256: ${input_sha256}.")"
           check_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${reservation}")"
+          {
+            echo "reuse=false"
+            echo "check_id=${check_id}"
+            echo "input_sha256=${input_sha256}"
+            echo "external_id=${external_id}"
+            echo "producer_run_id=${GITHUB_RUN_ID}"
+          } >>"${GITHUB_OUTPUT}"
           check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
           reservation="$(gh api --method PATCH "repos/${REPOSITORY}/check-runs/${check_id}" \
             -f "details_url=${check_url}")"
@@ -249,13 +257,6 @@ jobs:
               and .app.id == 15368
               and .app.slug == "github-actions"
             ' <<<"${reservation}" >/dev/null
-          {
-            echo "reuse=false"
-            echo "check_id=${check_id}"
-            echo "input_sha256=${input_sha256}"
-            echo "external_id=${external_id}"
-            echo "producer_run_id=${GITHUB_RUN_ID}"
-          } >>"${GITHUB_OUTPUT}"
 
       - name: Run protected history-free Exact-Revision Codex review
         if: steps.dedupe.outputs.reuse != 'true'
@@ -277,6 +278,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          api_read() {
+            local attempt output
+            for attempt in $(seq 1 5); do
+              if output="$(gh api "$@")"; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                echo "GitHub API read failed after five attempts." >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
+          api_patch() {
+            local attempt output
+            for attempt in $(seq 1 5); do
+              if output="$(gh api --method PATCH "$@")"; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                echo "Idempotent GitHub check update failed after five attempts." >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
           python3 trusted-controller/materialize.py verify \
             --repository "${REPOSITORY}" \
             --pull-request "${PR_NUMBER}" \
@@ -319,6 +348,7 @@ jobs:
           input_sha256="$(jq -r .input_sha256 "${metadata}")"
           review_bytes="$(jq -r .review_bytes "${metadata}")"
           producer_run_id="${{ steps.dedupe.outputs.producer_run_id }}"
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
           [[ "${producer_run_id}" =~ ^[1-9][0-9]*$ ]]
           producer_run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${producer_run_id}"
           evidence="$(jq -cn \
@@ -329,12 +359,14 @@ jobs:
             --arg diff_sha256 "${diff_sha256}" \
             --arg input_sha256 "${input_sha256}" \
             --arg workflow_sha "${TRUSTED_WORKFLOW_SHA}" \
+            --argjson pr_number "${PR_NUMBER}" \
             --argjson run_id "${producer_run_id}" \
             --arg run_url "${producer_run_url}" \
             '{schema:4,base_sha:$base,head_sha:$head,merge_base_sha:$merge_base,
               integration_tree_sha:$integration_tree,diff_sha256:$diff_sha256,
               input_sha256:$input_sha256,workflow_sha:$workflow_sha,
-              producer_run_id:$run_id,run_url:$run_url}')"
+              pull_request_number:$pr_number,producer_run_id:$run_id,
+              run_url:$run_url}')"
           {
             echo "### Protected Exact-Revision Codex review"
             echo
@@ -356,96 +388,124 @@ jobs:
               conclusion=success
               title='Protected Exact-Revision Codex review passed'
             fi
-            gh api --method PATCH "repos/${REPOSITORY}/check-runs/${{ steps.dedupe.outputs.check_id }}" \
+            finalized="$(api_patch "repos/${REPOSITORY}/check-runs/${{ steps.dedupe.outputs.check_id }}" \
               -f status=completed \
               -f conclusion="${conclusion}" \
               -f "output[title]=${title}" \
-              -f "output[summary]=${evidence}" >/dev/null
+              -f "output[summary]=${evidence}")"
+            jq -e \
+              --arg conclusion "${conclusion}" \
+              --arg evidence "${evidence}" \
+              --arg head "${EXPECTED_HEAD}" \
+              --argjson check_id "${{ steps.dedupe.outputs.check_id }}" '
+                .id == $check_id
+                and .name == "Protected Exact-Revision Codex result"
+                and .app.id == 15368
+                and .app.slug == "github-actions"
+                and .head_sha == $head
+                and .status == "completed"
+                and .conclusion == $conclusion
+                and .output.summary == $evidence
+              ' <<<"${finalized}" >/dev/null
             test "${conclusion}" = success
           fi
           publish_once() {
             local check_name="$1" external_id="$2" title="$3"
-            local checks named count check_id check_url created current_external_id updated
-            checks="$(gh api --paginate --slurp \
-              "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=$(jq -rn --arg value "${check_name}" '$value|@uri')&per_page=100")"
-            named="$(jq -c \
-              --arg name "${check_name}" \
-              '[.[].check_runs[]? |
-                select(.name == $name)]' \
-              <<<"${checks}")"
+            local checks named count check_id check_url completed_at created
+            local recovered recovery_attempt updated
+            read_named_checks() {
+              checks="$(api_read --paginate --slurp \
+                "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=$(jq -rn --arg value "${check_name}" '$value|@uri')&filter=all&per_page=100")" || return 1
+              jq -c \
+                --arg name "${check_name}" \
+                '[.[].check_runs[]? |
+                  select(.name == $name) |
+                  select(.app.id == 15368 and .app.slug == "github-actions")]' \
+                <<<"${checks}"
+            }
+            named="$(read_named_checks)"
             count="$(jq 'length' <<<"${named}")"
             if [ "${count}" -gt 1 ]; then
               echo "Multiple ${check_name} checks exist for this head." >&2
               exit 1
             fi
             if [ "${count}" -eq 1 ]; then
-              if ! jq -e '.[0].app.id == 15368 and .[0].app.slug == "github-actions"' \
-                <<<"${named}" >/dev/null; then
-                echo "${check_name} exists under an unauthorized GitHub App." >&2
-                exit 1
-              fi
               check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${named}")"
               check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
-              current_external_id="$(jq -r '.[0].external_id // empty' <<<"${named}")"
-              if [ "${current_external_id}" != "${external_id}" ]; then
-                updated="$(gh api --method PATCH "repos/${REPOSITORY}/check-runs/${check_id}" \
-                  -f status=completed \
-                  -f conclusion=success \
-                  -f "details_url=${check_url}" \
-                  -f "external_id=${external_id}" \
-                  -f "output[title]=${title}" \
-                  -f "output[summary]=${evidence}")"
-                jq -e \
-                  --arg check_name "${check_name}" \
-                  --arg evidence "${evidence}" \
-                  --arg external_id "${external_id}" \
-                  --arg head "${EXPECTED_HEAD}" \
-                  --arg url "${check_url}" \
-                  --argjson check_id "${check_id}" '
-                    .id == $check_id
-                    and .name == $check_name
-                    and .app.id == 15368
-                    and .app.slug == "github-actions"
-                    and .head_sha == $head
-                    and .details_url == $url
-                    and .external_id == $external_id
-                    and .status == "completed"
-                    and .conclusion == "success"
-                    and .output.summary == $evidence
-                  ' <<<"${updated}" >/dev/null
-                return
-              fi
+              # A new bound producer must refresh the terminal timestamp. GitHub's
+              # strict status policy can otherwise retain the check as expected.
+              completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              updated="$(api_patch "repos/${REPOSITORY}/check-runs/${check_id}" \
+                -f status=completed \
+                -f conclusion=success \
+                -f "completed_at=${completed_at}" \
+                -f "details_url=${check_url}" \
+                -f "external_id=${external_id}" \
+                -f "output[title]=${title}" \
+                -f "output[summary]=${evidence}")"
               jq -e \
                 --arg check_name "${check_name}" \
+                --arg completed_at "${completed_at}" \
                 --arg evidence "${evidence}" \
                 --arg external_id "${external_id}" \
                 --arg head "${EXPECTED_HEAD}" \
                 --arg url "${check_url}" \
                 --argjson check_id "${check_id}" '
-                  .[0].id == $check_id
-                  and .[0].name == $check_name
-                  and .[0].app.id == 15368
-                  and .[0].app.slug == "github-actions"
-                  and .[0].head_sha == $head
-                  and .[0].details_url == $url
-                  and .[0].external_id == $external_id
-                  and .[0].status == "completed"
-                  and .[0].conclusion == "success"
-                  and .[0].output.summary == $evidence
-                ' <<<"${named}" >/dev/null
+                  .id == $check_id
+                  and .name == $check_name
+                  and .app.id == 15368
+                  and .app.slug == "github-actions"
+                  and .head_sha == $head
+                  and .details_url == $url
+                  and .external_id == $external_id
+                  and .completed_at == $completed_at
+                  and .status == "completed"
+                  and .conclusion == "success"
+                  and .output.summary == $evidence
+                ' <<<"${updated}" >/dev/null
               return
             fi
-            created="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
-              -f name="${check_name}" \
-              -f head_sha="${EXPECTED_HEAD}" \
-              -f status=completed \
-              -f conclusion=success \
-              -f external_id="${external_id}" \
-              -f "output[title]=${title}" \
-              -f "output[summary]=${evidence}")"
+            if ! created="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
+                -f name="${check_name}" \
+                -f head_sha="${EXPECTED_HEAD}" \
+                -f status=completed \
+                -f conclusion=success \
+                -f external_id="${external_id}" \
+                -f "output[title]=${title}" \
+                -f "output[summary]=${evidence}")"; then
+              # Never retry a create blindly: GitHub can materialize the check
+              # even when the client receives a non-success response. Recover
+              # only one exact app/head/external-id result.
+              created=''
+              for recovery_attempt in $(seq 1 5); do
+                echo "Recovering protected check creation outcome (attempt ${recovery_attempt}/5)." >&2
+                sleep 5
+                named="$(read_named_checks)"
+                recovered="$(jq -c \
+                  --arg external_id "${external_id}" \
+                  --arg head "${EXPECTED_HEAD}" '
+                    [.[] |
+                      select(.head_sha == $head) |
+                      select(.external_id == $external_id)]
+                  ' <<<"${named}")"
+                if [ "$(jq 'length' <<<"${named}")" -gt 1 ] \
+                  || [ "$(jq 'length' <<<"${recovered}")" -gt 1 ]; then
+                  echo "Ambiguous protected check creation outcome." >&2
+                  return 1
+                fi
+                if [ "$(jq 'length' <<<"${recovered}")" -eq 1 ]; then
+                  created="$(jq -c '.[0]' <<<"${recovered}")"
+                  break
+                fi
+              done
+              if [ -z "${created}" ]; then
+                echo "Protected check creation failed without a materialized exact result." >&2
+                return 1
+              fi
+            fi
             check_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${created}")"
             check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
-            created="$(gh api --method PATCH "repos/${REPOSITORY}/check-runs/${check_id}" \
+            created="$(api_patch "repos/${REPOSITORY}/check-runs/${check_id}" \
               -f "details_url=${check_url}")"
             jq -e \
               --arg check_name "${check_name}" \
@@ -470,18 +530,57 @@ jobs:
             'Current revision review' \
             "mlx90-current-revision:v4:${producer_run_id}:${input_sha256}" \
             'Protected Exact-Revision Codex review passed'
-          # One-time compatibility alias for protected Shared Assets promotion
-          # PR #1047. It is derived from this same Codex PASS and never starts a
-          # second reviewer. The develop version replaces this bootstrap file
-          # during the promotion, removing the legacy Copilot-named context.
-          if [ "${REPOSITORY}" = lightning-it/shared-assets-lit ] \
-            && [ "${PR_NUMBER}" = 1047 ] \
-            && [ "${BASE_REF}" = main ]; then
-            publish_once \
-              'Successful Copilot review' \
-              "mlx90-legacy-transition:v4:${producer_run_id}:${input_sha256}" \
-              'Exact-Revision Codex PASS (temporary legacy context; no Copilot)'
+
+      - name: Fail-close an unfinished protected reservation
+        if: >-
+          always() &&
+          steps.dedupe.outputs.reuse != 'true' &&
+          steps.dedupe.outputs.check_id != ''
+        env:
+          CHECK_ID: ${{ steps.dedupe.outputs.check_id }}
+          EXPECTED_EXTERNAL_ID: ${{ steps.dedupe.outputs.external_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "${CHECK_ID}" =~ ^[1-9][0-9]*$ ]]
+          reservation="$(gh api "repos/${REPOSITORY}/check-runs/${CHECK_ID}")"
+          jq -e \
+            --arg external_id "${EXPECTED_EXTERNAL_ID}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --argjson check_id "${CHECK_ID}" '
+              .id == $check_id
+              and .name == "Protected Exact-Revision Codex result"
+              and .app.id == 15368
+              and .app.slug == "github-actions"
+              and .head_sha == $head
+              and .external_id == $external_id
+              and (.status == "in_progress" or .status == "completed")
+            ' <<<"${reservation}" >/dev/null
+          if [ "$(jq -r .status <<<"${reservation}")" = completed ]; then
+            jq -e '.conclusion == "success" or .conclusion == "failure"' \
+              <<<"${reservation}" >/dev/null
+            exit 0
           fi
+          failure_evidence="The protected producer run ${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID} ended before finalizing this immutable reservation."
+          reservation="$(gh api --method PATCH \
+            "repos/${REPOSITORY}/check-runs/${CHECK_ID}" \
+            -f status=completed \
+            -f conclusion=failure \
+            -f 'output[title]=Protected Exact-Revision Codex review failed closed' \
+            -f "output[summary]=${failure_evidence}")"
+          jq -e \
+            --arg external_id "${EXPECTED_EXTERNAL_ID}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --argjson check_id "${CHECK_ID}" '
+              .id == $check_id
+              and .name == "Protected Exact-Revision Codex result"
+              and .app.id == 15368
+              and .app.slug == "github-actions"
+              and .head_sha == $head
+              and .external_id == $external_id
+              and .status == "completed"
+              and .conclusion == "failure"
+            ' <<<"${reservation}" >/dev/null
 
   request-protected-verifier-reevaluation:
     name: Request protected verifier re-evaluation

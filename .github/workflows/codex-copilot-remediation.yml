@@ -33,7 +33,9 @@ concurrency:
     github.event_name == 'pull_request_review' &&
     github.event.review.user.login != 'copilot-pull-request-reviewer[bot]' &&
     github.event.review.user.login || 'trusted' }}
-  cancel-in-progress: true
+  # Preserve every review-state observation. Cancelling a run can leave GitHub's
+  # overall rollup failed even after the exact required check has passed.
+  cancel-in-progress: false
 
 env:
   COPILOT_LOGIN: copilot-pull-request-reviewer[bot]
@@ -45,6 +47,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      issues: write
       pull-requests: write
     steps:
       - name: Verify exact head and request Copilot review
@@ -56,10 +59,60 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REPOSITORY_OWNER}" = lightning-it
-          current_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)"
+          pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          test "$(jq -r .state <<<"${pr}")" = open
+          test "$(jq -r .draft <<<"${pr}")" = false
+          test "$(jq -r .base.ref <<<"${pr}")" = develop
+          test "$(jq -r .head.repo.full_name <<<"${pr}")" = "${REPOSITORY}"
+          author="$(jq -r .user.login <<<"${pr}")"
+          if [ "${author}" = 'lightning-it-release-automation[bot]' ]; then
+            echo "Release-App pull requests use only the protected MLX-90 §7.2 Exact-Revision Codex review." >&2
+            exit 1
+          fi
+          if [ "${author}" != litroc ]; then
+            echo "Contributor-funded remediation is required; Lightning IT does not request or fund it." >&2
+            exit 1
+          fi
+          current_head="$(jq -r .head.sha <<<"${pr}")"
           test "${current_head}" = "${EXPECTED_HEAD}"
+          marker="<!-- rep60-copilot-rereview repository=${REPOSITORY} pr=${PR_NUMBER} head=${EXPECTED_HEAD} state=consumed -->"
+          reviews="$(gh api --paginate --slurp "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
+          if jq -e --arg login "${COPILOT_LOGIN}" --arg head "${EXPECTED_HEAD}" \
+            'any(add[]; .user.login == $login and .commit_id == $head)' <<<"${reviews}" >/dev/null; then
+            echo "The exact-head Copilot review already exists; no second request is permitted."
+            exit 0
+          fi
+          if jq -e --arg login "${COPILOT_LOGIN}" \
+            'any(.requested_reviewers[]?; .login == $login)' <<<"${pr}" >/dev/null; then
+            echo "The exact-head Copilot review is already pending; no second request is permitted."
+            exit 0
+          fi
+          comments="$(gh api --paginate --slurp "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100")"
+          if jq -e --arg marker "${marker}" \
+            'any(add[]; .user.login == "github-actions[bot]" and (.body | contains($marker)))' \
+            <<<"${comments}" >/dev/null; then
+            echo "The one-time request marker is already consumed; automatic retry is forbidden." >&2
+            exit 1
+          fi
+          gh api --method POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -f body="${marker}" >/dev/null
+          request_status=0
           gh api --method POST "repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
-            -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null || request_status=$?
+          pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          reviews="$(gh api --paginate --slurp "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
+          if jq -e --arg login "${COPILOT_LOGIN}" --arg head "${EXPECTED_HEAD}" \
+            'any(add[]; .user.login == $login and .commit_id == $head)' <<<"${reviews}" >/dev/null; then
+            echo "The exact-head Copilot review completed while the request was being verified."
+            exit 0
+          fi
+          if jq -e --arg login "${COPILOT_LOGIN}" \
+            'any(.requested_reviewers[]?; .login == $login)' <<<"${pr}" >/dev/null; then
+            echo "The one permitted exact-head Copilot review request is pending."
+            exit 0
+          fi
+          echo "Copilot request failed with status ${request_status}; the consumed marker forbids an automatic retry." >&2
+          exit 1
 
   inspect:
     if: github.event_name == 'pull_request_review'
@@ -76,7 +129,6 @@ jobs:
       head_ref: ${{ steps.guard.outputs.head_ref }}
       pr_number: ${{ steps.guard.outputs.pr_number }}
       round: ${{ steps.guard.outputs.round }}
-      retry: ${{ steps.guard.outputs.retry }}
       finding_hash: ${{ steps.guard.outputs.finding_hash }}
     steps:
       - name: Validate trust, exact head, and unresolved Copilot findings
@@ -90,7 +142,6 @@ jobs:
           {
             echo "eligible=false"
             echo "actionable=false"
-            echo "retry=false"
           } >>"${GITHUB_OUTPUT}"
           test "${GITHUB_REPOSITORY_OWNER}" = lightning-it
 
@@ -101,16 +152,6 @@ jobs:
             echo "Ignoring review event from ${event_author}; expected ${COPILOT_LOGIN}."
             exit 0
           fi
-          review_body="$(jq -r '.review.body // "" | ascii_downcase' "${GITHUB_EVENT_PATH}")"
-          if [[ "${review_body}" == *"unable to review"* || "${review_body}" == *"not able to review"* || "${review_body}" == *"quota exhausted"* || "${review_body}" == *"quota exceeded"* ]]; then
-            {
-              echo "retry=true"
-              echo "pr_number=${pr_number}"
-              echo "head_sha=${reviewed_sha}"
-            } >>"${GITHUB_OUTPUT}"
-            exit 0
-          fi
-
           pr="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}")"
           test "$(jq -r .state <<<"${pr}")" = open
           test "$(jq -r .draft <<<"${pr}")" = false
@@ -120,18 +161,27 @@ jobs:
           head_sha="$(jq -r .head.sha <<<"${pr}")"
           head_ref="$(jq -r .head.ref <<<"${pr}")"
           author="$(jq -r .user.login <<<"${pr}")"
+          if [ "${author}" = 'lightning-it-release-automation[bot]' ]; then
+            echo "Release-App pull requests use only the protected MLX-90 §7.2 Exact-Revision Codex review."
+            exit 0
+          fi
+          if [ "${author}" != litroc ]; then
+            echo "Contributor-funded remediation is required; Lightning IT does not request or fund it."
+            exit 0
+          fi
           if [ "${reviewed_sha}" != "${head_sha}" ]; then
             echo "Ignoring stale Copilot review for ${reviewed_sha}; current head is ${head_sha}."
             exit 0
           fi
 
+          review_body="$(jq -r '.review.body // "" | ascii_downcase' "${GITHUB_EVENT_PATH}")"
+          if [[ "${review_body}" == *"unable to review"* || "${review_body}" == *"not able to review"* || "${review_body}" == *"quota exhausted"* || "${review_body}" == *"quota exceeded"* ]]; then
+            echo "Copilot review is unavailable or quota-blocked; automatic retry is forbidden."
+            exit 0
+          fi
+
           permission="$(gh api "repos/${REPOSITORY}/collaborators/${author}/permission" --jq .permission 2>/dev/null || true)"
-          case "${permission}" in admin|maintain|write) ;; *)
-            case "${author}:${head_ref}" in
-              'renovate[bot]':renovate/*|lightning-it-shared-assets-sync[bot]:chore/sync-shared-assets-lit-*|lightning-it-shared-assets-sync[bot]:chore/sync-repository-quality-*) ;;
-              *) exit 0 ;;
-            esac
-          esac
+          case "${permission}" in admin|maintain|write) ;; *) exit 0 ;; esac
 
           read -r owner name <<<"${REPOSITORY//\// }"
           # shellcheck disable=SC2016 # GraphQL variables are intentionally literal.
@@ -158,8 +208,8 @@ jobs:
             gh api --method POST "repos/${REPOSITORY}/issues/${pr_number}/comments" -f body="Codex remediation stopped: identical Copilot finding set repeated (${finding_hash})." >/dev/null
             exit 0
           fi
-          if [ "${round}" -gt 3 ]; then
-            gh api --method POST "repos/${REPOSITORY}/issues/${pr_number}/comments" -f body='Codex remediation stopped: maximum three automatic repair rounds reached.' >/dev/null
+          if [ "${round}" -gt 1 ]; then
+            gh api --method POST "repos/${REPOSITORY}/issues/${pr_number}/comments" -f body='Codex remediation stopped: the single automatic repair round was already consumed.' >/dev/null
             exit 0
           fi
           {
@@ -171,27 +221,6 @@ jobs:
             echo "round=${round}"
             echo "finding_hash=${finding_hash}"
           } >>"${GITHUB_OUTPUT}"
-
-  retry-copilot-service:
-    needs: inspect
-    if: needs.inspect.outputs.retry == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      pull-requests: write
-    steps:
-      - name: Retry an unavailable or quota-blocked Copilot review
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
-          EXPECTED_HEAD: ${{ needs.inspect.outputs.head_sha }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          sleep 60
-          test "$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)" = "${EXPECTED_HEAD}"
-          gh api --method POST "repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
-            -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
 
   remediate:
     needs: inspect
