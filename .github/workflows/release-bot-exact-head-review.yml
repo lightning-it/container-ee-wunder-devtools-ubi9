@@ -129,6 +129,7 @@ jobs:
           input_sha256="$(jq -er .input_sha256 exact-revision-review/review-metadata.json)"
           external_prefix="mlx90-exact-revision:v4:${input_sha256}:"
           external_id="${external_prefix}${GITHUB_RUN_ID}"
+          expected_title="Exact-Revision Codex PR #${PR_NUMBER} ${EXPECTED_BASE}..${EXPECTED_HEAD}"
           checks="$(gh api --paginate --slurp \
             "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20Exact-Revision%20Codex%20result&filter=all&per_page=100")"
           matching="$(jq -c \
@@ -154,7 +155,6 @@ jobs:
             test "${prior_external_id}" = "${external_prefix}${prior_run_id}"
             producer_run_url="${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${prior_run_id}"
             prior_run="$(gh api "repos/${REPOSITORY}/actions/runs/${prior_run_id}")"
-            expected_title="Exact-Revision Codex PR #${PR_NUMBER} ${EXPECTED_BASE}..${EXPECTED_HEAD}"
             jq -e \
               --arg actor 'lightning-it-release-automation[bot]' \
               --arg base_ref "${BASE_REF}" \
@@ -220,11 +220,127 @@ jobs:
                 echo "input_sha256=${input_sha256}"
                 echo "external_id=${external_id}"
                 echo "producer_run_id=${prior_run_id}"
+                echo "recovered=false"
               } >>"${GITHUB_OUTPUT}"
               exit 0
             fi
             echo "A prior protected attempt for this immutable input is ${status}/${conclusion:-none}; automatic retry is forbidden." >&2
             exit 1
+          fi
+          # GitHub can remove an older custom check from a commit's visible
+          # check-run inventory when a pull request is closed and reopened.
+          # The protected workflow run and its job/step ledger remain the
+          # durable proof that the immutable input already consumed its one AI
+          # invocation. Recover that PASS without invoking Codex again.
+          base_ref_query="$(jq -rn --arg value "${BASE_REF}" '$value|@uri')"
+          run_pages="$(gh api --paginate --slurp \
+            "repos/${REPOSITORY}/actions/workflows/release-bot-exact-head-review.yml/runs?event=workflow_dispatch&branch=${base_ref_query}&per_page=100")"
+          prior_runs="$(jq -c \
+            --arg actor 'lightning-it-release-automation[bot]' \
+            --arg base_ref "${BASE_REF}" \
+            --arg base_sha "${EXPECTED_BASE}" \
+            --arg title "${expected_title}" \
+            --argjson current_run_id "${GITHUB_RUN_ID}" '
+              [.[].workflow_runs[]? |
+                select(.id != $current_run_id) |
+                select(.event == "workflow_dispatch") |
+                select(.head_branch == $base_ref and .head_sha == $base_sha) |
+                select(.path == ".github/workflows/release-bot-exact-head-review.yml") |
+                select(.display_title == $title) |
+                select(.actor.login == $actor and .triggering_actor.login == $actor)] |
+              unique_by(.id)
+            ' <<<"${run_pages}")"
+          prior_run_count="$(jq 'length' <<<"${prior_runs}")"
+          if [ "${prior_run_count}" -gt 0 ]; then
+            attempts='[]'
+            while IFS= read -r prior_run; do
+              prior_run_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${prior_run}")"
+              job_pages="$(gh api --paginate --slurp \
+                "repos/${REPOSITORY}/actions/runs/${prior_run_id}/jobs?filter=all&per_page=100")"
+              review_jobs="$(jq -c \
+                '[.[].jobs[]? | select(.name == "Current revision review")]' \
+                <<<"${job_pages}")"
+              test "$(jq 'length' <<<"${review_jobs}")" -eq 1
+              review_job="$(jq -c '.[0]' <<<"${review_jobs}")"
+              codex_steps="$(jq -c \
+                '[.steps[]? | select(.name == "Run protected history-free Exact-Revision Codex review")]' \
+                <<<"${review_job}")"
+              test "$(jq 'length' <<<"${codex_steps}")" -eq 1
+              enforcement_steps="$(jq -c \
+                '[.steps[]? | select(.name == "Re-prove exact revision and enforce the Codex verdict")]' \
+                <<<"${review_job}")"
+              test "$(jq 'length' <<<"${enforcement_steps}")" -eq 1
+              attempt="$(jq -cn \
+                --arg run_conclusion "$(jq -r '.conclusion // ""' <<<"${prior_run}")" \
+                --arg run_status "$(jq -r .status <<<"${prior_run}")" \
+                --arg job_conclusion "$(jq -r '.conclusion // ""' <<<"${review_job}")" \
+                --arg codex_conclusion "$(jq -r '.[0].conclusion // ""' <<<"${codex_steps}")" \
+                --arg enforcement_conclusion "$(jq -r '.[0].conclusion // ""' <<<"${enforcement_steps}")" \
+                --argjson run_id "${prior_run_id}" \
+                '{run_id:$run_id,run_status:$run_status,run_conclusion:$run_conclusion,
+                  job_conclusion:$job_conclusion,codex_conclusion:$codex_conclusion,
+                  enforcement_conclusion:$enforcement_conclusion}')"
+              attempts="$(jq -cn \
+                --argjson attempts "${attempts}" \
+                --argjson attempt "${attempt}" \
+                '$attempts + [$attempt]')"
+            done < <(jq -c '.[]' <<<"${prior_runs}")
+            actual_attempts="$(jq -c \
+              '[.[] | select(.codex_conclusion != "" and .codex_conclusion != "skipped")]' \
+              <<<"${attempts}")"
+            if [ "$(jq 'length' <<<"${actual_attempts}")" -ne 1 ]; then
+              echo "The durable workflow ledger does not contain exactly one protected AI invocation for this immutable input." >&2
+              exit 1
+            fi
+            successful_attempts="$(jq -c \
+              '[.[] | select(
+                .run_status == "completed" and
+                .run_conclusion == "success" and
+                .job_conclusion == "success" and
+                .codex_conclusion == "success" and
+                .enforcement_conclusion == "success"
+              )]' <<<"${actual_attempts}")"
+            if [ "$(jq 'length' <<<"${successful_attempts}")" -ne 1 ]; then
+              echo "The sole durable protected AI invocation did not pass; automatic retry is forbidden." >&2
+              exit 1
+            fi
+            prior_run_id="$(jq -er '.[0].run_id | select(type == "number" and . > 0)' \
+              <<<"${successful_attempts}")"
+            external_id="${external_prefix}${prior_run_id}"
+            reservation="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
+              -f name='Protected Exact-Revision Codex result' \
+              -f head_sha="${EXPECTED_HEAD}" \
+              -f status=in_progress \
+              -f external_id="${external_id}" \
+              -f 'output[title]=Recovering durable protected Exact-Revision Codex PASS' \
+              -f "output[summary]=Immutable input SHA-256: ${input_sha256}. Durable producer run: ${prior_run_id}.")"
+            check_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${reservation}")"
+            {
+              echo "reuse=true"
+              echo "check_id=${check_id}"
+              echo "input_sha256=${input_sha256}"
+              echo "external_id=${external_id}"
+              echo "producer_run_id=${prior_run_id}"
+              echo "recovered=true"
+            } >>"${GITHUB_OUTPUT}"
+            check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
+            reservation="$(gh api --method PATCH "repos/${REPOSITORY}/check-runs/${check_id}" \
+              -f "details_url=${check_url}")"
+            jq -e \
+              --arg external_id "${external_id}" \
+              --arg head "${EXPECTED_HEAD}" \
+              --arg url "${check_url}" \
+              --argjson check_id "${check_id}" '
+                .id == $check_id
+                and .head_sha == $head
+                and .details_url == $url
+                and .external_id == $external_id
+                and .status == "in_progress"
+                and .app.id == 15368
+                and .app.slug == "github-actions"
+              ' <<<"${reservation}" >/dev/null
+            echo "Recovering the durable protected PASS from producer run ${prior_run_id}; Codex will not run again."
+            exit 0
           fi
           reservation="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
             -f name='Protected Exact-Revision Codex result' \
@@ -240,6 +356,7 @@ jobs:
             echo "input_sha256=${input_sha256}"
             echo "external_id=${external_id}"
             echo "producer_run_id=${GITHUB_RUN_ID}"
+            echo "recovered=false"
           } >>"${GITHUB_OUTPUT}"
           check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
           reservation="$(gh api --method PATCH "repos/${REPOSITORY}/check-runs/${check_id}" \
@@ -381,10 +498,14 @@ jobs:
             echo "- Findings: \`${findings}\`"
             echo "- Producer run: \`${producer_run_url}\`"
           } >>"${GITHUB_STEP_SUMMARY}"
-          if [ "${{ steps.dedupe.outputs.reuse }}" != 'true' ]; then
+          if [ "${{ steps.dedupe.outputs.reuse }}" != 'true' ] || \
+             [ "${{ steps.dedupe.outputs.recovered }}" = 'true' ]; then
             conclusion=failure
             title='Protected Exact-Revision Codex review failed'
-            if [ "${verdict}" = PASS ] && [ "${findings}" -eq 0 ]; then
+            if [ "${{ steps.dedupe.outputs.recovered }}" = 'true' ]; then
+              conclusion=success
+              title='Protected Exact-Revision Codex review PASS recovered from durable workflow ledger'
+            elif [ "${verdict}" = PASS ] && [ "${findings}" -eq 0 ]; then
               conclusion=success
               title='Protected Exact-Revision Codex review passed'
             fi
@@ -534,7 +655,8 @@ jobs:
       - name: Fail-close an unfinished protected reservation
         if: >-
           always() &&
-          steps.dedupe.outputs.reuse != 'true' &&
+          (steps.dedupe.outputs.reuse != 'true' ||
+            steps.dedupe.outputs.recovered == 'true') &&
           steps.dedupe.outputs.check_id != ''
         env:
           CHECK_ID: ${{ steps.dedupe.outputs.check_id }}
