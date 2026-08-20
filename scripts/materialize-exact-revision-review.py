@@ -126,19 +126,147 @@ def require_single_sha_output(value: str, name: str) -> str:
     return require_sha(lines[0], name)
 
 
-def protected_asset_bytes(path: Path, name: str) -> bytes:
-    """Read one bounded regular protected asset without following a symlink."""
+def close_descriptor_after_error(
+    descriptor: int,
+    label: str,
+    *,
+    first_error: OSError | None = None,
+) -> list[str]:
+    """Attempt one close and never reuse a descriptor after an ambiguous error."""
+    if first_error is not None:
+        return [f"{label} close failed: {first_error}"]
+    try:
+        os.close(descriptor)
+    except OSError as error:
+        # POSIX does not make a failed close safe to retry. The numeric
+        # descriptor may already have been released and reused by another
+        # thread, so neither fstat() nor another close() may touch it.
+        return [f"{label} close failed: {error}"]
+    return []
+
+
+def add_error_notes(error: BaseException, notes: Sequence[str]) -> None:
+    """Attach cleanup details without requiring Python 3.11 exception notes."""
+    add_note = getattr(error, "add_note", None)
+    if callable(add_note):
+        for note in notes:
+            add_note(note)
+
+
+def fail_after_descriptor_cleanup(message: str, descriptor: int, label: str) -> NoReturn:
+    """Raise one proof error after deterministically cleaning up its descriptor."""
+    cleanup_errors = close_descriptor_after_error(descriptor, label)
+    failure = MaterializationError(message)
+    add_error_notes(failure, cleanup_errors)
+    raise failure
+
+
+def open_owned_parent_directory(path: Path, name: str, requirement: str) -> tuple[int, int, int]:
+    """Return the final parent fd plus O_NOFOLLOW and O_CLOEXEC flag values."""
     no_follow = getattr(os, "O_NOFOLLOW", None)
     if not isinstance(no_follow, int) or no_follow == 0:
-        fail("Protected asset reading requires O_NOFOLLOW support.")
-    flags = os.O_RDONLY
-    flags |= getattr(os, "O_CLOEXEC", 0)
-    flags |= no_follow
+        fail(f"{requirement} requires O_NOFOLLOW support.")
+    if path.name in {"", ".", ".."}:
+        fail(f"Protected {name} path is invalid.")
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | no_follow
+    directory_flags |= close_on_exec
+    directory = -1
     try:
-        descriptor = os.open(path, flags)
+        parent = path.parent
+        if parent.is_absolute():
+            directory = os.open(parent.anchor, directory_flags)
+            components = parent.parts[1:]
+        else:
+            directory = os.open(".", directory_flags)
+            components = parent.parts
+        for component in components:
+            if component in {"", "."}:
+                continue
+            if component == "..":
+                fail(f"Protected {name} parent traversal is forbidden.")
+            next_directory = os.open(component, directory_flags, dir_fd=directory)
+            previous_directory = directory
+            try:
+                os.close(previous_directory)
+            except OSError as close_error:
+                cleanup_errors = close_descriptor_after_error(
+                    previous_directory,
+                    "Previous parent directory",
+                    first_error=close_error,
+                )
+                cleanup_errors.extend(
+                    close_descriptor_after_error(
+                        next_directory,
+                        "New parent directory",
+                    )
+                )
+                directory = -1
+                failure = MaterializationError(f"Protected {name} parent cannot be opened safely: {close_error}")
+                add_error_notes(failure, cleanup_errors)
+                raise failure from close_error
+            directory = next_directory
     except OSError as error:
-        fail(f"Protected {name} is unavailable: {error}")
+        cleanup_errors = []
+        if directory >= 0:
+            cleanup_errors = close_descriptor_after_error(
+                directory,
+                "Current parent directory",
+            )
+            directory = -1
+        failure = MaterializationError(f"Protected {name} parent cannot be opened safely: {error}")
+        add_error_notes(failure, cleanup_errors)
+        raise failure from error
+    except BaseException as error:
+        if directory >= 0:
+            cleanup_errors = close_descriptor_after_error(
+                directory,
+                "Current parent directory",
+            )
+            add_error_notes(error, cleanup_errors)
+        raise
     try:
+        parent_details = os.fstat(directory)
+    except OSError as error:
+        cleanup_errors = close_descriptor_after_error(
+            directory,
+            "Validated parent directory",
+        )
+        failure = MaterializationError(f"Protected {name} parent cannot be inspected safely: {error}")
+        add_error_notes(failure, cleanup_errors)
+        raise failure from error
+    if not stat.S_ISDIR(parent_details.st_mode):
+        fail_after_descriptor_cleanup(
+            f"Protected {name} parent must be a directory.",
+            directory,
+            "Validated parent directory",
+        )
+    if parent_details.st_uid != os.geteuid():
+        fail_after_descriptor_cleanup(
+            f"Protected {name} parent must be owned by the current user.",
+            directory,
+            "Validated parent directory",
+        )
+    return directory, no_follow, close_on_exec
+
+
+def protected_asset_bytes(path: Path, name: str) -> bytes:
+    """Read one bounded regular protected asset through an anchored parent chain."""
+    directory, no_follow, close_on_exec = open_owned_parent_directory(
+        path,
+        name,
+        "Protected asset reading",
+    )
+    descriptor = -1
+    try:
+        try:
+            descriptor = os.open(
+                path.name,
+                os.O_RDONLY | no_follow | close_on_exec,
+                dir_fd=directory,
+            )
+        except OSError as error:
+            fail(f"Protected {name} is unavailable: {error}")
         details = os.fstat(descriptor)
         if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
             fail(f"Protected {name} must be one regular non-symlink file.")
@@ -152,35 +280,42 @@ def protected_asset_bytes(path: Path, name: str) -> bytes:
             fail(f"Protected {name} changed while reading.")
         return payload
     finally:
-        os.close(descriptor)
+        active_error = sys.exc_info()[1]
+        cleanup_errors = []
+        if descriptor >= 0:
+            cleanup_errors.extend(
+                close_descriptor_after_error(
+                    descriptor,
+                    f"Protected {name} file descriptor",
+                )
+            )
+        cleanup_errors.extend(
+            close_descriptor_after_error(
+                directory,
+                f"Protected {name} parent directory",
+            )
+        )
+        if cleanup_errors:
+            if active_error is None:
+                failure = MaterializationError(f"Protected {name} descriptors could not be closed safely.")
+                add_error_notes(failure, cleanup_errors)
+                raise failure
+            add_error_notes(active_error, cleanup_errors)
 
 
 def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
-    """Replace a bounded owned file without following its immediate parent or target."""
-    no_follow = getattr(os, "O_NOFOLLOW", None)
-    if not isinstance(no_follow, int) or no_follow == 0:
-        fail("Protected file writing requires O_NOFOLLOW support.")
+    """Replace a bounded owned file without following its parent chain or target."""
     if len(payload) <= 0 or len(payload) > MAX_PROTECTED_ASSET_BYTES:
         fail(f"Protected {name} must contain 1..{MAX_PROTECTED_ASSET_BYTES} bytes.")
-    if path.name in {"", ".", ".."}:
-        fail(f"Protected {name} path is invalid.")
-    close_on_exec = getattr(os, "O_CLOEXEC", 0)
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | no_follow
-    directory_flags |= close_on_exec
-    try:
-        directory = os.open(path.parent, directory_flags)
-    except OSError as error:
-        fail(f"Protected {name} parent cannot be opened safely: {error}")
+    directory, no_follow, close_on_exec = open_owned_parent_directory(
+        path,
+        name,
+        "Protected file writing",
+    )
     temporary_name = f".mlx90-protected-{secrets.token_hex(16)}.tmp"
     temporary_descriptor = -1
     replaced = False
     try:
-        parent_details = os.fstat(directory)
-        if not stat.S_ISDIR(parent_details.st_mode):
-            fail(f"Protected {name} parent must be a directory.")
-        if parent_details.st_uid != os.geteuid():
-            fail(f"Protected {name} parent must be owned by the current user.")
-
         existing_descriptor = -1
         try:
             existing_descriptor = os.open(
