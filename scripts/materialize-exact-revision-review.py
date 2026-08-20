@@ -1,5 +1,7 @@
 """Materialize and re-verify the bounded MLX-90 exact-revision review input."""
 
+# Format contract: Ruff 0.15.21 with line length 120 (Supplementary consumer policy).
+
 from __future__ import annotations
 
 import argparse
@@ -105,11 +107,7 @@ def run(
         command = " ".join(arguments) or "<empty-command>"
         fail(f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: {command}")
     if result.returncode != 0:
-        stderr = (
-            result.stderr
-            if isinstance(result.stderr, str)
-            else result.stderr.decode(errors="replace")
-        )
+        stderr = result.stderr if isinstance(result.stderr, str) else result.stderr.decode(errors="replace")
         command = " ".join(arguments) or "<empty-command>"
         fail(f"Command failed closed: {command}: {stderr.strip()}")
     return result
@@ -261,9 +259,7 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
             try:
                 os.close(temporary_descriptor)
             except OSError as cleanup_error:
-                cleanup_message = (
-                    f"Protected {name} temporary close also failed: {cleanup_error}"
-                )
+                cleanup_message = f"Protected {name} temporary close also failed: {cleanup_error}"
                 if active_error is None:
                     fail(cleanup_message)
                 add_note = getattr(active_error, "add_note", None)
@@ -275,9 +271,7 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
             except FileNotFoundError:
                 pass
             except OSError as cleanup_error:
-                cleanup_message = (
-                    f"Protected {name} temporary cleanup also failed: {cleanup_error}"
-                )
+                cleanup_message = f"Protected {name} temporary cleanup also failed: {cleanup_error}"
                 if active_error is None:
                     fail(cleanup_message)
                 add_note = getattr(active_error, "add_note", None)
@@ -286,9 +280,7 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
         try:
             os.close(directory)
         except OSError as cleanup_error:
-            cleanup_message = (
-                f"Protected {name} parent directory close also failed: {cleanup_error}"
-            )
+            cleanup_message = f"Protected {name} parent directory close also failed: {cleanup_error}"
             if active_error is None:
                 fail(cleanup_message)
             add_note = getattr(active_error, "add_note", None)
@@ -296,18 +288,14 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
                 add_note(cleanup_message)
 
 
-def bind_protected_assets(
-    metadata: dict[str, Any], asset_paths: dict[str, Path]
-) -> dict[str, Any]:
+def bind_protected_assets(metadata: dict[str, Any], asset_paths: dict[str, Path]) -> dict[str, Any]:
     """Bind every base-controlled review asset into one canonical input hash."""
     if set(asset_paths) != set(ASSET_ARGUMENTS):
         fail("The complete protected review-asset set is required.")
     bound = dict(metadata)
     for metadata_key, path in asset_paths.items():
         asset_name = metadata_key.removesuffix("_sha256").replace("_", " ")
-        bound[metadata_key] = hashlib.sha256(
-            protected_asset_bytes(path, asset_name)
-        ).hexdigest()
+        bound[metadata_key] = hashlib.sha256(protected_asset_bytes(path, asset_name)).hexdigest()
     canonical = json.dumps(bound, sort_keys=True, separators=(",", ":")).encode("utf-8")
     bound["input_sha256"] = hashlib.sha256(canonical).hexdigest()
     return bound
@@ -337,16 +325,11 @@ def validate_inputs(arguments: argparse.Namespace) -> None:
         fail("The protected workflow SHA must equal the live pull-request base SHA.")
     if arguments.trigger not in {"ready_for_review", "app_dispatch"}:
         fail("Unsupported exact-review trigger.")
-    if (
-        arguments.trigger == "app_dispatch"
-        and arguments.dispatch_ref != f"refs/heads/{arguments.base_ref}"
-    ):
+    if arguments.trigger == "app_dispatch" and arguments.dispatch_ref != f"refs/heads/{arguments.base_ref}":
         fail("App dispatch must execute from the protected pull-request base ref.")
 
 
-def read_live_pull_request(
-    arguments: argparse.Namespace, *, home: Path
-) -> dict[str, Any]:
+def read_live_pull_request(arguments: argparse.Namespace, *, home: Path) -> dict[str, Any]:
     gh = executable("gh")
     result = run(
         [
@@ -388,9 +371,7 @@ def read_live_pull_request(
         "head_repository": head_repository.get("full_name"),
     }
     if observed != expected:
-        fail(
-            f"Live pull-request binding changed or is unauthorized: {json.dumps(observed, sort_keys=True)}"
-        )
+        fail(f"Live pull-request binding changed or is unauthorized: {json.dumps(observed, sort_keys=True)}")
     return pull_request
 
 
@@ -410,9 +391,7 @@ def git_output(
     return result.stdout
 
 
-def materialize(
-    arguments: argparse.Namespace, output_directory: Path
-) -> dict[str, Any]:
+def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[str, Any]:
     validate_inputs(arguments)
     if output_directory.exists():
         fail(f"Review workspace already exists: {output_directory}")
@@ -424,9 +403,7 @@ def materialize(
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
     if not runner_temp.is_dir():
         fail("RUNNER_TEMP must identify an existing directory.")
-    with tempfile.TemporaryDirectory(
-        prefix="exact-revision-materializer.", dir=runner_temp
-    ) as temporary:
+    with tempfile.TemporaryDirectory(prefix="exact-revision-materializer.", dir=runner_temp) as temporary:
         temporary_root = Path(temporary)
         home = temporary_root / "home"
         home.mkdir(mode=0o700)
@@ -546,10 +523,7 @@ def materialize(
             fail("Git returned an invalid diff representation.")
         review_bytes = len(diff)
         if review_bytes <= 0 or review_bytes >= MAX_REVIEW_BYTES:
-            fail(
-                "Exact-revision review input must contain "
-                f"1..{MAX_REVIEW_BYTES - 1} bytes; observed {review_bytes}."
-            )
+            fail(f"Exact-revision review input must contain 1..{MAX_REVIEW_BYTES - 1} bytes; observed {review_bytes}.")
         diff_sha256 = hashlib.sha256(diff).hexdigest()
 
         read_live_pull_request(arguments, home=home)
@@ -581,9 +555,7 @@ def materialize(
 def bind_assets(review_directory: Path, asset_paths: dict[str, Path]) -> dict[str, Any]:
     metadata_path = review_directory / "review-metadata.json"
     try:
-        metadata = json.loads(
-            protected_asset_bytes(metadata_path, "review metadata").decode("utf-8")
-        )
+        metadata = json.loads(protected_asset_bytes(metadata_path, "review metadata").decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         fail(f"Review metadata is malformed: {error}")
     if not isinstance(metadata, dict):
@@ -607,20 +579,13 @@ def verify(
     validate_inputs(arguments)
     patch = review_directory / "change.patch"
     metadata_path = review_directory / "review-metadata.json"
-    if (
-        not patch.is_file()
-        or patch.is_symlink()
-        or not metadata_path.is_file()
-        or metadata_path.is_symlink()
-    ):
+    if not patch.is_file() or patch.is_symlink() or not metadata_path.is_file() or metadata_path.is_symlink():
         fail("The review diff and metadata must be regular, non-symlink files.")
     patch_size = patch.stat().st_size
     if patch_size <= 0 or patch_size >= MAX_REVIEW_BYTES:
         fail(f"The review diff must be between 1 and {MAX_REVIEW_BYTES - 1} bytes.")
     try:
-        expected_metadata = json.loads(
-            protected_asset_bytes(metadata_path, "review metadata").decode("utf-8")
-        )
+        expected_metadata = json.loads(protected_asset_bytes(metadata_path, "review metadata").decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         fail(f"Review metadata is malformed: {error}")
     if not isinstance(expected_metadata, dict):
@@ -638,13 +603,9 @@ def verify(
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
     if not runner_temp.is_dir():
         fail("RUNNER_TEMP must identify an existing directory.")
-    with tempfile.TemporaryDirectory(
-        prefix="exact-revision-recheck.", dir=runner_temp
-    ) as temporary:
+    with tempfile.TemporaryDirectory(prefix="exact-revision-recheck.", dir=runner_temp) as temporary:
         regenerated = Path(temporary) / "review"
-        actual_metadata = bind_protected_assets(
-            materialize(arguments, regenerated), asset_paths
-        )
+        actual_metadata = bind_protected_assets(materialize(arguments, regenerated), asset_paths)
         if protected_asset_bytes(patch, "review diff") != protected_asset_bytes(
             regenerated / "change.patch", "regenerated diff"
         ):
@@ -664,9 +625,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--expected-base", required=True)
     parser.add_argument("--expected-head", required=True)
     parser.add_argument("--trusted-workflow-sha", required=True)
-    parser.add_argument(
-        "--trigger", required=True, choices=("ready_for_review", "app_dispatch")
-    )
+    parser.add_argument("--trigger", required=True, choices=("ready_for_review", "app_dispatch"))
     parser.add_argument("--dispatch-ref", default="")
     parser.add_argument("--review-directory", required=True, type=Path)
     parser.add_argument("--materializer-path", type=Path)
@@ -682,9 +641,7 @@ def main() -> int:
         if arguments.mode == "materialize":
             metadata = materialize(arguments, arguments.review_directory)
         elif arguments.mode == "bind-assets":
-            metadata = bind_assets(
-                arguments.review_directory, asset_paths_from_arguments(arguments)
-            )
+            metadata = bind_assets(arguments.review_directory, asset_paths_from_arguments(arguments))
         else:
             metadata = verify(
                 arguments,
