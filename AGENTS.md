@@ -115,28 +115,32 @@
 - `AGENTS.md` is the canonical Codex and Copilot contract.
 - `.github/copilot-instructions.md` must contain the current managed
   `AGENTS_SHA256` binding.
-- A Copilot review is advisory input until Codex has resolved or dispositioned
-  every finding and rerun all affected deterministic checks.
-- Any content change after a successful review invalidates the local evidence.
+- Local Push-Ready and `review` execution is deterministic-only. It MUST NOT
+  invoke Codex, GitHub Copilot, another model, or any external AI endpoint, and
+  it MUST NOT copy personal AI credentials into an isolated home or container.
+- Any content change after successful validation invalidates the local evidence.
 - GitHub Actions required checks and the current-head review gate remain
   authoritative for merge. Human, community, and unknown-automation PRs
   require an actual Copilot review of the current head. Only explicitly
-  allowlisted Renovate, shared-assets, and release-automation changes may use
-  the documented deterministic, evidence-bound exception; unknown bots fail
-  closed.
-- An exact same-repository PR authored by
-  `lightning-it-release-automation[bot]` that does not satisfy a deterministic
-  exception is not exempt. It may satisfy the gate only through the
-  ADR-defined, history-free current-revision Codex review bound to the live
-  base SHA, head SHA, and complete text-only Git-object diff digest. The
-  review MUST run from the protected default-branch copy of
-  `.github/workflows/release-bot-exact-head-review.yml`; the pull-request
-  workflow may only consume its successful exact-revision workflow-run result
-  and MUST NOT expose review credentials to pull-request-controlled workflow
-  code. The
-  built-in `:read-only` permission profile technically denies writes and
-  command network access. This path never applies to human, community, or other
-  automation authors.
+  allowlisted Renovate and shared-assets changes may use a documented
+  deterministic, evidence-bound exception; unknown bots fail closed.
+- Automated GitHub Copilot requests funded by Lightning IT are restricted to
+  pull requests whose exact author login is `litroc`. Every other human or
+  external contributor must supply a valid current-head review under their own
+  entitlement; Lightning IT automation verifies that review but never requests
+  or funds it. Personal tokens and personal provider keys never enter Actions.
+- Every exact same-repository PR authored by
+  `lightning-it-release-automation[bot]` uses only the ADR-defined, protected
+  MLX-90 §7.2 Exact-Revision Codex review. No deterministic release exemption
+  and no GitHub Copilot fallback is permitted. The review binds the live base,
+  head, unique merge base, integration tree, and SHA-256 of the complete binary
+  Git-object diff. It MUST run from the protected base copy of
+  `.github/workflows/release-bot-exact-head-review.yml`, receive no checkout,
+  history, or credentials, and emit only the neutral `Current revision review`
+  check on the exact head. It MUST never emit or synthesize `Successful Copilot
+  review`. The built-in `:read-only` permission profile technically denies
+  writes and command network access. This path never applies to human,
+  community, or other automation authors.
 - `pre-commit` may provide fast feedback, but it is optional and never
   authorizes a push or substitutes for push-ready evidence.
 
