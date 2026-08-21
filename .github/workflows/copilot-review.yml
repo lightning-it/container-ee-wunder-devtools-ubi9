@@ -921,9 +921,13 @@ jobs:
           review_path="applicable Copilot or governed automation exemption"
           external_kind="copilot"
           result_title="Current revision review passed"
-          if { [ "${author}" = 'lightning-it-release-automation[bot]' ] \
-              || { [ "${REPOSITORY}" = "lightning-it/.github" ] \
-                && [ "${author}" = 'lightning-it-shared-assets-sync[bot]' ]; }; }; then
+          if [ "${TRUSTED_KIND}" = ancestry-backmerge ]; then
+            if [ "${author}" = 'lightning-it-release-automation[bot]' ]; then
+              :
+            else
+              test "${REPOSITORY}" = "lightning-it/.github"
+              test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+            fi
             test "${TRUSTED_KIND}" = ancestry-backmerge
             test "${base_ref}" = develop
             [[ "${EVENT_HEAD_REF}" == backmerge/*-main ]]
