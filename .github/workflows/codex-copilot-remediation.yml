@@ -62,7 +62,8 @@ jobs:
           pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
           test "$(jq -r .state <<<"${pr}")" = open
           test "$(jq -r .draft <<<"${pr}")" = false
-          test "$(jq -r .base.ref <<<"${pr}")" = develop
+          base_ref="$(jq -er '.base.ref | select(. == "develop" or . == "main")' \
+            <<<"${pr}")"
           test "$(jq -r .head.repo.full_name <<<"${pr}")" = "${REPOSITORY}"
           author="$(jq -r .user.login <<<"${pr}")"
           if [ "${author}" = 'lightning-it-release-automation[bot]' ]; then
@@ -96,9 +97,33 @@ jobs:
           fi
           gh api --method POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
             -f body="${marker}" >/dev/null
+          request_response=""
           request_status=0
-          gh api --method POST "repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
-            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null || request_status=$?
+          request_response="$(
+            gh api --method POST "repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
+              -f "reviewers[]=${COPILOT_LOGIN}"
+          )" || request_status=$?
+          if [ "${request_status}" -eq 0 ]; then
+            if jq -e \
+                --argjson number "${PR_NUMBER}" \
+                --arg repository "${REPOSITORY}" \
+                --arg base_ref "${base_ref}" \
+                --arg head "${EXPECTED_HEAD}" \
+                '(.number | type) == "number"
+                  and .number == $number
+                  and .state == "open"
+                  and .draft == false
+                  and .base.repo.full_name == $repository
+                  and .base.ref == $base_ref
+                  and .head.repo.full_name == $repository
+                  and .head.sha == $head' \
+                <<<"${request_response}" >/dev/null; then
+              echo "The one permitted exact-head Copilot review request was accepted and bound."
+              exit 0
+            fi
+            echo "Copilot request returned success without the expected open PR, base, head, and repository bindings; the consumed marker forbids an automatic retry." >&2
+            exit 1
+          fi
           pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
           reviews="$(gh api --paginate --slurp "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
           if jq -e --arg login "${COPILOT_LOGIN}" --arg head "${EXPECTED_HEAD}" \
@@ -155,7 +180,8 @@ jobs:
           pr="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}")"
           test "$(jq -r .state <<<"${pr}")" = open
           test "$(jq -r .draft <<<"${pr}")" = false
-          test "$(jq -r .base.ref <<<"${pr}")" = develop
+          base_ref="$(jq -er '.base.ref | select(. == "develop" or . == "main")' \
+            <<<"${pr}")"
           test "$(jq -r .head.repo.full_name <<<"${pr}")" = "${REPOSITORY}"
           test "$(jq -r .head.label <<<"${pr}")" != null
           head_sha="$(jq -r .head.sha <<<"${pr}")"
@@ -171,6 +197,10 @@ jobs:
           fi
           if [ "${reviewed_sha}" != "${head_sha}" ]; then
             echo "Ignoring stale Copilot review for ${reviewed_sha}; current head is ${head_sha}."
+            exit 0
+          fi
+          if [ "${base_ref}" = "main" ]; then
+            echo "Main promotion reviews are verified by the protected current-revision gate; in-place remediation and auto-merge remain disabled."
             exit 0
           fi
 
@@ -247,7 +277,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Run official Codex remediation action
-        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
         env:
           GH_TOKEN: ${{ github.token }}
           CODEX_REPOSITORY: ${{ github.repository }}
