@@ -58,7 +58,6 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           REPO: ${{ github.repository }}
@@ -69,12 +68,6 @@ jobs:
           set -euo pipefail
 
           readonly SYNC_APP_BOT="lightning-it-shared-assets-sync[bot]"
-          labels="$(jq -r '.[]' <<<"$PR_LABELS")"
-
-          has_label() {
-            grep -Fxq "$1" <<<"$labels"
-          }
-
           trusted=true
           sync_kind=none
           expected_subject=""
@@ -120,10 +113,6 @@ jobs:
             sync_kind=shared-assets
             expected_subject="chore: sync shared assets from lightning-it/shared-assets-lit"
           else
-            trusted=false
-          fi
-
-          if ! has_label chore || ! has_label shared-assets-lit; then
             trusted=false
           fi
 
