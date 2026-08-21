@@ -1,6 +1,6 @@
-"""Materialize and re-verify the bounded MLX-90 exact-revision review input."""
+"""Materialize the bounded REP-60 / MLX-90 section 7.2 review input."""
 
-# Format contract: Ruff 0.15.21 with line length 120 (Supplementary consumer policy).
+# Canonical formatting contract: Ruff-compatible Python with line length 120.
 
 from __future__ import annotations
 
@@ -10,11 +10,13 @@ import json
 import os
 import re
 import secrets
+import selectors
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NoReturn
@@ -336,7 +338,21 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
                     fail(f"Protected {name} must be owned by the current user.")
         finally:
             if existing_descriptor >= 0:
-                os.close(existing_descriptor)
+                descriptor_to_close = existing_descriptor
+                existing_descriptor = -1
+                active_error = sys.exc_info()[1]
+                cleanup_errors = close_descriptor_after_error(
+                    descriptor_to_close,
+                    f"Protected {name} existing descriptor",
+                )
+                if active_error is None and cleanup_errors:
+                    failure = MaterializationError(
+                        f"Protected {name} existing descriptor could not be closed safely."
+                    )
+                    add_error_notes(failure, cleanup_errors)
+                    raise failure
+                if active_error is not None:
+                    add_error_notes(active_error, cleanup_errors)
 
         temporary_descriptor = os.open(
             temporary_name,
@@ -369,8 +385,18 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
         with os.fdopen(temporary_descriptor, "rb", closefd=False) as protected_file:
             if protected_file.read(len(payload) + 1) != payload:
                 fail(f"Protected {name} temporary content changed while writing.")
-        os.close(temporary_descriptor)
+        descriptor_to_close = temporary_descriptor
         temporary_descriptor = -1
+        cleanup_errors = close_descriptor_after_error(
+            descriptor_to_close,
+            f"Protected {name} temporary descriptor",
+        )
+        if cleanup_errors:
+            failure = MaterializationError(
+                f"Protected {name} temporary descriptor could not be closed safely."
+            )
+            add_error_notes(failure, cleanup_errors)
+            raise failure
 
         os.replace(
             temporary_name,
@@ -387,40 +413,46 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
         except OSError:
             pass
     except OSError as error:
-        fail(f"Protected {name} cannot be written atomically: {error}")
+        failure = MaterializationError(
+            f"Protected {name} cannot be written atomically: {error}"
+        )
+        add_error_notes(failure, getattr(error, "__notes__", ()))
+        raise failure from error
     finally:
         active_error = sys.exc_info()[1]
+        cleanup_errors: list[str] = []
         if temporary_descriptor >= 0:
-            try:
-                os.close(temporary_descriptor)
-            except OSError as cleanup_error:
-                cleanup_message = f"Protected {name} temporary close also failed: {cleanup_error}"
-                if active_error is None:
-                    fail(cleanup_message)
-                add_note = getattr(active_error, "add_note", None)
-                if callable(add_note):
-                    add_note(cleanup_message)
+            descriptor_to_close = temporary_descriptor
+            temporary_descriptor = -1
+            cleanup_errors.extend(
+                close_descriptor_after_error(
+                    descriptor_to_close,
+                    f"Protected {name} temporary descriptor",
+                )
+            )
         if not replaced:
             try:
                 os.unlink(temporary_name, dir_fd=directory)
             except FileNotFoundError:
                 pass
             except OSError as cleanup_error:
-                cleanup_message = f"Protected {name} temporary cleanup also failed: {cleanup_error}"
-                if active_error is None:
-                    fail(cleanup_message)
-                add_note = getattr(active_error, "add_note", None)
-                if callable(add_note):
-                    add_note(cleanup_message)
-        try:
-            os.close(directory)
-        except OSError as cleanup_error:
-            cleanup_message = f"Protected {name} parent directory close also failed: {cleanup_error}"
+                cleanup_errors.append(
+                    f"Protected {name} temporary cleanup also failed: {cleanup_error}"
+                )
+        cleanup_errors.extend(
+            close_descriptor_after_error(
+                directory,
+                f"Protected {name} parent directory",
+            )
+        )
+        if cleanup_errors:
             if active_error is None:
-                fail(cleanup_message)
-            add_note = getattr(active_error, "add_note", None)
-            if callable(add_note):
-                add_note(cleanup_message)
+                failure = MaterializationError(
+                    f"Protected {name} cleanup failed closed."
+                )
+                add_error_notes(failure, cleanup_errors)
+                raise failure
+            add_error_notes(active_error, cleanup_errors)
 
 
 def bind_protected_assets(metadata: dict[str, Any], asset_paths: dict[str, Path]) -> dict[str, Any]:
@@ -517,9 +549,103 @@ def git_output(
     *,
     environment: dict[str, str],
     binary: bool = False,
+    max_bytes: int | None = None,
 ) -> bytes | str:
+    command = [git, f"--git-dir={git_dir}", *arguments]
+    if max_bytes is not None:
+        if not binary or max_bytes <= 0:
+            fail("Bounded Git output requires a positive binary byte limit.")
+        try:
+            process = subprocess.Popen(  # noqa: S603
+                command,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as error:
+            fail(f"Command failed to start: {' '.join(command)}: {error}")
+        if process.stdout is None or process.stderr is None:
+            process.kill()
+            process.wait()
+            fail("Bounded Git output pipes could not be created.")
+        selector = selectors.DefaultSelector()
+        stdout = bytearray()
+        stderr = bytearray()
+        limit_exceeded = False
+        deadline = time.monotonic() + COMMAND_TIMEOUT_SECONDS
+        try:
+            for stream, label in ((process.stdout, "stdout"), (process.stderr, "stderr")):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, label)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    process.kill()
+                    process.wait()
+                    fail(
+                        f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: "
+                        f"{' '.join(command)}"
+                    )
+                for key, _events in selector.select(remaining):
+                    if key.data == "stdout":
+                        remaining_bytes = max_bytes - len(stdout)
+                        read_size = min(65_536, remaining_bytes + 1)
+                    else:
+                        read_size = 65_536
+                    try:
+                        chunk = os.read(key.fileobj.fileno(), read_size)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    if key.data == "stdout":
+                        remaining_bytes = max_bytes - len(stdout)
+                        if remaining_bytes > 0:
+                            stdout.extend(chunk[:remaining_bytes])
+                        if len(chunk) >= remaining_bytes:
+                            limit_exceeded = True
+                            if process.poll() is None:
+                                process.kill()
+                    elif len(stderr) < 65_536:
+                        stderr.extend(chunk[: 65_536 - len(stderr)])
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                process.wait()
+                fail(
+                    f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: "
+                    f"{' '.join(command)}"
+                )
+            try:
+                return_code = process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+                fail(
+                    f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: "
+                    f"{' '.join(command)}"
+                )
+        finally:
+            selector.close()
+            process.stdout.close()
+            process.stderr.close()
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+        if limit_exceeded:
+            fail(
+                "Exact-revision review input exceeds the protected byte limit "
+                f"of {max_bytes - 1} bytes."
+            )
+        if return_code != 0:
+            fail(
+                f"Command failed closed: {' '.join(command)}: "
+                f"{stderr.decode(errors='replace').strip()}"
+            )
+        return bytes(stdout)
     result = run(
-        [git, f"--git-dir={git_dir}", *arguments],
+        command,
         environment=environment,
         binary=binary,
     )
@@ -653,6 +779,7 @@ def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[s
             ],
             environment=git_environment,
             binary=True,
+            max_bytes=MAX_REVIEW_BYTES,
         )
         if not isinstance(diff, bytes):
             fail("Git returned an invalid diff representation.")

@@ -1,4 +1,4 @@
-# Exact-head AI review
+# Protected Exact-Revision Codex review
 
 Review only the change represented by `change.patch` and the immutable metadata
 in `review-metadata.json`. The directory intentionally contains no Git history

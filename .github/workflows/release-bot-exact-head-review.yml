@@ -1,6 +1,6 @@
 # Managed by lightning-it/shared-assets-lit.
 # Do not edit downstream copies directly.
-# Protected per-repository MLX-90 §7.2 Exact-Revision Codex controller.
+# REP-60 pipeline governance: protected MLX-90 §7.2 Exact-Revision Codex controller.
 # yamllint disable rule:truthy rule:line-length
 ---
 name: Protected Exact-Revision Codex review
@@ -130,8 +130,50 @@ jobs:
           external_prefix="mlx90-exact-revision:v4:${input_sha256}:"
           external_id="${external_prefix}${GITHUB_RUN_ID}"
           expected_title="Exact-Revision Codex PR #${PR_NUMBER} ${EXPECTED_BASE}..${EXPECTED_HEAD}"
-          checks="$(gh api --paginate --slurp \
-            "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20Exact-Revision%20Codex%20result&filter=all&per_page=100")"
+          read_reservation_checks() {
+            gh api --paginate --slurp \
+              "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20Exact-Revision%20Codex%20result&filter=all&per_page=100"
+          }
+          create_reservation_once() {
+            local title="$1" summary="$2" created recovered recovery_attempt
+            if ! created="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
+                -f name='Protected Exact-Revision Codex result' \
+                -f head_sha="${EXPECTED_HEAD}" \
+                -f status=in_progress \
+                -f external_id="${external_id}" \
+                -f "output[title]=${title}" \
+                -f "output[summary]=${summary}")"; then
+              created=''
+              for recovery_attempt in $(seq 1 5); do
+                echo "Recovering immutable reservation creation outcome (attempt ${recovery_attempt}/5)." >&2
+                sleep 5
+                if ! recovered="$(read_reservation_checks | jq -c \
+                  --arg external_id "${external_id}" \
+                  --arg head "${EXPECTED_HEAD}" '
+                    [.[].check_runs[]? |
+                      select(.name == "Protected Exact-Revision Codex result") |
+                      select(.app.id == 15368 and .app.slug == "github-actions") |
+                      select(.head_sha == $head and .external_id == $external_id)]')"; then
+                  echo "Reservation recovery read failed; retrying read-only reconciliation." >&2
+                  continue
+                fi
+                if [ "$(jq 'length' <<<"${recovered}")" -gt 1 ]; then
+                  echo "Ambiguous immutable reservation creation outcome." >&2
+                  return 1
+                fi
+                if [ "$(jq 'length' <<<"${recovered}")" -eq 1 ]; then
+                  created="$(jq -c '.[0]' <<<"${recovered}")"
+                  break
+                fi
+              done
+              if [ -z "${created}" ]; then
+                echo "Reservation creation failed without one materialized exact result." >&2
+                return 1
+              fi
+            fi
+            printf '%s' "${created}"
+          }
+          checks="$(read_reservation_checks)"
           matching="$(jq -c \
             --arg external_prefix "${external_prefix}" \
             '[.[].check_runs[]? |
@@ -204,7 +246,9 @@ jobs:
               exit 1
             fi
             if [ "${status}" = completed ] && [ "${conclusion}" = success ]; then
-              jq -e '.status == "completed" and .conclusion == "success"' <<<"${prior_run}" >/dev/null
+              # Retry only downstream deterministic publication after a
+              # protected PASS; never invoke AI again for this input.
+              jq -e '.status == "completed"' <<<"${prior_run}" >/dev/null
               jq -e \
                 --arg input_sha256 "${input_sha256}" \
                 --arg run_url "${producer_run_url}" '
@@ -225,6 +269,10 @@ jobs:
               exit 0
             fi
             echo "A prior protected attempt for this immutable input is ${status}/${conclusion:-none}; automatic retry is forbidden." >&2
+            exit 1
+          fi
+          if [ "${GITHUB_RUN_ATTEMPT}" -ne 1 ]; then
+            echo "The current workflow run was rerun without a visible immutable reservation; automatic AI retry is forbidden." >&2
             exit 1
           fi
           # GitHub can remove an older custom check from a commit's visible
@@ -307,13 +355,9 @@ jobs:
             prior_run_id="$(jq -er '.[0].run_id | select(type == "number" and . > 0)' \
               <<<"${successful_attempts}")"
             external_id="${external_prefix}${prior_run_id}"
-            reservation="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
-              -f name='Protected Exact-Revision Codex result' \
-              -f head_sha="${EXPECTED_HEAD}" \
-              -f status=in_progress \
-              -f external_id="${external_id}" \
-              -f 'output[title]=Recovering durable protected Exact-Revision Codex PASS' \
-              -f "output[summary]=Immutable input SHA-256: ${input_sha256}. Durable producer run: ${prior_run_id}.")"
+            reservation="$(create_reservation_once \
+              'Recovering durable protected Exact-Revision Codex PASS' \
+              "Immutable input SHA-256: ${input_sha256}. Durable producer run: ${prior_run_id}.")"
             check_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${reservation}")"
             {
               echo "reuse=true"
@@ -342,13 +386,9 @@ jobs:
             echo "Recovering the durable protected PASS from producer run ${prior_run_id}; Codex will not run again."
             exit 0
           fi
-          reservation="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
-            -f name='Protected Exact-Revision Codex result' \
-            -f head_sha="${EXPECTED_HEAD}" \
-            -f status=in_progress \
-            -f external_id="${external_id}" \
-            -f 'output[title]=Protected Exact-Revision Codex review in progress' \
-            -f "output[summary]=Immutable input SHA-256: ${input_sha256}.")"
+          reservation="$(create_reservation_once \
+            'Protected Exact-Revision Codex review in progress' \
+            "Immutable input SHA-256: ${input_sha256}.")"
           check_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${reservation}")"
           {
             echo "reuse=false"
