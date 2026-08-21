@@ -92,7 +92,7 @@ jobs:
           external_kind=''
           if [[ "${neutral_external_id}" =~ ^mlx90-current-revision:v4:${producer_id}:[0-9a-f]{64}$ ]]; then
             evidence_version=v4
-          elif [[ "${neutral_external_id}" =~ ^mlx90-current-revision:(copilot|ancestry-backmerge):v6:${PR_NUMBER}:${producer_id}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
+          elif [[ "${neutral_external_id}" =~ ^mlx90-current-revision:(copilot|managed-sync|ancestry-backmerge):v6:${PR_NUMBER}:${producer_id}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
             evidence_version=v6
             external_kind="${BASH_REMATCH[1]}"
           elif [[ "${neutral_external_id}" =~ ^mlx90-current-revision:(copilot|ancestry-backmerge):v5:${producer_id}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
@@ -104,6 +104,7 @@ jobs:
           fi
           jq -e \
             --arg base "${EXPECTED_BASE}" \
+            --arg evidence_version "${evidence_version}" \
             --arg head "${EXPECTED_HEAD}" \
             --arg run_url "${producer_url}" \
             --argjson pr_number "${PR_NUMBER}" \
@@ -113,7 +114,14 @@ jobs:
               and .head_sha == $head
               and .producer_run_id == $run_id
               and .run_url == $run_url
-              and .pull_request_number == $pr_number
+              and (
+                if $evidence_version == "v6" then
+                  .pull_request_number == $pr_number
+                else
+                  ((has("pull_request_number") | not)
+                    or .pull_request_number == $pr_number)
+                end
+              )
             ' <<<"${neutral_summary}" >/dev/null
           for attempt in $(seq 1 40); do
             producer="$(gh api "repos/${REPOSITORY}/actions/runs/${producer_id}")"
@@ -144,11 +152,20 @@ jobs:
               ' <<<"${producer}" >/dev/null
           else
             if [ "${external_kind}" = ancestry-backmerge ]; then
-              test "${author}" = 'lightning-it-release-automation[bot]'
+              test "${author}" = 'lightning-it-release-automation[bot]' \
+                || { test "${REPOSITORY}" = 'lightning-it/.github' \
+                  && test "${author}" = 'lightning-it-shared-assets-sync[bot]'; }
               test "$(jq -r .review_path <<<"${neutral_summary}")" = \
                 'deterministic evidence-bound ancestry exemption'
+            elif [ "${external_kind}" = managed-sync ]; then
+              test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+              test "${REPOSITORY}" != 'lightning-it/.github'
+              test "${base_ref}" = develop
+              test "$(jq -r .review_path <<<"${neutral_summary}")" = \
+                'deterministic provenance-bound managed distribution exemption'
             else
               test "${author}" != 'lightning-it-release-automation[bot]'
+              test "${author}" != 'lightning-it-shared-assets-sync[bot]'
               test "$(jq -r .review_path <<<"${neutral_summary}")" = \
                 'applicable Copilot or governed automation exemption'
             fi
@@ -205,10 +222,7 @@ jobs:
             ' <<<"${all_reservations}")"
           v3_count="$(jq 'length' <<<"${v3_reservations}")"
           v2_count="$(jq 'length' <<<"${v2_reservations}")"
-          if [ "${v3_count}" -eq 1 ]; then
-            # v3 is base-bound and therefore authoritative even when a stale
-            # v2 reservation for the same PR/head remains visible during the
-            # bounded cutover.
+          if [ "${v3_count}" -eq 1 ] && [ "${v2_count}" -eq 0 ]; then
             reservations="${v3_reservations}"
           elif [ "${v3_count}" -eq 0 ] && [ "${v2_count}" -eq 1 ]; then
             # Bounded cutover compatibility: v2 lacks the base in external_id,
