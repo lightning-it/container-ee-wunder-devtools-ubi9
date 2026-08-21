@@ -123,7 +123,29 @@ jobs:
             exit 0
           fi
 
-          body=$'Promotion PR from `develop` to `main`.\n\n'
+          expected_head="$(git rev-parse origin/develop)"
+          head_marker="<!-- lit-promotion-head:${expected_head} -->"
+          if [ -n "$pr_url" ]; then
+            existing="$(GH_TOKEN="$pr_token" gh pr view "$pr_url" \
+              --repo "$REPO" --json author,body)"
+            if ! jq -e \
+              '.author.login == "app/lightning-it-release-automation"' \
+              <<<"$existing" >/dev/null; then
+              echo "::error::Open develop-to-main PR is not Release-App-owned."
+              exit 1
+            fi
+            if ! jq -e --arg marker "$head_marker" '
+              [(.body // "") | split("\n")[] |
+                select(startswith("<!-- lit-promotion-head:"))] == [$marker]
+            ' <<<"$existing" >/dev/null; then
+              GH_TOKEN="$pr_token" gh pr close "$pr_url" \
+                --repo "$REPO" \
+                --comment "Closing consumed or stale promotion PR; a fresh PR will bind the new develop head."
+              pr_url=""
+            fi
+          fi
+
+          body="${head_marker}"$'\n\nPromotion PR from `develop` to `main`.\n\n'
           body+=$'Merging this PR is the production container release gate. '
           body+=$'After merge, semantic-release calculates the next version, '
           body+=$'creates the GitHub Release, and the container publish workflow '
@@ -148,7 +170,7 @@ jobs:
             --repo "$REPO" \
             --json author,baseRefName,baseRefOid,headRefName,headRefOid,headRepositoryOwner,isDraft,number,title)"
           jq -e \
-            --arg expected_head "$(git rev-parse origin/develop)" \
+            --arg expected_head "$expected_head" \
             --arg owner "$REPOSITORY_OWNER" \
             --arg title "$title" '
               .author.login == "app/lightning-it-release-automation"
