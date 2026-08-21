@@ -921,7 +921,14 @@ jobs:
           review_path="applicable Copilot or governed automation exemption"
           external_kind="copilot"
           result_title="Current revision review passed"
-          if [ "${TRUSTED_KIND}" = ancestry-backmerge ]; then
+          if [[ "${TRUSTED_KIND}" =~ ^(shared-assets|repository-quality)$ ]]; then
+            test "${REPOSITORY}" != 'lightning-it/.github'
+            test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+            test "${base_ref}" = develop
+            review_path="deterministic provenance-bound managed distribution exemption"
+            external_kind="managed-sync"
+            result_title="Current revision managed distribution exemption passed"
+          elif [ "${TRUSTED_KIND}" = ancestry-backmerge ]; then
             if [ "${author}" = 'lightning-it-release-automation[bot]' ]; then
               :
             else
@@ -977,7 +984,10 @@ jobs:
             external_kind="ancestry-backmerge"
             result_title="Current revision deterministic exemption passed"
           else
+            test "${TRUSTED_KIND}" != shared-assets
+            test "${TRUSTED_KIND}" != repository-quality
             test "${TRUSTED_KIND}" != ancestry-backmerge
+            test "${author}" != 'lightning-it-shared-assets-sync[bot]'
           fi
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           evidence="$(jq -cn \
