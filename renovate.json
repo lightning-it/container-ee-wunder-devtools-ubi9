@@ -133,6 +133,35 @@
       "description": "Keep every component of the GitHub Actions toolchain on one version",
       "matchManagers": ["github-actions"],
       "groupName": "github-actions"
+    },
+    {
+      "description": "Do not update shared-assets-owned workflow files downstream",
+      "matchManagers": ["github-actions"],
+      "matchFileNames": [
+        ".github/workflows/codex-copilot-remediation.yml",
+        ".github/workflows/container-build-publish.yml",
+        ".github/workflows/container-build.yml",
+        ".github/workflows/container-ci.yml",
+        ".github/workflows/container-fuzz.yml",
+        ".github/workflows/container-trivy.yml",
+        ".github/workflows/copilot-review.yml",
+        ".github/workflows/current-revision-rerun.yml",
+        ".github/workflows/main-promotion-authorization.yml",
+        ".github/workflows/openssf-scorecard.yml",
+        ".github/workflows/promote-develop-to-main.yml",
+        ".github/workflows/release-bot-exact-head-review.yml",
+        ".github/workflows/renovate-guarded-automerge.yml",
+        ".github/workflows/rpm-srpm-ci.yml",
+        ".github/workflows/security-release-finalize.yml",
+        ".github/workflows/security-release-guard.yml",
+        ".github/workflows/security-release-promote-tags.yml",
+        ".github/workflows/security-release-reconcile.yml",
+        ".github/workflows/security-release-update.yml",
+        ".github/workflows/semantic-release.yml",
+        ".github/workflows/shared-assets-guarded-automerge.yml",
+        ".github/workflows/sync-main-to-develop.yml"
+      ],
+      "enabled": false
     }
   ]
 }
