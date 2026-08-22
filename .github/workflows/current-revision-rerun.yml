@@ -69,8 +69,34 @@ jobs:
 
           neutral_pages="$(gh api --paginate --slurp \
             "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
+          jq -e '
+            type == "array"
+            and length > 0
+            and all(.[];
+              type == "object"
+              and (.total_count | type) == "number"
+              and (.check_runs | type) == "array")
+            and all(.[].check_runs[];
+              type == "object"
+              and (.id | type) == "number" and .id > 0
+              and (.name | type) == "string"
+              and (.head_sha | type) == "string"
+              and (.status | type) == "string"
+              and has("conclusion")
+              and ((.conclusion | type) == "string" or .conclusion == null)
+              and has("details_url")
+              and ((.details_url | type) == "string" or .details_url == null)
+              and has("external_id")
+              and ((.external_id | type) == "string" or .external_id == null)
+              and (.app | type) == "object"
+              and (.app.id | type) == "number"
+              and (.app.slug | type) == "string"
+              and (.output | type) == "object"
+              and (.output | has("summary"))
+              and ((.output.summary | type) == "string" or .output.summary == null))
+          ' <<<"${neutral_pages}" >/dev/null
           neutral="$(jq -c '
-            [.[].check_runs[]? |
+            [.[].check_runs[] |
               select(.name == "Current revision review") |
               select(.app.id == 15368 and .app.slug == "github-actions") |
               select(.status == "completed" and .conclusion == "success")]
@@ -280,36 +306,135 @@ jobs:
             exit 0
           fi
           test "$(jq -r .conclusion <<<"${run}")" = failure
-          run_attempt="$(jq -er '.run_attempt | select(type == "number" and . >= 1)' <<<"${run}")"
-          if [ "${run_attempt}" -ne 1 ]; then
+          run_attempt=$(jq -er '.run_attempt | select(type == "number" and . >= 1)' <<<"${run}")
+          if [ "${run_attempt}" -gt 2 ]; then
+            echo "Protected verifier exceeded its single allowed rerun." >&2
+            exit 1
+          fi
+          if [ "${run_attempt}" -eq 2 ]; then
             echo "Protected verifier already consumed its single rerun; no further retry is allowed."
             exit 0
           fi
+          attempt_one_jobs_pages="$(gh api --paginate --slurp \
+            "repos/${REPOSITORY}/actions/runs/${run_id}/attempts/1/jobs?filter=all&per_page=100")"
+          jq -e '
+            type == "array"
+            and length > 0
+            and all(.[];
+              type == "object"
+              and (.total_count | type) == "number"
+              and (.jobs | type) == "array")
+            and all(.[].jobs[];
+              type == "object"
+              and (.id | type) == "number" and .id > 0
+              and (.name | type) == "string"
+              and (.run_attempt | type) == "number" and .run_attempt >= 1
+              and .status == "completed"
+              and (.conclusion | type) == "string")
+          ' <<<"${attempt_one_jobs_pages}" >/dev/null
+          rerunnable_jobs=$(jq -c '[.[].jobs[] | select(.name == "Required current-revision workflow") | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${attempt_one_jobs_pages}")
+          test "$(jq 'length' <<<"${rerunnable_jobs}")" -eq 1
+          required_job_id=$(jq -er '.[0].id | select(type == "number" and . > 0)' \
+            <<<"${rerunnable_jobs}")
           if ! gh api --method POST \
-              "repos/${REPOSITORY}/actions/runs/${run_id}/rerun" >/dev/null; then
-            # GitHub can accept the rerun and still close the client request
+              "repos/${REPOSITORY}/actions/jobs/${required_job_id}/rerun" >/dev/null; then
+            # GitHub can accept the job rerun and still close the client request
             # with a non-success response when another service-side request
             # wins the same transition. Accept that outcome only after the
             # live run proves that attempt two was actually materialized.
             run="$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}")"
             observed_attempt="$(jq -er '.run_attempt | select(type == "number" and . >= 1)' <<<"${run}")"
-            if [ "${observed_attempt}" -lt 2 ]; then
-              echo "Rerun request failed without a materialized second attempt." >&2
+            if [ "${observed_attempt}" -ne 2 ]; then
+              echo "Required-job rerun failed without exactly one materialized second attempt." >&2
               exit 1
             fi
-            echo "A concurrent service-side request already materialized the protected rerun."
+            echo "A concurrent service-side request already materialized the required-job rerun."
           fi
           for completion_attempt in $(seq 1 60); do
             run="$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}")"
             observed_attempt="$(jq -er '.run_attempt | select(type == "number" and . >= 1)' <<<"${run}")"
             status="$(jq -er '.status | select(type == "string" and length > 0)' <<<"${run}")"
-            if [ "${observed_attempt}" -ge 2 ] && [ "${status}" = completed ]; then
+            if [ "${observed_attempt}" -gt 2 ]; then
+              echo "Protected verifier exceeded its single allowed rerun." >&2
+              exit 1
+            fi
+            if [ "${observed_attempt}" -eq 2 ] && [ "${status}" = completed ]; then
               test "$(jq -r .conclusion <<<"${run}")" = success
-              echo "Protected verifier rerun completed successfully."
+              attempt_two_jobs_pages="$(gh api --paginate --slurp \
+                "repos/${REPOSITORY}/actions/runs/${run_id}/attempts/2/jobs?filter=all&per_page=100")"
+              jq -e '
+                type == "array"
+                and length > 0
+                and all(.[];
+                  type == "object"
+                  and (.total_count | type) == "number"
+                  and (.jobs | type) == "array")
+                and all(.[].jobs[];
+                  type == "object"
+                  and (.id | type) == "number" and .id > 0
+                  and (.name | type) == "string"
+                  and (.run_attempt | type) == "number" and .run_attempt >= 1
+                  and .status == "completed"
+                  and (.conclusion | type) == "string")
+              ' <<<"${attempt_two_jobs_pages}" >/dev/null
+              completed_required_jobs="$(jq -c '
+                [.[].jobs[] |
+                  select(.name == "Required current-revision workflow") |
+                  select(.run_attempt == 2) |
+                  select(.status == "completed" and .conclusion == "success")]
+              ' <<<"${attempt_two_jobs_pages}")"
+              test "$(jq 'length' <<<"${completed_required_jobs}")" -eq 1
+              post_neutral_pages="$(gh api --paginate --slurp \
+                "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
+              jq -e '
+                type == "array"
+                and length > 0
+                and all(.[];
+                  type == "object"
+                  and (.total_count | type) == "number"
+                  and (.check_runs | type) == "array")
+                and all(.[].check_runs[];
+                  type == "object"
+                  and (.id | type) == "number" and .id > 0
+                  and (.name | type) == "string"
+                  and (.head_sha | type) == "string"
+                  and (.status | type) == "string"
+                  and has("conclusion")
+                  and ((.conclusion | type) == "string" or .conclusion == null)
+                  and has("details_url")
+                  and ((.details_url | type) == "string" or .details_url == null)
+                  and has("external_id")
+                  and ((.external_id | type) == "string" or .external_id == null)
+                  and (.app | type) == "object"
+                  and (.app.id | type) == "number"
+                  and (.app.slug | type) == "string"
+                  and (.output | type) == "object"
+                  and (.output | has("summary"))
+                  and ((.output.summary | type) == "string" or .output.summary == null))
+              ' <<<"${post_neutral_pages}" >/dev/null
+              post_neutral="$(jq -c \
+                --arg head "${EXPECTED_HEAD}" '
+                  [.[].check_runs[] |
+                    select(.name == "Current revision review") |
+                    select(.app.id == 15368 and .app.slug == "github-actions") |
+                    select(.head_sha == $head)]
+                ' <<<"${post_neutral_pages}")"
+              test "$(jq 'length' <<<"${post_neutral}")" -eq 1
+              jq -e \
+                --arg external_id "${neutral_external_id}" \
+                --arg head "${EXPECTED_HEAD}" \
+                --argjson check_id "${neutral_check_id}" '
+                  .[0].id == $check_id
+                  and .[0].head_sha == $head
+                  and .[0].external_id == $external_id
+                  and .[0].status == "completed"
+                  and .[0].conclusion == "success"
+                ' <<<"${post_neutral}" >/dev/null
+              echo "Protected verifier job rerun completed without duplicating neutral evidence."
               exit 0
             fi
             if [ "${completion_attempt}" -eq 60 ]; then
-              echo "Protected verifier rerun did not complete successfully in time." >&2
+              echo "Protected verifier job rerun did not complete successfully in time." >&2
               exit 1
             fi
             sleep 5
