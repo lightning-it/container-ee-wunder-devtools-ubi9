@@ -30,11 +30,10 @@ concurrency:
   group: copilot-review-${{ github.event.pull_request.number }}-${{ github.event.action }}
   cancel-in-progress: false
 
-# Release-App pull requests use only the protected MLX-90 §7.2 Exact-Revision
-# Codex check, except for a zero-diff ancestry merge proven deterministically
-# against both protected tips and the develop tree. This workflow retains the
-# final-head GitHub Copilot path for applicable human PRs plus the governed
-# automation exemptions.
+# Release-App pull requests use only the sibling protected MLX-90 §7.2
+# Exact-Revision Codex check, without an exemption in this controller. This
+# workflow retains the final-head GitHub Copilot path for applicable human PRs
+# plus the separately identified Shared-Assets-App automation exemptions.
 jobs:
   request-current-revision-review:
     name: Request Copilot review for current revision
