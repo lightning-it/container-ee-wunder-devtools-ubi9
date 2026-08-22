@@ -12,11 +12,9 @@ ARG TF_DOCS_VERSION=0.24.0
 ARG HELM_VERSION=4.2.4
 ARG GH_VERSION=2.96.0
 ARG ACTIONLINT_VERSION=1.7.12
-ARG NODE_VERSION=24.19.0
+ARG NODE_VERSION=22.23.2
 ARG NPM_VERSION=12.0.1
 ARG COPILOT_VERSION=1.0.80
-ARG RENOVATE_VERSION=43.288.0
-ARG MARKDOWNLINT_CLI2_VERSION=0.23.0
 
 # hadolint ignore=DL3002
 USER 0
@@ -118,16 +116,10 @@ RUN source /usr/local/lib/container-download-verified.sh && \
       "node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
     mkdir -p /opt/node && \
     tar -xJf /tmp/node.tar.xz --strip-components=1 -C /opt/node && \
-    export PATH="/opt/node/bin:${PATH}" && \
     /opt/node/bin/npm install --global --prefix /opt/node "npm@${NPM_VERSION}" && \
     /opt/node/bin/npm install --global --prefix /opt/node --ignore-scripts=false "@github/copilot@${COPILOT_VERSION}" && \
-    /opt/node/bin/npm install --global --prefix /opt/node --ignore-scripts=true \
-      "renovate@${RENOVATE_VERSION}" \
-      "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" && \
     /opt/node/bin/node --version && \
     /opt/node/bin/copilot --version && \
-    /opt/node/bin/renovate-config-validator --version && \
-    /opt/node/bin/markdownlint-cli2 --version && \
     rm -f /tmp/node.tar.xz && \
     /opt/node/bin/npm cache clean --force
 
@@ -205,7 +197,6 @@ COPY --from=tools /usr/local/bin/actionlint /usr/local/bin/actionlint
 COPY --from=tools /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=tools /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 COPY --from=tools /opt/node /opt/node
-ENV PATH=/opt/node/bin:$PATH
 
 # Python deps: this *is* the right place for pip
 COPY requirements.txt /tmp/requirements.txt
@@ -214,9 +205,7 @@ RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
     rm -f /tmp/requirements.txt /tmp/requirements.lock && \
     ansible --version && ansible-galaxy --version && antsibull-changelog --version && \
-    shellcheck --version && actionlint --version && pre-commit --version && \
-    ruff --version && mypy --version && renovate-config-validator --version && \
-    markdownlint-cli2 --version && helm version --short && gh --version && \
+    shellcheck --version && actionlint --version && helm version --short && gh --version && \
     copr-cli --version && rpmspec --version && qemu-img --version && \
     virt-customize --version && virt-sysprep --version && guestfish --version
 
@@ -227,6 +216,7 @@ RUN useradd -m wunder && \
     chmod 1777 /tmp/ansible /tmp/ansible/tmp
 
 ENV HOME=/home/wunder \
+    PATH=/opt/node/bin:$PATH \
     ANSIBLE_LOCAL_TEMP=/tmp/ansible/tmp \
     ANSIBLE_REMOTE_TEMP=/tmp/ansible/tmp
 
