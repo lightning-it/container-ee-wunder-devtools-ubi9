@@ -178,9 +178,8 @@ jobs:
               ' <<<"${producer}" >/dev/null
           else
             if [ "${external_kind}" = ancestry-backmerge ]; then
-              test "${author}" = 'lightning-it-release-automation[bot]' \
-                || { test "${REPOSITORY}" = 'lightning-it/.github' \
-                  && test "${author}" = 'lightning-it-shared-assets-sync[bot]'; }
+              test "${REPOSITORY}" = 'lightning-it/.github'
+              test "${author}" = 'lightning-it-shared-assets-sync[bot]'
               test "$(jq -r .review_path <<<"${neutral_summary}")" = \
                 'deterministic evidence-bound ancestry exemption'
             elif [ "${external_kind}" = managed-sync ]; then
