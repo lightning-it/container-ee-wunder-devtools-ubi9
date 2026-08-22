@@ -423,6 +423,10 @@ run_contract_tests() {
         helm version --short
         ansible-lint --version
         pre-commit --version
+        ruff --version
+        mypy --version
+        renovate-config-validator --version
+        markdownlint-cli2 --version
         gh --version
         docker --version
         antsibull-changelog --version
