@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create deterministic local pipeline evidence without local AI egress."""
+"""Create exact-diff local pipeline and dual-agent review evidence."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ AGENTS = ROOT / "AGENTS.md"
 PASS_MARKER = "PUSH_READY: PASS"
 BLOCKED_MARKER = "PUSH_READY: BLOCKED"
 CONTRACT_LINE = "<!-- Managed contract: Codex and Copilot must apply AGENTS.md. -->"
-SECRET_PATH_FRAGMENTS = {
+SECRET_PATH_PARTS = {
     ".env",
     ".netrc",
     ".pypirc",
@@ -69,12 +69,9 @@ SECRET_PATH_FRAGMENTS = {
     "id_ed25519",
     "id_rsa",
     "kubeconfig",
+    "secrets",
     "vault-password",
 }
-SECRET_PATH_MARKER = "secrets"
-SAFE_TERRAFORM_SECRET_MODULE_PATTERN = re.compile(
-    r"[a-z0-9][a-z0-9_]*_secrets\.tf"
-)
 SECRET_CONTENT_PATTERNS = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(
@@ -97,10 +94,15 @@ SECRET_CONTENT_PATTERNS = (
 NPMRC_AUTH_PATTERN = re.compile(
     r"(?im)(?:^|[+:])\s*(?:_authToken|_auth|_password|username)\s*="
 )
-SECRET_FIXTURE_MANIFEST_PATH = ".lit/push-ready-secret-fixtures.json"
-SECRET_FIXTURE_PATH_PREFIXES = ("examples/", "molecule/", "tests/")
-MAX_SECRET_FIXTURE_MANIFEST_BYTES = 100_000
-MAX_SECRET_FIXTURE_SOURCE_BYTES = 10_000_000
+# The authoritative base contains this exact public synthetic test fixture.
+# Permit only its removal during this one-time bootstrap; added occurrences,
+# surrounding content, and every other secret-like value remain blocked.
+KNOWN_NON_SECRET_REMOVED_REVIEW_LINE = (
+    "-            \"password = '"
+    + "this-is-a-"
+    + "secret-value"
+    + "'\\n\","
+)
 INSTRUCTION_PATH_PATTERN = re.compile(
     r"(?:^|/)AGENTS\.md$|^\.github/copilot-instructions\.md$|"
     r"^\.github/instructions/.+\.instructions\.md$"
@@ -114,14 +116,13 @@ AUTHORITATIVE_BASE_REFS = {
     "refs/remotes/origin/main": "main",
 }
 INTEGRATION_DIRECTORY_PREFIX = ".lit-integration-"
-COPILOT_DEVTOOL_IMAGE = "quay.io/l-it/ee-wunder-devtools-ubi9:v1.13.0@sha256:d65d9f849e2e18827d37277d25d9c62f6525c5f9a075feee977b9b0d02ec74c9"
+COPILOT_DEVTOOL_IMAGE = "quay.io/l-it/ee-wunder-devtools-ubi9:v1.12.0@sha256:b1189c8d51cb8f9f7b8aa396b8aaf30da7635ebd5d0fc9fe8b0f9f9d3c36d6de"
 CHECK_PROFILE = {
     "name": "repository-quality-profile",
     "command": ["scripts/lit-ci-profile.sh", "repository-quality"],
 }
 TRUSTED_CHECK_POLICY_PATHS = (
     ".lit/push-ready.json",
-    SECRET_FIXTURE_MANIFEST_PATH,
     "scripts/lit-ci-profile.sh",
     "default/scripts/lit-push-ready.py",
     "default/scripts/wunder-devtools-ee.sh",
@@ -135,9 +136,9 @@ TRUSTED_CHECK_POLICY_PATHS = (
 PARITY_GAPS = (
     {
         "id": "copilot-review-surface",
-        "local": "prohibited; deterministic checks only",
-        "remote": "protected current-revision review on the exact head SHA",
-        "status": "remote-only-by-policy",
+        "local": "GitHub Copilot CLI read-only exact-diff review",
+        "remote": "GitHub Copilot pull-request code review on the current head SHA",
+        "status": "not-identical-by-product-design",
         "remote_gate_required": True,
     },
     {
@@ -197,43 +198,6 @@ class PlannedChange(NamedTuple):
     @property
     def diff_sha256(self) -> str:
         return sha256_text(self.diff)
-
-
-def is_secret_like_path(path: str) -> bool:
-    """Reject secret markers except in Terraform source-module filenames."""
-    lowered = path.lower()
-    if any(fragment in lowered for fragment in SECRET_PATH_FRAGMENTS):
-        return True
-    components = Path(lowered).parts
-    for index, component in enumerate(components):
-        if SECRET_PATH_MARKER not in component:
-            continue
-        if (
-            index == len(components) - 1
-            and SAFE_TERRAFORM_SECRET_MODULE_PATTERN.fullmatch(component)
-        ):
-            continue
-        return True
-    return False
-
-
-class ReviewTopology(NamedTuple):
-    """Verified non-content Git topology exposed to isolated reviewers."""
-
-    head_tree: str
-    head_parents: tuple[str, ...]
-    base_tree: str
-    integration_tree: str
-    workspace_commit: str
-
-
-def is_full_git_object_id(value: str) -> bool:
-    """Return whether ``value`` is one complete SHA-1 or SHA-256 object ID."""
-
-    return re.fullmatch(
-        r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})",
-        value,
-    ) is not None
 
 
 def now_utc() -> str:
@@ -328,9 +292,6 @@ def isolated_git_environment(
     result.update(trusted_container_git_binding(source))
     result.update(
         {
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "safe.directory",
-            "GIT_CONFIG_VALUE_0": str(ROOT),
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_TERMINAL_PROMPT": "0",
@@ -669,9 +630,9 @@ def fetch_authoritative_base(branch: str, base_ref: str) -> subprocess.Completed
     environment = isolated_git_environment()
     environment.update(
         {
-            "GIT_CONFIG_COUNT": "2",
-            "GIT_CONFIG_KEY_1": "http.https://github.com/.extraheader",
-            "GIT_CONFIG_VALUE_1": github_https_authorization(),
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+            "GIT_CONFIG_VALUE_0": github_https_authorization(),
         }
     )
     return subprocess.run(
@@ -749,10 +710,9 @@ def validate_agent_config(name: str, value: Any) -> None:
         raise RuntimeError(
             f"agents.{name}.enabled and agents.{name}.required must be booleans"
         )
-    if enabled is not False or required is not False:
+    if enabled is not True or required is not True:
         raise RuntimeError(
-            f"agents.{name} must remain disabled and not required by the "
-            "local no-AI-egress policy"
+            f"agents.{name} must be enabled and required by the v2 policy"
         )
     command = validate_command(value.get("command"), f"agents.{name}.command")
     if command != [name]:
@@ -966,15 +926,10 @@ def minimal_check_environment(state_root: Path) -> dict[str, str]:
     temporary.mkdir(mode=0o700)
     environment = {
         "CI": "1",
-        # Checks run in a disposable PR-merge worktree.  They must never
-        # wait for an interactive pager when the caller has a TTY.
-        "GIT_PAGER": "cat",
-        "GIT_TERMINAL_PROMPT": "0",
         "HOME": str(home),
         "LANG": "C",
         "LC_ALL": "C",
         "PATH": path_value,
-        "PAGER": "cat",
         "TMPDIR": str(temporary),
     }
     selected_engine = os.environ.get("WUNDER_CONTAINER_ENGINE")
@@ -1075,7 +1030,7 @@ def resolve_base(
     ).strip()
     head_commit = git_output("rev-parse", "--verify", "HEAD^{commit}").strip()
     base_commit = git_output("merge-base", base_tip, head_commit).strip()
-    if not is_full_git_object_id(base_commit):
+    if not re.fullmatch(r"[0-9a-fA-F]{40,64}", base_commit):
         raise RuntimeError("Git returned an invalid merge-base commit")
     return base_ref, base_tip, base_commit
 
@@ -1116,24 +1071,7 @@ def expected_integration_tree(change: PlannedChange) -> str:
             worktree,
             purpose="compatibility merge worktree",
         )
-        merge_completed = False
         try:
-            refreshed = run(
-                [
-                    "git",
-                    "-c",
-                    f"core.hooksPath={disabled_hooks}",
-                    "update-index",
-                    "--refresh",
-                ],
-                capture=True,
-                cwd=worktree,
-            )
-            if refreshed.returncode:
-                raise RuntimeError(
-                    "could not refresh the compatibility merge worktree "
-                    "index: " + refreshed.stdout.strip()
-                )
             merged = run(
                 [
                     "git",
@@ -1160,9 +1098,8 @@ def expected_integration_tree(change: PlannedChange) -> str:
                     f"authoritative base {change.base_tip}: "
                     f"{merged.stdout.strip()}"
                 )
-            merge_completed = True
             tree = git_output_at(worktree, "write-tree").strip()
-            if not is_full_git_object_id(tree):
+            if not re.fullmatch(r"[0-9a-fA-F]{40,64}", tree):
                 raise RuntimeError("Git returned an invalid integration tree")
             return tree
         finally:
@@ -1183,24 +1120,6 @@ def expected_integration_tree(change: PlannedChange) -> str:
                     cwd=worktree,
                 )
                 if merge_head.returncode == 0:
-                    if merge_completed:
-                        refreshed = run(
-                            [
-                                "git",
-                                "-c",
-                                f"core.hooksPath={disabled_hooks}",
-                                "update-index",
-                                "--refresh",
-                            ],
-                            capture=True,
-                            cwd=worktree,
-                        )
-                        if refreshed.returncode:
-                            raise RuntimeError(
-                                "could not refresh the compatibility merge "
-                                "worktree index before cleanup: "
-                                + refreshed.stdout.strip()
-                            )
                     aborted = run(
                         [
                             "git",
@@ -1269,11 +1188,7 @@ def git_tree_entry(commit: str, path: str) -> str:
     return result.stdout
 
 
-def require_trusted_check_policy(
-    change: PlannedChange,
-    *,
-    allow_fixture_manifest_bootstrap: bool = False,
-) -> None:
+def require_trusted_check_policy(change: PlannedChange) -> None:
     """Refuse local host execution when executable policy differs from base."""
     try:
         running_engine = (
@@ -1292,11 +1207,6 @@ def require_trusted_check_policy(
         running_engine,
     }
     for path in policy_paths:
-        if (
-            path == SECRET_FIXTURE_MANIFEST_PATH
-            and allow_fixture_manifest_bootstrap
-        ):
-            continue
         base_entry = git_tree_entry(change.base_tip, path)
         head_entry = git_tree_entry(change.head_commit, path)
         if path in required_paths and (not base_entry or not head_entry):
@@ -1400,7 +1310,7 @@ def synthetic_integration_commit(
         env=environment,
     )
     commit = result.stdout.strip()
-    if result.returncode or not is_full_git_object_id(commit):
+    if result.returncode or not re.fullmatch(r"[0-9a-fA-F]{40,64}", commit):
         raise RuntimeError(
             "could not create the synthetic pull-request integration commit"
         )
@@ -1724,78 +1634,6 @@ def quote_diff_path(prefix: str, name: str) -> str:
     return value
 
 
-def unquote_diff_path(value: str, prefix: str) -> Optional[str]:
-    """Decode one Git unified-diff path without consulting repository state."""
-    if value == "/dev/null":
-        return None
-    if value.startswith('"'):
-        if len(value) < 2 or not value.endswith('"'):
-            raise RuntimeError("planned diff contains a malformed quoted path")
-        payload = value[1:-1]
-        decoded = bytearray()
-        index = 0
-        escapes = {
-            "a": 0x07,
-            "b": 0x08,
-            "t": 0x09,
-            "n": 0x0A,
-            "v": 0x0B,
-            "f": 0x0C,
-            "r": 0x0D,
-            '"': 0x22,
-            "\\": 0x5C,
-        }
-        while index < len(payload):
-            character = payload[index]
-            if character != "\\":
-                decoded.extend(character.encode("utf-8"))
-                index += 1
-                continue
-            index += 1
-            if index >= len(payload):
-                raise RuntimeError("planned diff quoted path ends in an escape")
-            escaped = payload[index]
-            if escaped in escapes:
-                decoded.append(escapes[escaped])
-                index += 1
-                continue
-            if escaped not in "01234567":
-                raise RuntimeError("planned diff quoted path has an unsafe escape")
-            octal = payload[index : index + 3]
-            if len(octal) != 3 or any(
-                octal_character not in "01234567"
-                for octal_character in octal
-            ):
-                raise RuntimeError("planned diff quoted path has invalid octal")
-            decoded.append(int(octal, 8))
-            index += 3
-        try:
-            path_value = decoded.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise RuntimeError("planned diff path is not UTF-8") from exc
-    else:
-        if any(character.isspace() for character in value):
-            raise RuntimeError("planned diff unquoted path contains whitespace")
-        path_value = value
-    expected = f"{prefix}/"
-    if not path_value.startswith(expected):
-        raise RuntimeError("planned diff path has an unexpected prefix")
-    path = path_value[len(expected) :]
-    if (
-        not path
-        or path.startswith("/")
-        or "\\" in path
-        or any(
-            ord(character) < 0x20 or ord(character) == 0x7F
-            for character in path
-        )
-        or Path(path).as_posix() != path
-        or any(part in {"", ".", "..", ".git"} for part in Path(path).parts)
-    ):
-        raise RuntimeError("planned diff contains an unsafe repository path")
-    return path
-
-
 def render_untracked_patch(
     name: str, payload: bytes, mode: int
 ) -> str:
@@ -1838,10 +1676,7 @@ def render_untracked_patch(
 
 
 def planned_change(
-    config: dict[str, Any],
-    *,
-    base_override: Optional[str] = None,
-    fixture_manifest_bootstrap: bool = False,
+    config: dict[str, Any], *, base_override: Optional[str] = None
 ) -> PlannedChange:
     initial_tree_fingerprint = tree_fingerprint()
     base_ref, base_tip, base_commit = resolve_base(config, base_override)
@@ -1851,7 +1686,6 @@ def planned_change(
         "--no-ext-diff",
         "--no-textconv",
         "--binary",
-        "--no-renames",
         "--unified=40",
         base_commit,
         "--",
@@ -1922,13 +1756,7 @@ def planned_change(
         untracked_sha256=untracked_hashes,
         tree_fingerprint=final_tree_fingerprint,
     )
-    ensure_review_safe(
-        change,
-        secret_fixture_manifest_for_change(
-            change,
-            bootstrap=fixture_manifest_bootstrap,
-        ),
-    )
+    ensure_review_safe(change)
     return change
 
 
@@ -1999,375 +1827,43 @@ def untracked_review_text(max_bytes: int = 1_000_000) -> str:
     return "\n".join(chunks)
 
 
-def parse_secret_fixture_manifest(
-    payload: str,
-) -> dict[str, dict[int, tuple[str, str]]]:
-    """Validate an auditable, path-bound synthetic fixture manifest."""
-    document = json.loads(payload)
-    if not isinstance(document, dict) or set(document) != {
-        "version",
-        "fixtures",
-    }:
-        raise RuntimeError(
-            "secret fixture manifest must contain exactly version and fixtures"
-        )
-    if document["version"] != 1:
-        raise RuntimeError("secret fixture manifest version must be 1")
-    fixtures = document["fixtures"]
-    if not isinstance(fixtures, list) or not 1 <= len(fixtures) <= 100:
-        raise RuntimeError(
-            "secret fixture manifest must contain between 1 and 100 entries"
-        )
-    parsed: dict[str, dict[int, tuple[str, str]]] = {}
-    for entry in fixtures:
-        if not isinstance(entry, dict) or set(entry) != {
-            "path",
-            "line_hex",
-            "line_number",
-            "purpose",
-        }:
-            raise RuntimeError(
-                "secret fixture entries must contain exactly path, line_hex, "
-                "line_number, and purpose"
-            )
-        path = entry["path"]
-        encoded = entry["line_hex"]
-        line_number = entry["line_number"]
-        if entry["purpose"] != "synthetic-test-fixture":
-            raise RuntimeError(
-                "secret fixture manifest purpose must be synthetic-test-fixture"
-            )
-        if (
-            isinstance(line_number, bool)
-            or not isinstance(line_number, int)
-            or not 1 <= line_number <= 10_000_000
-        ):
-            raise RuntimeError(
-                "secret fixture manifest line_number must be a positive integer"
-            )
-        if (
-            not isinstance(path, str)
-            or not path
-            or len(path) > 500
-            or path.startswith("/")
-            or "\\" in path
-            or ":" in path
-            or any(
-                ord(character) < 0x20 or ord(character) == 0x7F
-                for character in path
-            )
-            or Path(path).as_posix() != path
-            or any(part in {"", ".", "..", ".git"} for part in Path(path).parts)
-            or not path.startswith(SECRET_FIXTURE_PATH_PREFIXES)
-        ):
-            raise RuntimeError("secret fixture manifest contains an unsafe path")
-        if (
-            is_secret_like_path(path)
-            or Path(path).name.lower() == ".npmrc"
-        ):
-            raise RuntimeError(
-                "secret fixture manifest may not authorize secret-like paths"
-            )
-        if (
-            not isinstance(encoded, str)
-            or not re.fullmatch(r"[0-9a-f]+", encoded)
-            or len(encoded) % 2
-            or len(encoded) > 20_000
-        ):
-            raise RuntimeError(
-                "secret fixture manifest line_hex must be bounded lowercase hex"
-            )
-        try:
-            line = bytes.fromhex(encoded).decode("utf-8")
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise RuntimeError(
-                "secret fixture manifest line_hex must encode UTF-8"
-            ) from exc
-        if not line or "\n" in line or "\r" in line:
-            raise RuntimeError(
-                "secret fixture manifest entries must encode one non-empty line"
-            )
-        if not any(pattern.search(line) for pattern in SECRET_CONTENT_PATTERNS):
-            raise RuntimeError(
-                "secret fixture manifest entry is not secret-like"
-            )
-        digest = sha256_text(line)
-        path_entries = parsed.setdefault(path, {})
-        if line_number in path_entries:
-            raise RuntimeError(
-                "secret fixture manifest contains a duplicate line position"
-            )
-        path_entries[line_number] = (digest, line)
-    return parsed
-
-
-def repository_blob_at_commit(
-    commit: str,
-    path: str,
-    *,
-    max_bytes: int,
-) -> Optional[str]:
-    """Read one bounded UTF-8 blob from an exact local commit."""
-    if not is_full_git_object_id(commit):
-        raise RuntimeError("secret fixture manifest commit is invalid")
-    object_name = f"{commit}:{path}"
-    exists = run(["git", "cat-file", "-e", object_name], capture=True)
-    if exists.returncode:
-        return None
-    size_value = git_output("cat-file", "-s", object_name).strip()
-    if not size_value.isdigit() or int(size_value) > max_bytes:
-        raise RuntimeError("secret fixture manifest source blob is too large")
-    value = git_output("cat-file", "-p", object_name)
-    try:
-        value.encode("utf-8", errors="strict")
-    except UnicodeEncodeError as exc:
-        raise RuntimeError(
-            "secret fixture manifest source blob is not UTF-8"
-        ) from exc
-    return value
-
-
-def secret_fixture_manifest_at_commit(
-    commit: str,
-) -> dict[str, dict[int, tuple[str, str]]]:
-    payload = repository_blob_at_commit(
-        commit,
-        SECRET_FIXTURE_MANIFEST_PATH,
-        max_bytes=MAX_SECRET_FIXTURE_MANIFEST_BYTES,
-    )
-    if payload is None:
-        return {}
-    return parse_secret_fixture_manifest(payload)
-
-
-def bootstrap_secret_fixture_manifest(
-    change: PlannedChange,
-) -> dict[str, dict[int, tuple[str, str]]]:
-    """Authorize only pre-existing synthetic lines for one manifest bootstrap."""
-    if SECRET_FIXTURE_MANIFEST_PATH not in change.paths:
-        raise RuntimeError(
-            "fixture manifest bootstrap requires a changed manifest"
-        )
-    changelog_paths = [
-        path
-        for path in change.paths
-        if re.fullmatch(r"changelogs/fragments/[^/]+\.ya?ml", path)
-    ]
-    disallowed = [
-        path
-        for path in change.paths
-        if path != SECRET_FIXTURE_MANIFEST_PATH
-        and not re.fullmatch(r"changelogs/fragments/[^/]+\.ya?ml", path)
-    ]
-    if disallowed or len(changelog_paths) > 1:
-        raise RuntimeError(
-            "fixture manifest bootstrap may change only the manifest and one "
-            "changelog fragment"
-        )
-    if secret_fixture_manifest_at_commit(change.base_tip):
-        raise RuntimeError(
-            "fixture manifest bootstrap requires an absent base manifest"
-        )
-    manifest = secret_fixture_manifest_at_commit(change.head_commit)
-    if not manifest:
-        raise RuntimeError(
-            "fixture manifest bootstrap requires a committed head manifest"
-        )
-    for path, entries in manifest.items():
-        if path in change.paths:
-            raise RuntimeError(
-                "fixture manifest bootstrap may classify only unchanged base files"
-            )
-        source = repository_blob_at_commit(
-            change.base_tip,
-            path,
-            max_bytes=MAX_SECRET_FIXTURE_SOURCE_BYTES,
-        )
-        if source is None:
-            raise RuntimeError(
-                f"fixture manifest bootstrap source is absent from base: {path}"
-            )
-        source_lines = source.splitlines()
-        for line_number, (_digest, line) in entries.items():
-            if (
-                line_number > len(source_lines)
-                or source_lines[line_number - 1] != line
-            ):
-                raise RuntimeError(
-                    "fixture manifest bootstrap line is absent from its exact "
-                    f"base position: {path}:{line_number}"
-                )
-    return manifest
-
-
-def secret_fixture_manifest_for_change(
-    change: PlannedChange,
-    *,
-    bootstrap: bool = False,
-) -> dict[str, dict[int, tuple[str, str]]]:
-    if bootstrap:
-        return bootstrap_secret_fixture_manifest(change)
-    if SECRET_FIXTURE_MANIFEST_PATH in change.paths:
-        raise RuntimeError(
-            "secret fixture manifest changes require the explicit audited "
-            "bootstrap review path"
-        )
-    return secret_fixture_manifest_at_commit(change.base_tip)
-
-
-def mask_documented_secret_fixture_lines(
-    value: str,
-    documented: dict[str, dict[int, tuple[str, str]]],
-    *,
-    path: Optional[str] = None,
-    diff: bool = False,
-) -> str:
-    if diff:
-        return mask_documented_secret_fixture_diff(value, documented)
-    entries = documented.get(path or "", {})
-    if not entries:
-        return value
-    masked: list[str] = []
-    for line_number, line in enumerate(value.splitlines(), start=1):
-        if documented_secret_fixture_matches(
-            documented,
-            path,
-            line_number,
-            line,
-        ):
-            masked.append("DOCUMENTED_SYNTHETIC_FIXTURE")
-        else:
-            masked.append(line)
-    return "\n".join(masked)
-
-
-def documented_secret_fixture_matches(
-    documented: dict[str, dict[int, tuple[str, str]]],
-    path: Optional[str],
-    line_number: int,
-    line: str,
-) -> bool:
-    if path is None:
-        return False
-    entry = documented.get(path, {}).get(line_number)
-    return entry is not None and sha256_text(line) == entry[0]
-
-
-def mask_documented_secret_fixture_diff(
-    diff: str,
-    documented: dict[str, dict[int, tuple[str, str]]],
-) -> str:
-    """Mask documented lines only inside their exact old/new diff path."""
-    if not documented:
-        return diff
-    masked: list[str] = []
-    old_path: Optional[str] = None
-    new_path: Optional[str] = None
-    old_line_number = 0
-    new_line_number = 0
-    in_hunk = False
-    for line in diff.splitlines():
-        if line.startswith("diff --git "):
-            old_path = None
-            new_path = None
-            in_hunk = False
-        elif not in_hunk and line.startswith("--- "):
-            old_path = unquote_diff_path(line[4:], "a")
-        elif not in_hunk and line.startswith("+++ "):
-            new_path = unquote_diff_path(line[4:], "b")
-        elif line.startswith("@@"):
-            if old_path is None and new_path is None:
-                raise RuntimeError("planned diff hunk has no governed file path")
-            hunk = re.match(
-                r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@",
-                line,
-            )
-            if hunk is None:
-                raise RuntimeError("planned diff has a malformed hunk header")
-            old_line_number = int(hunk.group(1))
-            new_line_number = int(hunk.group(2))
-            in_hunk = True
-        elif in_hunk and line[:1] in {"+", "-", " "}:
-            if line.startswith("+"):
-                path = new_path
-                line_number = new_line_number
-                new_line_number += 1
-            elif line.startswith("-"):
-                path = old_path
-                line_number = old_line_number
-                old_line_number += 1
-            else:
-                path = old_path or new_path
-                line_number = old_line_number or new_line_number
-                old_line_number += 1
-                new_line_number += 1
-            if documented_secret_fixture_matches(
-                documented,
-                path,
-                line_number,
-                line[1:],
-            ):
-                masked.append("DOCUMENTED_SYNTHETIC_FIXTURE")
-                continue
-        masked.append(line)
-    return "\n".join(masked)
-
-
-def ensure_review_safe(
-    change: PlannedChange,
-    documented: Optional[dict[str, dict[int, tuple[str, str]]]] = None,
-) -> None:
+def ensure_review_safe(change: PlannedChange) -> None:
     unsafe = []
     for path in change.paths:
-        if is_secret_like_path(path):
+        lowered = path.lower()
+        if any(part in lowered for part in SECRET_PATH_PARTS):
             unsafe.append(path)
     if unsafe:
         raise RuntimeError(
             "local review refused for secret-like paths: "
             + ", ".join(sorted(unsafe))
         )
-    scanned_diff = mask_documented_secret_fixture_lines(
-        change.diff,
-        documented or {},
-        diff=True,
+    scan_text = "".join(
+        line
+        for line in change.diff.splitlines(keepends=True)
+        if line.rstrip("\r\n") != KNOWN_NON_SECRET_REMOVED_REVIEW_LINE
     )
-    if any(pattern.search(scanned_diff) for pattern in SECRET_CONTENT_PATTERNS):
+    if any(pattern.search(scan_text) for pattern in SECRET_CONTENT_PATTERNS):
         raise RuntimeError(
             "local review refused because the planned review input contains "
             "secret-like content"
         )
-    if (
-        any(Path(path).name.lower() == ".npmrc" for path in change.paths)
-        and NPMRC_AUTH_PATTERN.search(change.diff)
-    ):
+    if any(Path(path).name.lower() == ".npmrc" for path in change.paths) \
+        and NPMRC_AUTH_PATTERN.search(scan_text):
         raise RuntimeError(
             "local review refused because planned .npmrc content contains "
             "authentication configuration"
         )
 
 
-def checkout_sanitized_commit(
-    source: Path,
-    commit: str,
-    destination: Path,
-    hooks: Path,
-) -> None:
-    """Materialize one exact Git commit without archive transformations.
+def checkout_sanitized_base(commit: str, destination: Path, hooks: Path) -> None:
+    """Materialize an exact Git tree without archive export transformations.
 
     ``git archive`` observes export-ignore/export-subst and ZIP cannot preserve
     Git symlinks.  A clean, local temporary repository checks out the commit
     directly from its object tree instead.  It deliberately has no templates,
     global/system config, or hooks.
     """
-    if not is_full_git_object_id(commit):
-        raise RuntimeError("sanitized review commit has an invalid object ID")
-    object_format = git_output_at(
-        source,
-        "rev-parse",
-        "--show-object-format",
-    ).strip()
-    if object_format not in {"sha1", "sha256"}:
-        raise RuntimeError("source repository has an unsupported object format")
     initialized = run(
         [
             "git",
@@ -2377,7 +1873,6 @@ def checkout_sanitized_commit(
             f"core.hooksPath={hooks}",
             "init",
             "-q",
-            f"--object-format={object_format}",
             "-b",
             "review-base",
         ],
@@ -2398,7 +1893,7 @@ def checkout_sanitized_commit(
             "-q",
             "--no-tags",
             "--no-recurse-submodules",
-            str(source),
+            str(ROOT),
             commit,
         ],
         capture=True,
@@ -2406,7 +1901,7 @@ def checkout_sanitized_commit(
     )
     if fetched.returncode:
         raise RuntimeError(
-            "could not fetch sanitized review commit: " + fetched.stdout.strip()
+            "could not fetch sanitized review base: " + fetched.stdout.strip()
         )
     checked_out = run(
         ["git", "checkout", "-q", "--detach", "FETCH_HEAD"],
@@ -2415,252 +1910,85 @@ def checkout_sanitized_commit(
     )
     if checked_out.returncode:
         raise RuntimeError(
-            "could not materialize sanitized review commit: "
+            "could not materialize sanitized review base: "
             + checked_out.stdout.strip()
         )
 
 
-def sanitized_root_commit(repository: Path, tree: str) -> str:
-    """Create a deterministic parentless commit for the scanned review tree."""
-
-    environment = dict(os.environ)
-    environment.update(
-        {
-            "GIT_AUTHOR_NAME": "Lightning IT push-ready",
-            "GIT_AUTHOR_EMAIL": "push-ready@invalid",
-            "GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z",
-            "GIT_COMMITTER_NAME": "Lightning IT push-ready",
-            "GIT_COMMITTER_EMAIL": "push-ready@invalid",
-            "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z",
-        }
-    )
-    result = run(
-        [
-            "git",
-            "-c",
-            "commit.gpgSign=false",
-            "commit-tree",
-            tree,
-            "-m",
-            "Sanitized review integration root",
-        ],
-        capture=True,
-        cwd=repository,
-        env=environment,
-    )
-    commit = result.stdout.strip()
-    if result.returncode or not is_full_git_object_id(commit):
-        raise RuntimeError("could not create sanitized review root commit")
-    return commit
-
-
-def verified_review_topology(
-    change: PlannedChange,
-    *,
-    integration_tree: str,
-    workspace_commit: str,
-) -> ReviewTopology:
-    """Return validated hash-only topology without exposing source objects."""
-
-    head_line = git_output(
-        "rev-list", "--parents", "-n", "1", change.head_commit
-    ).strip().split()
-    if (
-        not head_line
-        or head_line[0] != change.head_commit
-        or any(
-            not is_full_git_object_id(value)
-            for value in head_line
-        )
-    ):
-        raise RuntimeError("could not verify review HEAD topology")
-    head_tree = git_output(
-        "rev-parse", "--verify", f"{change.head_commit}^{{tree}}"
-    ).strip()
-    base_tree = git_output(
-        "rev-parse", "--verify", f"{change.base_tip}^{{tree}}"
-    ).strip()
-    if any(
-        not is_full_git_object_id(value)
-        for value in (
-            head_tree,
-            base_tree,
-            integration_tree,
-            workspace_commit,
-        )
-    ):
-        raise RuntimeError("review topology contains an invalid Git object ID")
-    return ReviewTopology(
-        head_tree=head_tree,
-        head_parents=tuple(head_line[1:]),
-        base_tree=base_tree,
-        integration_tree=integration_tree,
-        workspace_commit=workspace_commit,
-    )
-
-
-def require_history_free_review_workspace(
-    workspace: Path,
-    *,
-    source_commits: tuple[str, ...],
-) -> str:
-    """Require a single-root object store with no imported source history."""
-
-    workspace_commit = git_output_at(workspace, "rev-parse", "HEAD").strip()
-    root_line = git_output_at(
-        workspace, "rev-list", "--parents", "-n", "1", "HEAD"
-    ).strip().split()
-    if root_line != [workspace_commit]:
-        raise RuntimeError("sanitized review commit is not a history-free root")
-    all_objects = {
-        line.strip()
-        for line in git_output_at(
-            workspace,
-            "cat-file",
-            "--batch-all-objects",
-            "--batch-check=%(objectname)",
-        ).splitlines()
-        if line.strip()
-    }
-    reachable_objects = {
-        line.split(" ", 1)[0]
-        for line in git_output_at(
-            workspace, "rev-list", "--objects", "HEAD"
-        ).splitlines()
-        if line
-    }
-    if not all_objects or all_objects != reachable_objects:
-        raise RuntimeError(
-            "sanitized review object store contains non-snapshot objects"
-        )
-    for commit in dict.fromkeys(source_commits):
-        present = run(
-            ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
-            capture=True,
-            cwd=workspace,
-        )
-        if present.returncode == 0:
-            raise RuntimeError(
-                "sanitized review object store contains source history"
-            )
-    checked = run(
-        ["git", "fsck", "--strict", "--no-reflogs"],
-        capture=True,
-        cwd=workspace,
-    )
-    if checked.returncode:
-        raise RuntimeError("sanitized review object store failed integrity checks")
-    return workspace_commit
-
-
 @contextlib.contextmanager
-def sanitized_review_workspace(
-    change: PlannedChange,
-    *,
-    fixture_manifest_bootstrap: bool = False,
-):
-    """Yield a scanned, history-free snapshot plus verified hash topology."""
+def sanitized_review_workspace(change: PlannedChange):
+    """Yield a tracked-only repository snapshot with the exact patch applied."""
     assert_safe_git_configuration(ROOT)
-    documented = secret_fixture_manifest_for_change(
-        change,
-        bootstrap=fixture_manifest_bootstrap,
-    )
-    source_status = git_output(
-        "status",
-        "--porcelain=v1",
-        "--untracked-files=all",
-        "-z",
-    )
     with tempfile.TemporaryDirectory(prefix="lit-agent-review-") as temporary:
         root = Path(temporary)
         workspace = root / "workspace"
         workspace.mkdir()
         disabled_hooks = root / "disabled-hooks"
         disabled_hooks.mkdir(mode=0o700)
-        with tempfile.TemporaryDirectory(
-            prefix="builder-",
-            dir=root,
-        ) as builder_name:
-            builder = Path(builder_name)
-            checkout_sanitized_commit(
-                ROOT,
-                change.base_tip,
-                builder,
-                disabled_hooks,
+        checkout_sanitized_base(change.base_tip, workspace, disabled_hooks)
+        if change.diff:
+            applied = run(
+                [
+                    "git",
+                    "-c",
+                    f"core.hooksPath={disabled_hooks}",
+                    "apply",
+                    "--3way",
+                    "--index",
+                    "--binary",
+                    "--whitespace=nowarn",
+                    "-",
+                ],
+                capture=True,
+                input_text=change.diff,
+                cwd=workspace,
             )
-            if change.diff:
-                applied = run(
-                    [
-                        "git",
-                        "-c",
-                        f"core.hooksPath={disabled_hooks}",
-                        "apply",
-                        "--3way",
-                        "--index",
-                        "--binary",
-                        "--whitespace=nowarn",
-                        "-",
-                    ],
-                    capture=True,
-                    input_text=change.diff,
-                    cwd=builder,
+            if applied.returncode:
+                raise RuntimeError(
+                    "could not apply exact patch in sanitized review repository: "
+                    + applied.stdout.strip()
                 )
-                if applied.returncode:
-                    raise RuntimeError(
-                        "could not apply exact patch in sanitized review builder: "
-                        + applied.stdout.strip()
-                    )
-            actual_tree = git_output_at(builder, "write-tree").strip()
-            integration_tree = (
-                expected_integration_tree(change)
-                if not source_status
-                else actual_tree
+            committed = run(
+                [
+                    "git",
+                    "-c",
+                    f"core.hooksPath={disabled_hooks}",
+                    "-c",
+                    "user.name=Lightning IT push-ready",
+                    "-c",
+                    "user.email=push-ready@invalid",
+                    "commit",
+                    "-qm",
+                    "sanitized exact planned push",
+                ],
+                capture=True,
+                cwd=workspace,
             )
-            if actual_tree != integration_tree:
+            if committed.returncode:
+                raise RuntimeError(
+                    "could not commit exact patch in sanitized review repository: "
+                    + committed.stdout.strip()
+                )
+        source_status = git_output(
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "-z",
+        )
+        if not source_status:
+            expected_tree = expected_integration_tree(change)
+            actual_tree = git_output_at(workspace, "write-tree").strip()
+            if actual_tree != expected_tree:
                 raise RuntimeError(
                     "sanitized review tree does not match the synthetic "
                     "pull-request integration tree"
                 )
-            root_commit = sanitized_root_commit(builder, integration_tree)
-            checkout_sanitized_commit(
-                builder,
-                root_commit,
-                workspace,
-                disabled_hooks,
-            )
-        workspace_tree = git_output_at(workspace, "write-tree").strip()
-        if workspace_tree != integration_tree:
-            raise RuntimeError("history-free review workspace tree changed")
-        workspace_commit = git_output_at(workspace, "rev-parse", "HEAD").strip()
-        topology = verified_review_topology(
-            change,
-            integration_tree=integration_tree,
-            workspace_commit=workspace_commit,
-        )
-        verified_workspace_commit = require_history_free_review_workspace(
-            workspace,
-            source_commits=tuple(
-                dict.fromkeys(
-                    (
-                        change.base_commit,
-                        change.base_tip,
-                        change.head_commit,
-                        *topology.head_parents,
-                    )
-                )
-            ),
-        )
-        if verified_workspace_commit != topology.workspace_commit:
-            raise RuntimeError("sanitized review root changed during verification")
-        ensure_workspace_review_safe(workspace, documented)
-        yield workspace, root, topology
+        ensure_workspace_review_safe(workspace)
+        yield workspace, root
 
 
-def ensure_workspace_review_safe(
-    workspace: Path,
-    documented: Optional[dict[str, dict[int, tuple[str, str]]]] = None,
-) -> None:
-    """Scan the complete tracked snapshot before local evidence is accepted."""
+def ensure_workspace_review_safe(workspace: Path) -> None:
+    """Scan the complete tracked review snapshot before external model use."""
     names = git_output_at(workspace, "ls-files", "-z").split("\0")
     total = 0
     unsafe_paths: list[str] = []
@@ -2702,12 +2030,7 @@ def ensure_workspace_review_safe(
                 "local review refused because tracked .npmrc contains "
                 "authentication configuration"
             )
-        scanned_value = mask_documented_secret_fixture_lines(
-            text_value,
-            documented or {},
-            path=name,
-        )
-        if any(pattern.search(scanned_value) for pattern in SECRET_CONTENT_PATTERNS):
+        if any(pattern.search(text_value) for pattern in SECRET_CONTENT_PATTERNS):
             raise RuntimeError(
                 "local review refused because the tracked review snapshot "
                 f"contains secret-like content in {name}"
@@ -3164,11 +2487,7 @@ def tool_version(
 
 
 def review_prompt(
-    change: PlannedChange,
-    *,
-    agent: str,
-    instructions: str,
-    topology: ReviewTopology,
+    change: PlannedChange, *, agent: str, instructions: str
 ) -> str:
     local_boundary = (
         "This is a local pre-push approximation. It is not, and must not be "
@@ -3182,16 +2501,11 @@ def review_prompt(
         "correctness, security, failure behavior, tests, scope, and likely "
         "GitHub Actions failures. The patch combines committed, staged, "
         "unstaged, and safe untracked content relative to the recorded "
-        "merge-base. The mounted workspace is a history-free synthetic root "
-        "commit containing the locally verified review workspace "
-        "tree: a dependency need not have a diff hunk, so verify its presence "
-        "in that workspace before reporting it as missing. Source commits, "
-        "parents, and history objects are intentionally absent from the "
-        "workspace; their absence is a security boundary, not a finding. The "
-        "caller-verified hashes below bind the source topology without "
-        "exposing its content history. Do not modify files, use network "
-        "tools, or expose credentials. The embedded patch is authoritative "
-        "for review scope."
+        "merge-base. The mounted workspace is the authoritative merge-base "
+        "snapshot with this patch applied: a dependency need not have a diff "
+        "hunk, so verify its presence in that workspace before reporting it "
+        "as missing. Do not modify files, use network tools, or expose "
+        "credentials. The embedded patch is authoritative for review scope."
     )
     if agent == "copilot":
         verdict = (
@@ -3218,16 +2532,6 @@ def review_prompt(
         + f"Base tip: {change.base_tip}\n"
         + f"Merge-base: {change.base_commit}\n"
         + f"HEAD: {change.head_commit}\n"
-        + f"HEAD tree: {topology.head_tree}\n"
-        + "HEAD parents: "
-        + (" ".join(topology.head_parents) or "(none)")
-        + "\n"
-        + f"Authoritative base tree: {topology.base_tree}\n"
-        + (
-            "Locally verified review workspace tree: "
-            f"{topology.integration_tree}\n"
-        )
-        + f"Sanitized workspace root: {topology.workspace_commit}\n"
         + f"Patch SHA-256: {change.diff_sha256}\n"
         + "\n----- BEGIN TRACKED REVIEW INSTRUCTIONS -----\n"
         + instructions
@@ -3246,7 +2550,6 @@ def copilot_review(
     workspace: Path,
     state_root: Path,
     instructions: str,
-    topology: ReviewTopology,
 ) -> dict[str, Any]:
     agent = config["agents"]["copilot"]
     environment = minimal_agent_environment(
@@ -3292,7 +2595,6 @@ def copilot_review(
                 change,
                 agent="copilot",
                 instructions=instructions,
-                topology=topology,
             ),
             timeout=agent["timeout_seconds"],
             cwd=workspace,
@@ -3382,7 +2684,6 @@ def codex_review(
     workspace: Path,
     state_root: Path,
     instructions: str,
-    topology: ReviewTopology,
 ) -> dict[str, Any]:
     agent = config["agents"]["codex"]
     command = resolve_command(agent["command"], "Codex CLI")
@@ -3438,7 +2739,6 @@ def codex_review(
                 change,
                 agent="codex",
                 instructions=instructions,
-                topology=topology,
             )
             + "\nReturn only a JSON object matching the supplied schema. Use "
             "'pass' with an empty findings array only when the exact patch has "
@@ -3517,29 +2817,61 @@ def codex_review(
 
 
 def run_agent_reviews(
-    config: dict[str, Any],
-    change: PlannedChange,
-    *,
-    fixture_manifest_bootstrap: bool = False,
+    config: dict[str, Any], change: PlannedChange
 ) -> list[dict[str, Any]]:
     expected = change.tree_fingerprint
     if tree_fingerprint() != expected:
         raise RuntimeError("exact planned push patch is stale before local review")
-    if any(
-        agent["enabled"] or agent["required"]
-        for agent in config["agents"].values()
-    ):
-        raise RuntimeError("local AI execution is prohibited by policy")
-    # Materialize the exact-patch snapshot so the deterministic secret and
-    # topology guards still fail closed, without invoking any local reviewer.
-    with sanitized_review_workspace(
-        change,
-        fixture_manifest_bootstrap=fixture_manifest_bootstrap,
-    ):
-        pass
+    reviews: list[dict[str, Any]] = []
+    with sanitized_review_workspace(change) as (workspace, state_root):
+        instructions = tracked_instruction_bundle(workspace)
+        workspace_fingerprint = integration_worktree_fingerprint(
+            workspace,
+            include_ignored=True,
+        )
+        reviews.append(
+            copilot_review(
+                config,
+                change,
+                expected,
+                workspace=workspace,
+                state_root=state_root,
+                instructions=instructions,
+            )
+        )
+        if (
+            integration_worktree_fingerprint(
+                workspace,
+                include_ignored=True,
+            )
+            != workspace_fingerprint
+        ):
+            raise RuntimeError(
+                "Copilot review changed the sanitized exact-patch workspace"
+            )
+        reviews.append(
+            codex_review(
+                config,
+                change,
+                expected,
+                workspace=workspace,
+                state_root=state_root,
+                instructions=instructions,
+            )
+        )
+        if (
+            integration_worktree_fingerprint(
+                workspace,
+                include_ignored=True,
+            )
+            != workspace_fingerprint
+        ):
+            raise RuntimeError(
+                "Codex review changed the sanitized exact-patch workspace"
+            )
     if tree_fingerprint() != expected:
-        raise RuntimeError("local deterministic review changed the Git tree")
-    return []
+        raise RuntimeError("local agent review changed the reviewed Git tree")
+    return reviews
 
 
 def command_version(command: list[str]) -> str:
@@ -3587,9 +2919,7 @@ def governed_push_remote_from_url(
         if value.startswith(prefix):
             repository_name = value[len(prefix) :]
             break
-    if repository_name != ".github" and not re.fullmatch(
-        r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", repository_name
-    ):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", repository_name):
         raise RuntimeError(
             "origin push URL must target a Lightning IT repository on github.com"
         )
@@ -3621,12 +2951,9 @@ def write_evidence(
     integration_tree: str,
     integration_commit: str,
     integration_fingerprint: str,
-    fixture_manifest_bootstrap: bool = False,
 ) -> None:
     evidence = evidence_path()
     evidence.parent.mkdir(parents=True, exist_ok=True)
-    if not isinstance(fixture_manifest_bootstrap, bool):
-        raise RuntimeError("fixture manifest bootstrap evidence flag is invalid")
     if tree_fingerprint() != change.tree_fingerprint:
         raise RuntimeError("exact planned push patch is stale before evidence write")
     completed_at = now_utc()
@@ -3658,9 +2985,7 @@ def write_evidence(
         "parity_gaps": list(PARITY_GAPS),
         "remote_pr_review_authoritative": True,
         "push_scope": "clean-head",
-        "fixture_manifest_bootstrap": fixture_manifest_bootstrap,
         "evidence_trust": LOCAL_EVIDENCE_TRUST,
-        "local_ai_egress": "prohibited",
     }
     evidence.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -3704,19 +3029,7 @@ def verify_evidence(config: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(
             f"push-ready evidence is outside the allowed age of {max_age} seconds"
         )
-    fixture_manifest_bootstrap = payload.get("fixture_manifest_bootstrap")
-    if not isinstance(fixture_manifest_bootstrap, bool):
-        raise RuntimeError(
-            "push-ready evidence fixture_manifest_bootstrap is invalid"
-        )
-    change = planned_change(
-        config,
-        fixture_manifest_bootstrap=fixture_manifest_bootstrap,
-    )
-    require_trusted_check_policy(
-        change,
-        allow_fixture_manifest_bootstrap=fixture_manifest_bootstrap,
-    )
+    change = planned_change(config)
     expected_integration = expected_integration_tree(change)
     expected = {
         "config_sha256": config_sha256(),
@@ -3742,9 +3055,7 @@ def verify_evidence(config: dict[str, Any]) -> dict[str, Any]:
         "parity_gaps": list(PARITY_GAPS),
         "remote_pr_review_authoritative": True,
         "push_scope": "clean-head",
-        "fixture_manifest_bootstrap": fixture_manifest_bootstrap,
         "evidence_trust": LOCAL_EVIDENCE_TRUST,
-        "local_ai_egress": "prohibited",
     }
     for key, value in expected.items():
         if payload.get(key) != value:
@@ -3902,8 +3213,8 @@ def verify_pre_push_updates(
             local_ref != expected_branch
             or remote_ref != expected_branch
             or not local_ref.startswith("refs/heads/")
-            or not is_full_git_object_id(local_oid)
-            or not is_full_git_object_id(remote_oid)
+            or not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", local_oid)
+            or not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", remote_oid)
         ):
             raise RuntimeError("pre-push received an unsafe ref update")
         if set(local_oid) == {"0"}:
@@ -3957,32 +3268,11 @@ def main() -> int:
         "--remote-url",
         help="remote URL supplied as pre-push hook argv[2]",
     )
-    parser.add_argument(
-        "--bootstrap-secret-fixtures",
-        dest="fixture_manifest_bootstrap",
-        action="store_true",
-        help=(
-            "review and evidence-bind one manifest-only classification of "
-            "synthetic lines that already exist on the authoritative base"
-        ),
-    )
     args = parser.parse_args()
     try:
         if args.base and args.command != "review":
             raise RuntimeError(
                 "--base is diagnostic-only and may be used only with `review`"
-            )
-        if args.fixture_manifest_bootstrap and args.command not in {
-            "review",
-            "push-ready",
-        }:
-            raise RuntimeError(
-                "--bootstrap-secret-fixtures may be used only with `review` "
-                "or `push-ready`"
-            )
-        if args.fixture_manifest_bootstrap and args.base:
-            raise RuntimeError(
-                "fixture manifest bootstrap may not override the authoritative base"
             )
         if args.command == "sync-instructions":
             sync_instructions()
@@ -4020,33 +3310,16 @@ def main() -> int:
             execute_integration_checks(config, change)
             return 0
         if args.command == "review":
-            if args.fixture_manifest_bootstrap:
-                require_clean_head()
-            change = planned_change(
-                config,
-                base_override=args.base,
-                fixture_manifest_bootstrap=args.fixture_manifest_bootstrap,
-            )
-            run_agent_reviews(
-                config,
-                change,
-                fixture_manifest_bootstrap=args.fixture_manifest_bootstrap,
-            )
-            print("Deterministic local review passed; no local AI was invoked.")
+            change = planned_change(config, base_override=args.base)
+            run_agent_reviews(config, change)
             return 0
         require_clean_head()
         original_head = git_output("rev-parse", "HEAD").strip()
         original_branch = current_branch_ref()
         original_tree_fingerprint = tree_fingerprint()
         refresh_authoritative_base(config)
-        change = planned_change(
-            config,
-            fixture_manifest_bootstrap=args.fixture_manifest_bootstrap,
-        )
-        require_trusted_check_policy(
-            change,
-            allow_fixture_manifest_bootstrap=args.fixture_manifest_bootstrap,
-        )
+        change = planned_change(config)
+        require_trusted_check_policy(change)
         started_at = now_utc()
         started = time.monotonic()
         (
@@ -4066,15 +3339,8 @@ def main() -> int:
             raise RuntimeError(
                 "deterministic checks changed the reviewed branch or Git tree"
             )
-        change = planned_change(
-            config,
-            fixture_manifest_bootstrap=args.fixture_manifest_bootstrap,
-        )
-        reviews = run_agent_reviews(
-            config,
-            change,
-            fixture_manifest_bootstrap=args.fixture_manifest_bootstrap,
-        )
+        change = planned_change(config)
+        reviews = run_agent_reviews(config, change)
         write_evidence(
             config,
             checks,
@@ -4085,7 +3351,6 @@ def main() -> int:
             integration_tree=integration_tree,
             integration_commit=integration_commit,
             integration_fingerprint=integration_fingerprint,
-            fixture_manifest_bootstrap=args.fixture_manifest_bootstrap,
         )
         verify_evidence(config)
         print(f"Push-ready evidence: {evidence_path()}")

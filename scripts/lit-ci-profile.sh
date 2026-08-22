@@ -89,20 +89,8 @@ else
 fi
 
 printf '==> Verify Codex and Copilot instruction binding\n'
-env \
-  CONTAINER_HOME=/tmp/wunder \
-  WUNDER_DEVTOOLS_CAP_ADD= \
-  WUNDER_DEVTOOLS_DOCKER_SOCKET=disabled \
-  WUNDER_DEVTOOLS_FORWARD_VAGRANT_SSH=disabled \
-  WUNDER_DEVTOOLS_MOUNT_SOURCE_ROOT=disabled \
-  WUNDER_DEVTOOLS_NETWORK=none \
-  WUNDER_DEVTOOLS_PRIVILEGED=0 \
-  WUNDER_DEVTOOLS_RUN_AS_HOST_UID=1 \
-  WUNDER_DEVTOOLS_WORKSPACE_MODE=ro \
-  CI=true \
-  GITHUB_ACTIONS= \
-  "$DEVTOOLS_WRAPPER" \
-  env \
+env -i \
+  PATH="$PATH" \
   LC_ALL=C \
   python3 scripts/lit-push-ready.py instructions
 
