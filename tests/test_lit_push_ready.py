@@ -72,9 +72,17 @@ class PushReadySecurityTests(unittest.TestCase):
             )
         self.assertIs(result, completed)
         self.assertNotIn("masked-value", " ".join(runner.call_args.args[0]))
+        environment = runner.call_args.kwargs["env"]
+        self.assertEqual("2", environment["GIT_CONFIG_COUNT"])
+        self.assertEqual("safe.directory", environment["GIT_CONFIG_KEY_0"])
+        self.assertEqual(str(ROOT), environment["GIT_CONFIG_VALUE_0"])
+        self.assertEqual(
+            "http.https://github.com/.extraheader",
+            environment["GIT_CONFIG_KEY_1"],
+        )
         self.assertEqual(
             "AUTHORIZATION: basic masked-value",
-            runner.call_args.kwargs["env"]["GIT_CONFIG_VALUE_0"],
+            environment["GIT_CONFIG_VALUE_1"],
         )
 
     def test_base_fetch_rejects_mismatched_fetch_and_push_repositories(self):

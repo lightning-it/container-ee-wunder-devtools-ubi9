@@ -178,9 +178,13 @@ Make it executable:
 chmod +x scripts/wunder-devtools-ee.sh
 ```
 
-Then use it in `pre-commit`, Makefiles or CI jobs to run `ansible-lint`, `yamllint`,
-`shellcheck`, `actionlint`, `terraform`, `tflint`, `terraform-docs`, `helm`,
-`copr-cli`, RPM tooling, and VM image tooling in a consistent environment.
+Then use it as the default execution boundary for local repository validation.
+The host supplies only Git, the container engine, and the wrapper; Python,
+Node.js, pre-commit, lint, type checking, and test commands run in the pinned
+image. The image includes `ansible-lint`, `yamllint`, `shellcheck`, `actionlint`,
+`ruff`, `mypy`, `markdownlint-cli2`, `renovate-config-validator`, `terraform`,
+`tflint`, `terraform-docs`, `helm`, `copr-cli`, RPM tooling, and VM image
+tooling so local and CI behavior do not depend on host language runtimes.
 
 ### Configure COPR from the container
 
