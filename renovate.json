@@ -160,6 +160,7 @@
         ".github/workflows/container-ci.yml",
         ".github/workflows/container-fuzz.yml",
         ".github/workflows/container-trivy.yml",
+        ".github/workflows/copilot-review-refresh.yml",
         ".github/workflows/copilot-review.yml",
         ".github/workflows/current-revision-rerun.yml",
         ".github/workflows/main-promotion-authorization.yml",

@@ -67,6 +67,31 @@ class ContainerFirstGovernanceContractTests(unittest.TestCase):
             agents,
         )
 
+    def test_late_review_refresh_is_managed_and_ai_request_free(self):
+        workflow_path = (
+            ROOT / ".github/workflows/copilot-review-refresh.yml"
+        )
+        self.assertTrue(workflow_path.is_file())
+        workflow = workflow_path.read_text(encoding="utf-8")
+        self.assertIn("pull_request_review:", workflow)
+        self.assertIn("pull_request_review_comment:", workflow)
+        self.assertIn("actions: write", workflow)
+        self.assertIn("checks: write", workflow)
+        self.assertNotIn("requested_reviewers", workflow)
+        renovate = json.loads(
+            (ROOT / "renovate.json").read_text(encoding="utf-8")
+        )
+        boundary = next(
+            rule
+            for rule in renovate["packageRules"]
+            if rule.get("description")
+            == "Do not update shared-assets-owned workflow files downstream"
+        )
+        self.assertIn(
+            ".github/workflows/copilot-review-refresh.yml",
+            boundary["matchFileNames"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
