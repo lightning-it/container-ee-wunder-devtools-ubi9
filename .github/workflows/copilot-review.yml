@@ -200,24 +200,12 @@ jobs:
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' &&
       (github.event.action == 'edited' ||
-        (((github.event.action == 'opened' ||
+        github.event.action == 'opened' ||
         github.event.action == 'synchronize' ||
         github.event.action == 'reopened' ||
-        github.event.action == 'ready_for_review') &&
-        github.event.pull_request.user.login != 'lightning-it-release-automation[bot]') ||
-        ((github.event.action == 'opened' ||
-          github.event.action == 'synchronize' ||
-          github.event.action == 'reopened' ||
-          github.event.action == 'ready_for_review') &&
-          github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' &&
-          github.event.pull_request.base.ref == 'develop' &&
-          startsWith(github.event.pull_request.head.ref, 'backmerge/') &&
-          endsWith(github.event.pull_request.head.ref, '-main') &&
-          startsWith(
-            github.event.pull_request.title,
-            'chore(governance): record main ancestry before '
-          ))))
+        github.event.action == 'ready_for_review')
     # Serialize every producer for this PR. Different event actions may overlap
     # at workflow level so the one-time Copilot request is never cancelled, but
     # no two verifier jobs may invalidate or publish the neutral check at once.
@@ -560,9 +548,8 @@ jobs:
               <<<"${live_pr}" >/dev/null; then
             trusted=true
             trusted_kind=repository-quality
-          elif { [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ] \
-              || { [ "${REPOSITORY}" = "lightning-it/.github" ] \
-                && [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ]; }; } \
+          elif [ "${REPOSITORY}" = "lightning-it/.github" ] \
+            && [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == backmerge/*-main ]] \
             && [ "${PR_BASE}" = "develop" ] \
@@ -1223,12 +1210,8 @@ jobs:
             external_kind="managed-sync"
             result_title="Current revision managed distribution exemption passed"
           elif [ "${TRUSTED_KIND}" = ancestry-backmerge ]; then
-            if [ "${author}" = 'lightning-it-release-automation[bot]' ]; then
-              :
-            else
-              test "${REPOSITORY}" = "lightning-it/.github"
-              test "${author}" = 'lightning-it-shared-assets-sync[bot]'
-            fi
+            test "${REPOSITORY}" = "lightning-it/.github"
+            test "${author}" = 'lightning-it-shared-assets-sync[bot]'
             test "${TRUSTED_KIND}" = ancestry-backmerge
             test "${base_ref}" = develop
             [[ "${EVENT_HEAD_REF}" == backmerge/*-main ]]

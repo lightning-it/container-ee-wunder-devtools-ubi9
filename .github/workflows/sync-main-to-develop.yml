@@ -19,8 +19,7 @@ jobs:
     name: Open main-to-develop sync PR
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
 
     steps:
       - name: Checkout
@@ -28,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ github.token }}
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Configure git author
         run: |
@@ -50,7 +49,7 @@ jobs:
         id: release-bot
         env:
           APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
         run: |
           set -euo pipefail
           bot_json="$(gh api "users/${APP_SLUG}%5Bbot%5D" 2>/dev/null || printf '{}')"
@@ -67,38 +66,21 @@ jobs:
         id: exact-review-target
         env:
           BOT_TOKEN: ${{ steps.release-app.outputs.token }}
-          GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          pr_token="${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
-          if [ -n "${BOT_TOKEN:-}" ]; then
-            if GH_TOKEN="$BOT_TOKEN" gh api 'users/lightning-it-release-automation%5Bbot%5D' --jq '.login' >/dev/null 2>&1; then
-              pr_token="$BOT_TOKEN"
-            else
-              echo "release automation App token is not valid; falling back to GITHUB_TOKEN."
-            fi
-          fi
+          pr_token="${BOT_TOKEN:?Release automation App token is required}"
+          test "$(GH_TOKEN="$pr_token" gh api \
+            'users/lightning-it-release-automation%5Bbot%5D' --jq .login)" = \
+            'lightning-it-release-automation[bot]'
+          token_header="$(printf 'x-access-token:%s' "$pr_token" | base64 -w0)"
+          echo "::add-mask::${token_header}"
 
-          if ! GH_TOKEN="$pr_token" gh auth status --hostname github.com >/dev/null 2>&1; then
-            echo "No valid GitHub token is available for main-to-develop sync PRs."
-            exit 1
-          fi
-
-          git fetch origin main develop
-          stable_sync_branch="chore/sync-main-to-develop"
-          stable_pr_url="$(GH_TOKEN="$pr_token" gh pr list \
-            --repo "$REPO" --base develop --head "$stable_sync_branch" \
-            --state open --json url --jq '.[0].url // empty')"
-
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${token_header}" \
+            fetch origin main develop
           if git merge-base --is-ancestor origin/main origin/develop; then
             echo "develop already contains main; nothing to sync."
-            if [ -n "$stable_pr_url" ]; then
-              GH_TOKEN="$pr_token" gh pr close "$stable_pr_url" \
-                --repo "$REPO" \
-                --comment "Closing empty back-sync PR: develop already contains main."
-            fi
             exit 0
           fi
 
@@ -106,30 +88,28 @@ jobs:
           develop_short="$(git rev-parse --short=12 origin/develop)"
           git checkout --detach origin/develop
           git merge --no-ff origin/main -m "chore: sync main back to develop"
-          sync_branch="$stable_sync_branch"
+          sync_branch="backmerge/container-${main_short}-${develop_short}-main"
           title="chore: sync main back to develop"
           body=$'Back-sync PR from `main` to `develop`.\n\n'
           body+=$'This keeps `develop` ancestry current after a production '
           body+=$'promotion merge into `main`, so the next `develop` to `main` '
           body+=$'promotion PR can open cleanly.'
-          superseded_pr_url=""
           if git diff --quiet origin/develop HEAD; then
-            sync_branch="backmerge/container-${main_short}-${develop_short}-main"
             title="chore(governance): record main ancestry before ${main_short}"
             body='Automated develop-tree-preserving ancestry backmerge after a protected main promotion.'
-            superseded_pr_url="$stable_pr_url"
           fi
 
           pr_url="$(GH_TOKEN="$pr_token" gh pr list \
             --repo "$REPO" --base develop --head "$sync_branch" \
             --state open --json url --jq '.[0].url // empty')"
-          remote_head="$(git ls-remote --heads origin "refs/heads/${sync_branch}" | awk '{print $1}')"
+          remote_head="$(git \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${token_header}" \
+            ls-remote --heads origin "refs/heads/${sync_branch}" | awk '{print $1}')"
           if [ -n "$remote_head" ]; then
-            git push \
-              --force-with-lease="refs/heads/${sync_branch}:${remote_head}" \
-              origin "HEAD:refs/heads/${sync_branch}"
+            test "$remote_head" = "$(git rev-parse HEAD)"
           else
-            git push origin "HEAD:refs/heads/${sync_branch}"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${token_header}" \
+              push origin "HEAD:refs/heads/${sync_branch}"
           fi
 
           if [ -z "$pr_url" ]; then
@@ -167,8 +147,70 @@ jobs:
             echo "expected_base=$(jq -r .baseRefOid <<<"$sync_pr")"
             echo "expected_head=$(jq -r .headRefOid <<<"$sync_pr")"
           } >>"$GITHUB_OUTPUT"
-          if [ -n "$superseded_pr_url" ]; then
-            GH_TOKEN="$pr_token" gh pr close "$superseded_pr_url" \
-              --repo "$REPO" \
-              --comment "Superseded by exact file-identical ancestry backmerge ${sync_branch}."
+
+      - name: Mint protected review dispatch token
+        if: steps.exact-review-target.outputs.pr_number != ''
+        id: review-dispatch-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: write
+          permission-contents: read
+
+      - name: Dispatch protected Exact-Revision review
+        if: steps.exact-review-target.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ steps.review-dispatch-app.outputs.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.exact-review-target.outputs.pr_number }}
+          BASE_REF: ${{ steps.exact-review-target.outputs.base_ref }}
+          EXPECTED_BASE: ${{ steps.exact-review-target.outputs.expected_base }}
+          EXPECTED_HEAD: ${{ steps.exact-review-target.outputs.expected_head }}
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_BASE}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ ]]
+          gh workflow run release-bot-exact-head-review.yml \
+            --repo "${REPOSITORY}" \
+            --ref "${BASE_REF}" \
+            -f "pr_number=${PR_NUMBER}" \
+            -f "base_ref=${BASE_REF}" \
+            -f "expected_base=${EXPECTED_BASE}" \
+            -f "expected_head=${EXPECTED_HEAD}"
+
+      - name: Enable protected ancestry auto-merge
+        if: steps.exact-review-target.outputs.pr_number != ''
+        env:
+          EXPECTED_BASE: ${{ steps.exact-review-target.outputs.expected_base }}
+          EXPECTED_HEAD: ${{ steps.exact-review-target.outputs.expected_head }}
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
+          PR_NUMBER: ${{ steps.exact-review-target.outputs.pr_number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pr_details="$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" \
+            --json author,autoMergeRequest,baseRefName,baseRefOid,headRefOid,id,isDraft,state)"
+          jq -e \
+            --arg base "${EXPECTED_BASE}" \
+            --arg head "${EXPECTED_HEAD}" '
+              .author.login == "app/lightning-it-release-automation"
+              and .state == "OPEN"
+              and .isDraft == false
+              and .baseRefName == "develop"
+              and .baseRefOid == $base
+              and .headRefOid == $head
+            ' <<<"${pr_details}" >/dev/null
+          if [ "$(jq -r '.autoMergeRequest != null' <<<"${pr_details}")" = false ]; then
+            pr_id="$(jq -er .id <<<"${pr_details}")"
+            query="mutation(\$pr:ID!){enablePullRequestAutoMerge("
+            query+="input:{pullRequestId:\$pr,mergeMethod:MERGE}){"
+            query+="pullRequest{autoMergeRequest{enabledAt}}}}"
+            gh api graphql \
+              -f query="${query}" \
+              -f pr="${pr_id}" \
+              --jq '.data.enablePullRequestAutoMerge.pullRequest.autoMergeRequest != null' \
+              | grep -qx true
           fi
