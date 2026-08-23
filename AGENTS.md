@@ -124,7 +124,7 @@
   capability-dropped, and non-privileged; grant only a gate's explicit tested
   minimum. Linked-worktree Git metadata stays read-only and container Git may
   trust only `/workspace`, never `*`. Executable temporary fixtures use the
-  isolated container home while generic `/tmp` remains `noexec`.
+  isolated container home while generic `/tmp` remains non-executable.
 - BuildKit cache pruning is GitHub Actions cleanup, not a local validation
   result. Local runs retain their developer cache.
 - `AGENTS.md` is the canonical Codex and Copilot contract.
