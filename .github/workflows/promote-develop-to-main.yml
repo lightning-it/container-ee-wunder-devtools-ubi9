@@ -160,6 +160,7 @@ jobs:
 
           expected_head="$(git rev-parse origin/develop)"
           head_marker="<!-- lit-promotion-head:${expected_head} -->"
+          dispatch_review=false
           pr_number="$(
             gh pr list \
               --repo "${REPOSITORY}" \
@@ -201,6 +202,7 @@ jobs:
                 --body "${body}"
             )"
             pr_number="${pr_url##*/}"
+            dispatch_review=true
           fi
 
           promotion="$(gh pr view "${pr_number}" \
@@ -235,11 +237,16 @@ jobs:
             echo "base_ref=$(jq -r .baseRefName <<<"${promotion}")"
             echo "expected_base=$(jq -r .baseRefOid <<<"${promotion}")"
             echo "expected_head=$(jq -r .headRefOid <<<"${promotion}")"
+            echo "dispatch_review=${dispatch_review}"
           } >>"${GITHUB_OUTPUT}"
-          echo "Promotion PR ${pr_number} is ready for protected Human approval and Current-Head checks."
+          if [ "${dispatch_review}" = true ]; then
+            echo "Promotion PR ${pr_number} is ready for protected Human approval and its one Exact-Revision review."
+          else
+            echo "Promotion PR ${pr_number} already exists; automatic review redispatch is forbidden."
+          fi
 
       - name: Mint protected review dispatch token
-        if: steps.exact-review-target.outputs.pr_number != ''
+        if: steps.exact-review-target.outputs.dispatch_review == 'true'
         id: review-dispatch-app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
@@ -251,7 +258,7 @@ jobs:
           permission-contents: read
 
       - name: Dispatch protected Exact-Revision review
-        if: steps.exact-review-target.outputs.pr_number != ''
+        if: steps.exact-review-target.outputs.dispatch_review == 'true'
         env:
           GH_TOKEN: ${{ steps.review-dispatch-app.outputs.token }}
           REPOSITORY: ${{ github.repository }}
