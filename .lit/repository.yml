@@ -28,6 +28,7 @@ galaxy_publish: false
 quay_publish: true
 release_evidence: true
 heavy_incus_required: false
+preserve_main_merge_ancestry: true
 trivy_required: true
 trivy_release_gate: true
 containerfile: Dockerfile

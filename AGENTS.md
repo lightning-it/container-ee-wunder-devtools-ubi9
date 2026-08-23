@@ -28,8 +28,6 @@
   - `scripts/lit-ci-profile.sh`
   - `.github/workflows/container-ci.yml`
   - `.github/workflows/container-build-publish.yml`
-  - `.github/workflows/promote-develop-to-main.yml`
-  - `.github/workflows/sync-main-to-develop.yml`
   - `.github/workflows/renovate-guarded-automerge.yml`
   - `.github/workflows/shared-assets-guarded-automerge.yml`
   - `.github/workflows/semantic-release.yml`
@@ -81,6 +79,10 @@
   invocation; prerequisite checkout/ref-refresh steps may precede it, but must
   not duplicate the parity script. Add new PR checks to the parity script first
   so local validation and GitHub validation stay aligned.
+- Promotion and ancestry-backmerge controllers are not copied from
+  `container/base`. The protected synchronizer renders the canonical root
+  promotion workflow to an exact target-repository binding and installs the
+  canonical `default` backmerge workflow only after a fail-closed preflight.
 - Container vulnerability scans fail on `CRITICAL` findings and report `HIGH` findings without failing unless a stricter
   policy is deliberately added in `shared-assets-lit`.
 - Dockerfiles must not download executable tools without checksum or signature verification. Use the shared
