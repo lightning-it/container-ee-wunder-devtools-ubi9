@@ -1,6 +1,3 @@
-# pnpm 11 reads project settings, including overrides and supply-chain policy,
-# from this file. Keep this manifest root-only; no nested workspace packages are
-# part of the immutable validation toolchain.
 packages: []
 
 minimumReleaseAge: 1440
@@ -16,4 +13,4 @@ overrides:
   brace-expansion: 5.0.9
   ip-address: 10.3.1
   "markdownlint-cli2>js-yaml": 5.2.2
-  tar: 7.5.21
+  tar: 7.5.22
