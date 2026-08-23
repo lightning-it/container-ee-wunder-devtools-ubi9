@@ -83,8 +83,10 @@
   `container/base`. The protected synchronizer renders the canonical root
   promotion workflow to an exact target-repository binding and installs the
   canonical `default` backmerge workflow only after a fail-closed preflight.
-- Container vulnerability scans fail on `CRITICAL` findings and report `HIGH` findings without failing unless a stricter
-  policy is deliberately added in `shared-assets-lit`.
+- Container vulnerability scans fail on every fixed `HIGH` or `CRITICAL`
+  finding. Exceptions require a versioned, evidence-bound VEX or exact ignore
+  entry owned centrally in `shared-assets-lit`; report-only HIGH findings are
+  forbidden.
 - Dockerfiles must not download executable tools without checksum or signature verification. Use the shared
   `scripts/container-download-verified.sh` helper when possible.
 - Larger entrypoints and repeated build helpers should be tracked scripts, not embedded heredocs, so shell linting and
