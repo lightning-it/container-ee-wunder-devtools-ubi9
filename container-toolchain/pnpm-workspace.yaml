@@ -1,3 +1,8 @@
+# pnpm 11 reads project settings, including overrides and supply-chain policy,
+# from this file. Keep this manifest root-only; no nested workspace packages are
+# part of the immutable validation toolchain.
+packages: []
+
 minimumReleaseAge: 1440
 minimumReleaseAgeStrict: true
 minimumReleaseAgeIgnoreMissingTime: false
