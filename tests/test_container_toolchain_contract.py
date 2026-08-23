@@ -50,7 +50,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertEqual("pnpm@11.22.0", container_package["packageManager"])
         self.assertEqual("11.22.0", container_package["dependencies"]["pnpm"])
         self.assertEqual(
-            "5.2.2",
+            "5.3.0",
             pnpm_workspace["overrides"]["markdownlint-cli2>js-yaml"],
         )
         for package, version in (
