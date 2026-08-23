@@ -174,6 +174,13 @@
   pull-through `scripts/devtools-container-ci.sh` from its repository-specific
   override. Make those changes in `shared-assets-lit` first; never hand-edit
   the downstream managed copies.
+- When that repository's installed push-ready engine differs from the
+  protected canonical engine, the shared-assets App first opens a policy-only
+  bootstrap containing exactly the engine, `.lit/push-ready.json`, this
+  `AGENTS.md`, and the rebound Copilot instructions. A later protected source
+  run performs the full runtime sync only after the bootstrap is part of the
+  target base; the two phases must never be collapsed past the 200,000-byte
+  fail-closed review limit.
 - `container-ee-wunder-ansible-ubi9` receives its MLX-90 chain only from the
   repository-specific override. Its repo-specific `.releaserc` is a read-only
   version-and-notes plan: the release App persists the draft before it creates
