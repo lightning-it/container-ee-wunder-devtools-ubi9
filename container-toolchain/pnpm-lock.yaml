@@ -14,18 +14,30 @@ importers:
 
   .:
     dependencies:
+      brace-expansion:
+        specifier: 5.0.9
+        version: 5.0.9
+      ip-address:
+        specifier: 10.3.1
+        version: 10.3.1
       markdownlint-cli2:
         specifier: 0.23.0
         version: 0.23.0(supports-color@7.2.0)
       npm:
         specifier: 12.0.2
         version: 12.0.2
+      pnpm:
+        specifier: 11.22.0
+        version: 11.22.0
       prettier:
         specifier: 3.9.5
         version: 3.9.5
       renovate:
         specifier: 43.288.0
         version: 43.288.0(supports-color@7.2.0)(typanion@3.14.0)
+      tar:
+        specifier: 7.5.21
+        version: 7.5.21
 
 packages:
 
@@ -1304,6 +1316,10 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
+  ip-address@10.3.1:
+    resolution: {integrity: sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g==}
+    engines: {node: '>= 12'}
+
   is-alphabetical@2.0.1:
     resolution: {integrity: sha512-FWyyY60MeTNyeSRpkM2Iry0G9hpr7/9kD40mD/cGQEuilcZYS4okz8SN2Q6rLCJ8gbCt6fN+rC+6tMGS99LaxQ==}
 
@@ -1997,6 +2013,11 @@ packages:
   picomatch@4.0.5:
     resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
+
+  pnpm@11.22.0:
+    resolution: {integrity: sha512-H/hwxMYTPf2I+yr8Rt0T1H8JyXlLQ4xv20fKmMrzvBY4HuC+k6CRuOOCTPAfiJ9G19niCRD7C+GrD7W6qA3WIQ==}
+    engines: {node: '>=22.13'}
+    hasBin: true
 
   prettier@3.8.1:
     resolution: {integrity: sha512-UOnG6LftzbdaHZcKoPFtOcCKztrQ57WkHDeRD9t/PTQtmT0NHSeWWepj6pS0z/N7+08BHFDQVUrfmfMRcZwbMg==}
@@ -4053,6 +4074,8 @@ snapshots:
   install-artifact-from-github@1.8.0:
     optional: true
 
+  ip-address@10.3.1: {}
+
   is-alphabetical@2.0.1: {}
 
   is-alphanumerical@2.0.1:
@@ -4826,6 +4849,8 @@ snapshots:
 
   picomatch@4.0.5:
     optional: true
+
+  pnpm@11.22.0: {}
 
   prettier@3.8.1: {}
 
