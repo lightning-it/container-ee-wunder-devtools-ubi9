@@ -110,6 +110,21 @@
   Devtool wrapper. It uses a required local container socket, bridge networking,
   and a read-write workspace only for the nested build/test lifecycle, then
   fails if that lifecycle leaves any Git worktree change behind.
+- The Devtools image is the mandatory execution environment for every
+  deterministic lint, format, type-check, test, build, packaging, policy, and
+  validation command. The host supplies only Git, the supported container
+  engine, and the managed Devtools, push-ready, and pre-commit dispatchers. A
+  dispatcher may inspect Git state and start the pinned container; it may not
+  run a repository validator on the host. Host language runtimes are never
+  valid acceptance evidence.
+- If the image lacks a command or compatible version, fail closed and update,
+  normally release, and centrally repin the image before rerunning the gate.
+  Never use a host fallback, ad-hoc virtual environment, or unpinned helper
+  image. Keep the default container read-only, offline, socket-free,
+  capability-dropped, and non-privileged; grant only a gate's explicit tested
+  minimum. Linked-worktree Git metadata stays read-only and container Git may
+  trust only `/workspace`, never `*`. Executable temporary fixtures use the
+  isolated container home while generic `/tmp` remains `noexec`.
 - BuildKit cache pruning is GitHub Actions cleanup, not a local validation
   result. Local runs retain their developer cache.
 - `AGENTS.md` is the canonical Codex and Copilot contract.

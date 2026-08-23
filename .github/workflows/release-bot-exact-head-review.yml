@@ -415,6 +415,161 @@ jobs:
               and .app.slug == "github-actions"
             ' <<<"${reservation}" >/dev/null
 
+      - name: Reserve neutral result before protected review
+        id: neutral
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN_ID: ${{ steps.dedupe.outputs.producer_run_id }}
+          REUSE_PROTECTED_PASS: ${{ steps.dedupe.outputs.reuse }}
+        run: |
+          set -euo pipefail
+          input_sha256="$(jq -er .input_sha256 exact-revision-review/review-metadata.json)"
+          [[ "${PRODUCER_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          external_id="mlx90-current-revision:v4:${PRODUCER_RUN_ID}:${input_sha256}"
+          echo "external_id=${external_id}" >>"${GITHUB_OUTPUT}"
+          summary="$(jq -cn \
+            --arg head "${EXPECTED_HEAD}" \
+            --arg input_sha256 "${input_sha256}" \
+            --argjson pr_number "${PR_NUMBER}" \
+            --argjson producer_run_id "${PRODUCER_RUN_ID}" \
+            '{schema:"rep60-neutral-reservation/v1",head_sha:$head,
+              input_sha256:$input_sha256,pull_request_number:$pr_number,
+              producer_run_id:$producer_run_id}')"
+          read_neutral_checks() {
+            gh api --paginate --slurp \
+              "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100"
+          }
+          api_patch() {
+            local attempt output
+            for attempt in $(seq 1 5); do
+              if output="$(gh api --method PATCH "$@")"; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                echo "GitHub API patch failed after five attempts." >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
+          neutral_checks="$(read_neutral_checks)"
+          matching="$(jq -c \
+            --arg head "${EXPECTED_HEAD}" '
+              [.[].check_runs[]? |
+                select(.name == "Current revision review") |
+                select(.app.id == 15368 and .app.slug == "github-actions") |
+                select(.head_sha == $head)]
+            ' <<<"${neutral_checks}")"
+          count="$(jq 'length' <<<"${matching}")"
+          if [ "${count}" -gt 1 ]; then
+            echo "Multiple neutral reservations exist for this head." >&2
+            exit 1
+          fi
+          if [ "${count}" -eq 1 ]; then
+            check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${matching}")"
+            echo "check_id=${check_id}" >>"${GITHUB_OUTPUT}"
+            check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
+            jq -e \
+              --arg external_id "${external_id}" \
+              --arg head "${EXPECTED_HEAD}" \
+              --argjson check_id "${check_id}" '
+                .[0].id == $check_id
+                and .[0].name == "Current revision review"
+                and .[0].app.id == 15368
+                and .[0].app.slug == "github-actions"
+                and .[0].head_sha == $head
+                and .[0].external_id == $external_id
+                and (.[0].status == "in_progress" or .[0].status == "completed")
+              ' <<<"${matching}" >/dev/null
+            repaired="$(api_patch "repos/${REPOSITORY}/check-runs/${check_id}" \
+              -f "details_url=${check_url}")"
+            status="$(jq -er '.status | select(type == "string")' <<<"${repaired}")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"${repaired}")"
+            if [ "${status}" = completed ] && [ "${conclusion}" = failure ]; then
+              test "${REUSE_PROTECTED_PASS}" = true
+            elif [ "${status}" = completed ]; then
+              test "${conclusion}" = success
+            else
+              test "${status}" = in_progress
+            fi
+            jq -e \
+              --arg external_id "${external_id}" \
+              --arg head "${EXPECTED_HEAD}" \
+              --arg url "${check_url}" \
+              --argjson check_id "${check_id}" '
+                .id == $check_id
+                and .name == "Current revision review"
+                and .app.id == 15368
+                and .app.slug == "github-actions"
+                and .head_sha == $head
+                and .details_url == $url
+                and .external_id == $external_id
+                and (.status == "in_progress" or .status == "completed")
+              ' <<<"${repaired}" >/dev/null
+            exit 0
+          fi
+          created=''
+          if ! created="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
+              -f name='Current revision review' \
+              -f head_sha="${EXPECTED_HEAD}" \
+              -f status=in_progress \
+              -f external_id="${external_id}" \
+              -f 'output[title]=Protected neutral result reserved before review' \
+              -f "output[summary]=${summary}")"; then
+            for recovery_attempt in $(seq 1 5); do
+              echo "Recovering neutral reservation creation outcome (attempt ${recovery_attempt}/5)." >&2
+              sleep 5
+              if ! neutral_checks="$(read_neutral_checks)"; then
+                echo "Neutral reservation recovery read failed; continuing bounded recovery." >&2
+                continue
+              fi
+              recovered="$(jq -c \
+                --arg external_id "${external_id}" \
+                --arg head "${EXPECTED_HEAD}" '
+                  [.[].check_runs[]? |
+                    select(.name == "Current revision review") |
+                    select(.app.id == 15368 and .app.slug == "github-actions") |
+                    select(.head_sha == $head and .external_id == $external_id)]
+                ' <<<"${neutral_checks}")"
+              if [ "$(jq 'length' <<<"${recovered}")" -gt 1 ]; then
+                echo "Ambiguous neutral reservation creation outcome." >&2
+                exit 1
+              fi
+              if [ "$(jq 'length' <<<"${recovered}")" -eq 1 ]; then
+                created="$(jq -c '.[0]' <<<"${recovered}")"
+                break
+              fi
+            done
+            if [ -z "${created}" ]; then
+              echo "Neutral reservation creation failed without one materialized exact result." >&2
+              exit 1
+            fi
+          fi
+          check_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${created}")"
+          {
+            echo "check_id=${check_id}"
+          } >>"${GITHUB_OUTPUT}"
+          check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
+          created="$(api_patch "repos/${REPOSITORY}/check-runs/${check_id}" \
+            -f "details_url=${check_url}")"
+          jq -e \
+            --arg external_id "${external_id}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --arg summary "${summary}" \
+            --arg url "${check_url}" \
+            --argjson check_id "${check_id}" '
+              .id == $check_id
+              and .name == "Current revision review"
+              and .app.id == 15368
+              and .app.slug == "github-actions"
+              and .head_sha == $head
+              and .details_url == $url
+              and .external_id == $external_id
+              and .status == "in_progress"
+              and .output.summary == $summary
+            ' <<<"${created}" >/dev/null
+
       - name: Run protected history-free Exact-Revision Codex review
         if: steps.dedupe.outputs.reuse != 'true'
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
@@ -433,22 +588,10 @@ jobs:
       - name: Re-prove exact revision and enforce the Codex verdict
         env:
           GH_TOKEN: ${{ github.token }}
+          NEUTRAL_CHECK_ID: ${{ steps.neutral.outputs.check_id }}
+          EXPECTED_NEUTRAL_EXTERNAL_ID: ${{ steps.neutral.outputs.external_id }}
         run: |
           set -euo pipefail
-          api_read() {
-            local attempt output
-            for attempt in $(seq 1 5); do
-              if output="$(gh api "$@")"; then
-                printf '%s' "${output}"
-                return 0
-              fi
-              if [ "${attempt}" -eq 5 ]; then
-                echo "GitHub API read failed after five attempts." >&2
-                return 1
-              fi
-              sleep 5
-            done
-          }
           api_patch() {
             local attempt output
             for attempt in $(seq 1 5); do
@@ -570,127 +713,38 @@ jobs:
               ' <<<"${finalized}" >/dev/null
             test "${conclusion}" = success
           fi
-          publish_once() {
-            local check_name="$1" external_id="$2" title="$3"
-            local checks named count check_id check_url completed_at created
-            local recovered recovery_attempt updated
-            read_named_checks() {
-              checks="$(api_read --paginate --slurp \
-                "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=$(jq -rn --arg value "${check_name}" '$value|@uri')&filter=all&per_page=100")" || return 1
-              jq -c \
-                --arg name "${check_name}" \
-                '[.[].check_runs[]? |
-                  select(.name == $name) |
-                  select(.app.id == 15368 and .app.slug == "github-actions")]' \
-                <<<"${checks}"
-            }
-            named="$(read_named_checks)"
-            count="$(jq 'length' <<<"${named}")"
-            if [ "${count}" -gt 1 ]; then
-              echo "Multiple ${check_name} checks exist for this head." >&2
-              exit 1
-            fi
-            if [ "${count}" -eq 1 ]; then
-              check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${named}")"
-              check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
-              # A new bound producer must refresh the terminal timestamp. GitHub's
-              # strict status policy can otherwise retain the check as expected.
-              completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-              updated="$(api_patch "repos/${REPOSITORY}/check-runs/${check_id}" \
-                -f status=completed \
-                -f conclusion=success \
-                -f "completed_at=${completed_at}" \
-                -f "details_url=${check_url}" \
-                -f "external_id=${external_id}" \
-                -f "output[title]=${title}" \
-                -f "output[summary]=${evidence}")"
-              jq -e \
-                --arg check_name "${check_name}" \
-                --arg completed_at "${completed_at}" \
-                --arg evidence "${evidence}" \
-                --arg external_id "${external_id}" \
-                --arg head "${EXPECTED_HEAD}" \
-                --arg url "${check_url}" \
-                --argjson check_id "${check_id}" '
-                  .id == $check_id
-                  and .name == $check_name
-                  and .app.id == 15368
-                  and .app.slug == "github-actions"
-                  and .head_sha == $head
-                  and .details_url == $url
-                  and .external_id == $external_id
-                  and .completed_at == $completed_at
-                  and .status == "completed"
-                  and .conclusion == "success"
-                  and .output.summary == $evidence
-                ' <<<"${updated}" >/dev/null
-              return
-            fi
-            if ! created="$(gh api --method POST "repos/${REPOSITORY}/check-runs" \
-                -f name="${check_name}" \
-                -f head_sha="${EXPECTED_HEAD}" \
-                -f status=completed \
-                -f conclusion=success \
-                -f external_id="${external_id}" \
-                -f "output[title]=${title}" \
-                -f "output[summary]=${evidence}")"; then
-              # Never retry a create blindly: GitHub can materialize the check
-              # even when the client receives a non-success response. Recover
-              # only one exact app/head/external-id result.
-              created=''
-              for recovery_attempt in $(seq 1 5); do
-                echo "Recovering protected check creation outcome (attempt ${recovery_attempt}/5)." >&2
-                sleep 5
-                named="$(read_named_checks)"
-                recovered="$(jq -c \
-                  --arg external_id "${external_id}" \
-                  --arg head "${EXPECTED_HEAD}" '
-                    [.[] |
-                      select(.head_sha == $head) |
-                      select(.external_id == $external_id)]
-                  ' <<<"${named}")"
-                if [ "$(jq 'length' <<<"${named}")" -gt 1 ] \
-                  || [ "$(jq 'length' <<<"${recovered}")" -gt 1 ]; then
-                  echo "Ambiguous protected check creation outcome." >&2
-                  return 1
-                fi
-                if [ "$(jq 'length' <<<"${recovered}")" -eq 1 ]; then
-                  created="$(jq -c '.[0]' <<<"${recovered}")"
-                  break
-                fi
-              done
-              if [ -z "${created}" ]; then
-                echo "Protected check creation failed without a materialized exact result." >&2
-                return 1
-              fi
-            fi
-            check_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${created}")"
-            check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
-            created="$(api_patch "repos/${REPOSITORY}/check-runs/${check_id}" \
-              -f "details_url=${check_url}")"
-            jq -e \
-              --arg check_name "${check_name}" \
-              --arg evidence "${evidence}" \
-              --arg external_id "${external_id}" \
-              --arg head "${EXPECTED_HEAD}" \
-              --arg url "${check_url}" \
-              --argjson check_id "${check_id}" '
-                .id == $check_id
-                and .name == $check_name
-                and .app.id == 15368
-                and .app.slug == "github-actions"
-                and .head_sha == $head
-                and .details_url == $url
-                and .external_id == $external_id
-                and .status == "completed"
-                and .conclusion == "success"
-                and .output.summary == $evidence
-              ' <<<"${created}" >/dev/null
-          }
-          publish_once \
-            'Current revision review' \
-            "mlx90-current-revision:v4:${producer_run_id}:${input_sha256}" \
-            'Protected Exact-Revision Codex review passed'
+          [[ "${NEUTRAL_CHECK_ID}" =~ ^[1-9][0-9]*$ ]]
+          expected_neutral_external_id="mlx90-current-revision:v4:${producer_run_id}:${input_sha256}"
+          test "${EXPECTED_NEUTRAL_EXTERNAL_ID}" = "${expected_neutral_external_id}"
+          neutral_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${NEUTRAL_CHECK_ID}"
+          completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          neutral="$(api_patch "repos/${REPOSITORY}/check-runs/${NEUTRAL_CHECK_ID}" \
+            -f status=completed \
+            -f conclusion=success \
+            -f "completed_at=${completed_at}" \
+            -f "details_url=${neutral_url}" \
+            -f "external_id=${expected_neutral_external_id}" \
+            -f 'output[title]=Protected Exact-Revision Codex review passed' \
+            -f "output[summary]=${evidence}")"
+          jq -e \
+            --arg completed_at "${completed_at}" \
+            --arg evidence "${evidence}" \
+            --arg external_id "${expected_neutral_external_id}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --arg url "${neutral_url}" \
+            --argjson check_id "${NEUTRAL_CHECK_ID}" '
+              .id == $check_id
+              and .name == "Current revision review"
+              and .app.id == 15368
+              and .app.slug == "github-actions"
+              and .head_sha == $head
+              and .details_url == $url
+              and .external_id == $external_id
+              and .completed_at == $completed_at
+              and .status == "completed"
+              and .conclusion == "success"
+              and .output.summary == $evidence
+            ' <<<"${neutral}" >/dev/null
 
       - name: Fail-close an unfinished protected reservation
         if: >-
@@ -704,8 +758,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          api_read() {
+            local attempt output
+            for attempt in $(seq 1 5); do
+              if output="$(gh api "$@")"; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                echo "GitHub API read failed after five attempts." >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
+          api_patch() {
+            local attempt output
+            for attempt in $(seq 1 5); do
+              if output="$(gh api --method PATCH "$@")"; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                echo "GitHub API patch failed after five attempts." >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
           [[ "${CHECK_ID}" =~ ^[1-9][0-9]*$ ]]
-          reservation="$(gh api "repos/${REPOSITORY}/check-runs/${CHECK_ID}")"
+          reservation="$(api_read "repos/${REPOSITORY}/check-runs/${CHECK_ID}")"
           jq -e \
             --arg external_id "${EXPECTED_EXTERNAL_ID}" \
             --arg head "${EXPECTED_HEAD}" \
@@ -724,7 +806,7 @@ jobs:
             exit 0
           fi
           failure_evidence="The protected producer run ${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID} ended before finalizing this immutable reservation."
-          reservation="$(gh api --method PATCH \
+          reservation="$(api_patch \
             "repos/${REPOSITORY}/check-runs/${CHECK_ID}" \
             -f status=completed \
             -f conclusion=failure \
@@ -736,6 +818,125 @@ jobs:
             --argjson check_id "${CHECK_ID}" '
               .id == $check_id
               and .name == "Protected Exact-Revision Codex result"
+              and .app.id == 15368
+              and .app.slug == "github-actions"
+              and .head_sha == $head
+              and .external_id == $external_id
+              and .status == "completed"
+              and .conclusion == "failure"
+            ' <<<"${reservation}" >/dev/null
+
+      - name: Fail-close an unfinished neutral reservation
+        if: always() && steps.neutral.outputs.external_id != ''
+        env:
+          CHECK_ID: ${{ steps.neutral.outputs.check_id }}
+          EXPECTED_EXTERNAL_ID: ${{ steps.neutral.outputs.external_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api_read() {
+            local attempt output
+            for attempt in $(seq 1 5); do
+              if output="$(gh api "$@")"; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                echo "GitHub API read failed after five attempts." >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
+          api_patch() {
+            local attempt output
+            for attempt in $(seq 1 5); do
+              if output="$(gh api --method PATCH "$@")"; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                echo "GitHub API patch failed after five attempts." >&2
+                return 1
+              fi
+              sleep 5
+            done
+          }
+          [[ "${EXPECTED_EXTERNAL_ID}" =~ ^mlx90-current-revision:v4:[1-9][0-9]*:[0-9a-f]{64}$ ]]
+          check_id="${CHECK_ID}"
+          if [ -n "${check_id}" ]; then
+            [[ "${check_id}" =~ ^[1-9][0-9]*$ ]]
+          else
+            successful_discovery_reads=0
+            for discovery_attempt in $(seq 1 5); do
+              if neutral_pages="$(gh api --paginate --slurp \
+                  "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"; then
+                successful_discovery_reads=$((successful_discovery_reads + 1))
+                discovered="$(jq -c \
+                  --arg external_id "${EXPECTED_EXTERNAL_ID}" \
+                  --arg head "${EXPECTED_HEAD}" '
+                    [.[].check_runs[]? |
+                      select(.name == "Current revision review") |
+                      select(.app.id == 15368 and .app.slug == "github-actions") |
+                      select(.head_sha == $head and .external_id == $external_id)]
+                  ' <<<"${neutral_pages}")"
+                discovered_count="$(jq 'length' <<<"${discovered}")"
+                if [ "${discovered_count}" -gt 1 ]; then
+                  echo "Multiple exact neutral reservations were discovered during cleanup." >&2
+                  exit 1
+                fi
+                if [ "${discovered_count}" -eq 1 ]; then
+                  check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' \
+                    <<<"${discovered}")"
+                  break
+                fi
+              else
+                echo "Neutral cleanup discovery read failed (attempt ${discovery_attempt}/5)." >&2
+              fi
+              if [ "${discovery_attempt}" -lt 5 ]; then
+                sleep 5
+              fi
+            done
+            if [ -z "${check_id}" ]; then
+              if [ "${successful_discovery_reads}" -eq 0 ]; then
+                echo "Neutral cleanup could not observe GitHub after five attempts." >&2
+                exit 1
+              fi
+              echo "No materialized exact neutral reservation requires cleanup."
+              exit 0
+            fi
+          fi
+          reservation="$(api_read "repos/${REPOSITORY}/check-runs/${check_id}")"
+          jq -e \
+            --arg external_id "${EXPECTED_EXTERNAL_ID}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --argjson check_id "${check_id}" '
+              .id == $check_id
+              and .name == "Current revision review"
+              and .app.id == 15368
+              and .app.slug == "github-actions"
+              and .head_sha == $head
+              and .external_id == $external_id
+              and (.status == "in_progress" or .status == "completed")
+            ' <<<"${reservation}" >/dev/null
+          if [ "$(jq -r .status <<<"${reservation}")" = completed ]; then
+            jq -e '.conclusion == "success" or .conclusion == "failure"' \
+              <<<"${reservation}" >/dev/null
+            exit 0
+          fi
+          failure_evidence="The protected producer run ${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID} ended before finalizing this pre-reserved neutral result."
+          reservation="$(api_patch \
+            "repos/${REPOSITORY}/check-runs/${check_id}" \
+            -f status=completed \
+            -f conclusion=failure \
+            -f 'output[title]=Protected neutral result failed closed' \
+            -f "output[summary]=${failure_evidence}")"
+          jq -e \
+            --arg external_id "${EXPECTED_EXTERNAL_ID}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --argjson check_id "${check_id}" '
+              .id == $check_id
+              and .name == "Current revision review"
               and .app.id == 15368
               and .app.slug == "github-actions"
               and .head_sha == $head
