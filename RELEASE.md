@@ -20,6 +20,9 @@ This repository follows the Lightning IT shared release and quality model.
 - A `develop` to `main` promotion PR is created automatically when releasable changes exist.
 - The `develop` to `main` PR is a manual gate and must never be auto-merged.
 - After `main` changes, a `main` to `develop` backmerge PR is created or updated automatically.
+- When a promotion creates a `main`-only merge commit, the backmerge must preserve
+  that commit's ancestry even if the `main` and `develop` trees already match;
+  otherwise strict up-to-date protection keeps the next promotion PR behind.
 - Integration and backmerge PRs may auto-merge only after required checks pass, all review conversations are resolved, and there are no conflicts.
 
 ## Mandatory Quality Gates
