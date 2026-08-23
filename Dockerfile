@@ -154,7 +154,7 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     for package_version in \
       brace-expansion:5.0.9 \
       ip-address:10.3.1 \
-      tar:7.5.21; do \
+      tar:7.5.22; do \
       package="${package_version%%:*}" && \
       version="${package_version##*:}" && \
       rm -rf "/opt/node-toolchain/node_modules/npm/node_modules/${package}" && \

@@ -56,7 +56,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
         for package, version in (
             ("brace-expansion", "5.0.9"),
             ("ip-address", "10.3.1"),
-            ("tar", "7.5.21"),
+            ("tar", "7.5.22"),
         ):
             self.assertEqual(version, container_package["dependencies"][package])
             self.assertEqual(version, pnpm_workspace["overrides"][package])
