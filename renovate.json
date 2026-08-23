@@ -28,12 +28,40 @@
     },
     {
       "customType": "regex",
+      "description": "Go compiler version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+GO_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "golang-version",
+      "depNameTemplate": "go"
+    },
+    {
+      "customType": "regex",
       "description": "Terraform version pin in Dockerfile",
       "managerFilePatterns": ["/^Dockerfile$/", "/^Containerfile$/"],
-      "matchStrings": ["ARG\\s+TERRAFORM_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "matchStrings": ["ARG\\s+TF_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "hashicorp/terraform",
       "versioningTemplate": "hashicorp"
+    },
+    {
+      "customType": "regex",
+      "description": "TFLint version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+TFLINT_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "terraform-linters/tflint",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "terraform-docs version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+TF_DOCS_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "terraform-docs/terraform-docs",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
     },
     {
       "customType": "regex",
@@ -65,19 +93,63 @@
     },
     {
       "customType": "regex",
-      "description": "GitHub Copilot CLI version pin in Dockerfile",
+      "description": "GitHub CLI version pin in Dockerfile",
       "managerFilePatterns": ["/^Dockerfile$/"],
-      "matchStrings": ["ARG\\s+COPILOT_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
-      "datasourceTemplate": "npm",
-      "depNameTemplate": "@github/copilot"
+      "matchStrings": ["ARG\\s+GH_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "cli/cli",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
     },
     {
       "customType": "regex",
-      "description": "npm version pin in Dockerfile",
+      "description": "actionlint version pin in Dockerfile",
       "managerFilePatterns": ["/^Dockerfile$/"],
-      "matchStrings": ["ARG\\s+NPM_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
-      "datasourceTemplate": "npm",
-      "depNameTemplate": "npm"
+      "matchStrings": ["ARG\\s+ACTIONLINT_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "rhysd/actionlint",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Docker CLI version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+DOCKER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "docker/cli",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Docker Compose version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+COMPOSE_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "docker/compose",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Docker Buildx source version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+BUILDX_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "docker/buildx",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Moby v2 namesgenerator source version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+MOBY_V2_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+-beta\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "moby/moby",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+-beta\\.[0-9]+)$",
+      "versioningTemplate": "semver"
     },
     {
       "customType": "regex",

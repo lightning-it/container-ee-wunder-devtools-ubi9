@@ -54,7 +54,7 @@ development. It is based on **Red Hat UBI 9** and includes:
 - yamllint
 - ShellCheck
 - actionlint
-- GitHub Copilot CLI
+- Node.js, npm, and pnpm for repository-owned, lockfile-pinned validators
 - Terraform CLI
 - TFLint
 - terraform-docs
@@ -69,6 +69,9 @@ Use it as a stable execution environment for:
 - `pre-commit` hooks
 - CI pipelines
 - Integration tests (e.g. against local Keycloak containers)
+
+The host supplies only Git, the container engine, and the wrapper. Repository validation
+commands run in this digest-pinned Devtools image and do not depend on host language runtimes.
 
 The repository also provides a digest-pinned
 [Dev Container and host acceptance matrix](docs/host-parity.md) for RHEL,
@@ -88,7 +91,7 @@ Ubuntu, and macOS pipeline-parity work.
   - `yamllint`
   - `shellcheck`
   - `actionlint`
-  - `copilot`
+  - `node` / `npm` / `pnpm`
   - `terraform`
   - `tflint`
   - `terraform-docs`

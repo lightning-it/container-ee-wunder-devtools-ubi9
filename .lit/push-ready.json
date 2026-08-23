@@ -4,25 +4,22 @@
   "checks": [
     {
       "name": "repository-quality-profile",
-      "command": [
-        "scripts/lit-ci-profile.sh",
-        "repository-quality"
-      ]
+      "command": ["scripts/lit-ci-profile.sh", "repository-quality"]
     }
   ],
   "remote_only_checks": [
     {
       "id": "github-actions-service-boundary",
-      "workflow": ".github/workflows/container-ci.yml",
-      "job": "validate",
-      "reason": "GitHub event handling, required-check publication, and hosted runner service context exist only in GitHub Actions.",
+      "workflow": ".github/workflows/repository-quality.yml",
+      "job": "quality",
+      "reason": "Checkout and artifact persistence require the GitHub Actions event and service context.",
       "owner": "Lightning IT Application Platform Maintainers"
     },
     {
       "id": "copilot-current-head-review",
       "workflow": ".github/workflows/copilot-review.yml",
-      "job": "current-revision-reviewed",
-      "reason": "The authoritative Copilot pull-request review is produced and bound to the current head SHA by GitHub.",
+      "job": "verify-current-revision-policy",
+      "reason": "The authoritative pipeline-only current-revision policy result is bound to the exact head SHA and may represent contributor-funded Copilot, a governed automation exemption, or the protected MLX-90 exact-revision Codex path.",
       "owner": "Lightning IT Application Platform Maintainers"
     },
     {
@@ -41,19 +38,15 @@
   },
   "agents": {
     "copilot": {
-      "enabled": true,
-      "required": true,
-      "command": [
-        "copilot"
-      ],
+      "enabled": false,
+      "required": false,
+      "command": ["copilot"],
       "timeout_seconds": 600
     },
     "codex": {
-      "enabled": true,
-      "required": true,
-      "command": [
-        "codex"
-      ],
+      "enabled": false,
+      "required": false,
+      "command": ["codex"],
       "timeout_seconds": 900
     }
   }
