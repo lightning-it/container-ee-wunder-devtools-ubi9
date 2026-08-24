@@ -67,6 +67,9 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           CONTROLLER_SHA: ${{ github.workflow_sha }}
           EVENT_ACTION: ${{ github.event.action }}
+          EVENT_COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
+          EVENT_COMMENT_ID: ${{ github.event.comment.id }}
+          EVENT_COMMENT_UPDATED_AT: ${{ github.event.comment.updated_at }}
           EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -307,37 +310,180 @@ jobs:
             exit 0
           fi
 
-          # Before a neutral result exists, maintainer thread/review activity
-          # has nothing to invalidate. It must stay a successful no-op and
-          # must never become an alternate authorization signal. Only the
-          # exact submitted Copilot review below may recover a late result.
-          if [ "${EVENT_NAME}" != pull_request_review ] ||
-             [ "${EVENT_ACTION}" != submitted ] ||
-             [ "${GITHUB_ACTOR}" != Copilot ]; then
+          rerun_reason=''
+          trigger_occurred_at=''
+          if [ "${EVENT_NAME}" = pull_request_review ] \
+            && [ "${EVENT_ACTION}" = submitted ] \
+            && [ "${GITHUB_ACTOR}" = Copilot ]; then
+            # GitHub records the Copilot App as actor/triggering_actor
+            # `Copilot`, while the Review API login below is the distinct
+            # `copilot-pull-request-reviewer[bot]`. Keep both bindings.
+            # Live provenance: Actions run 32602223567 on 2026-08-22.
+            rerun_reason=delayed-review
+          elif [ "${EVENT_NAME}" = pull_request_review_comment ] \
+            && [ "${EVENT_ACTION}" = created ]; then
+            # A maintainer evidence reply may recover a verifier that exhausted
+            # its bounded thread-resolution wait. The reply must target the
+            # exact current-head Copilot finding, every Copilot finding on that
+            # head must already be resolved, and the rerun never requests AI.
+            # Event author association is only a trigger prefilter: COLLABORATOR
+            # can mean read or triage. Authorize only a live repository role
+            # whose effective permission includes push.
+            [[ "${GITHUB_ACTOR}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]]
+            actor_permission="$(gh api \
+              "repos/${REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission")"
+            jq -e '
+                (.permission | type == "string")
+                and (.role_name | type == "string" and length > 0)
+                and (.user.login | type == "string" and length > 0)
+                and .user.type == "User"
+                and (.user.permissions.push | type == "boolean")
+              ' <<<"${actor_permission}" >/dev/null
+            if ! jq -e \
+                --arg actor "${GITHUB_ACTOR}" '
+                  (.user.login | ascii_downcase) == ($actor | ascii_downcase)
+                  and .user.permissions.push == true
+                  and (.permission == "write"
+                    or .permission == "maintain"
+                    or .permission == "admin")
+                ' <<<"${actor_permission}" >/dev/null; then
+              echo "Review-comment actor lacks current write permission; no rerun is authorized."
+              exit 0
+            fi
+            [[ "${EVENT_COMMENT_ID}" =~ ^[1-9][0-9]*$ ]]
+            test -n "${EVENT_COMMENT_CREATED_AT}"
+            test "${EVENT_COMMENT_CREATED_AT}" = "${EVENT_COMMENT_UPDATED_AT}"
+            comment="$(gh api \
+              "repos/${REPOSITORY}/pulls/comments/${EVENT_COMMENT_ID}")"
+            jq -e \
+              --arg actor "${GITHUB_ACTOR}" \
+              --arg created_at "${EVENT_COMMENT_CREATED_AT}" \
+              --argjson comment_id "${EVENT_COMMENT_ID}" '
+                .id == $comment_id
+                and .user.login == $actor
+                and .created_at == $created_at
+                and .updated_at == $created_at
+                and (.commit_id | type == "string"
+                  and test("^[0-9a-f]{40}$"))
+                and has("in_reply_to_id")
+              ' <<<"${comment}" >/dev/null
+            if ! jq -e \
+                --arg head "${HEAD_SHA}" '
+                  .commit_id == $head
+                  and (.in_reply_to_id | type == "number" and . > 0)
+                ' <<<"${comment}" >/dev/null; then
+              echo "Review comment is not an exact current-head evidence reply; no rerun is authorized."
+              exit 0
+            fi
+            parent_id="$(jq -er \
+              '.in_reply_to_id | select(type == "number" and . > 0)' \
+              <<<"${comment}")"
+            parent="$(gh api \
+              "repos/${REPOSITORY}/pulls/comments/${parent_id}")"
+            jq -e \
+              --argjson parent_id "${parent_id}" '
+                .id == $parent_id
+                and (.user.login | type == "string" and length > 0)
+                and (.user.type | type == "string" and length > 0)
+                and (.commit_id | type == "string"
+                  and test("^[0-9a-f]{40}$"))
+                and (.path | type == "string" and length > 0)
+                and (.pull_request_review_id | type == "number" and . > 0)
+              ' <<<"${parent}" >/dev/null
+            if ! jq -e \
+                --arg head "${HEAD_SHA}" \
+                --arg path "$(jq -r .path <<<"${comment}")" '
+                  (.user.login == "Copilot"
+                    or .user.login == "copilot-pull-request-reviewer"
+                    or .user.login == "copilot-pull-request-reviewer[bot]")
+                  and .user.type == "Bot"
+                  and .commit_id == $head
+                  and .path == $path
+                ' <<<"${parent}" >/dev/null; then
+              echo "Review reply does not target an exact current-head Copilot finding; no rerun is authorized."
+              exit 0
+            fi
+            REVIEW_ID="$(jq -er \
+              '.pull_request_review_id | select(type == "number" and . > 0)' \
+              <<<"${parent}")"
+
+            read -r owner name <<<"${REPOSITORY//\// }"
+            # shellcheck disable=SC2016  # GraphQL variables stay literal.
+            resolved_query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{databaseId author{login} pullRequestReview{databaseId commit{oid}}}}}}}}}'
+            threads='[]'
+            after=''
+            while true; do
+              arguments=(-f query="${resolved_query}" -F owner="${owner}" \
+                -F name="${name}" -F number="${PR_NUMBER}")
+              if [ -n "${after}" ]; then arguments+=(-f after="${after}"); fi
+              page="$(gh api graphql "${arguments[@]}")"
+              jq -e --arg head "${HEAD_SHA}" \
+                '.data.repository.pullRequest.headRefOid == $head' \
+                <<<"${page}" >/dev/null
+              page_threads="$(jq \
+                '.data.repository.pullRequest.reviewThreads.nodes' \
+                <<<"${page}")"
+              threads="$(jq -c --argjson page "${page_threads}" \
+                '. + $page' <<<"${threads}")"
+              if [ "$(jq -r \
+                  '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' \
+                  <<<"${page}")" != true ]; then
+                break
+              fi
+              after="$(jq -r \
+                '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' \
+                <<<"${page}")"
+              test -n "${after}"
+            done
+            jq -e 'all(.[]; .comments.pageInfo.hasNextPage == false)' \
+              <<<"${threads}" >/dev/null
+            if ! jq -e \
+              --arg head "${HEAD_SHA}" \
+              --argjson parent_id "${parent_id}" \
+              --argjson review_id "${REVIEW_ID}" '
+                ([.[] | select(any(.comments.nodes[];
+                  .databaseId == $parent_id
+                  and (.author.login == "Copilot"
+                    or .author.login == "copilot-pull-request-reviewer"
+                    or .author.login == "copilot-pull-request-reviewer[bot]")
+                  and .pullRequestReview.databaseId == $review_id
+                  and .pullRequestReview.commit.oid == $head))] | length) == 1
+                and ([.[] | select(any(.comments.nodes[];
+                  .databaseId == $parent_id)) | select(.isResolved == true)]
+                  | length) == 1
+                and ([.[] | select(.isResolved == false) |
+                  select(any(.comments.nodes[];
+                    (.author.login == "copilot-pull-request-reviewer"
+                      or .author.login == "copilot-pull-request-reviewer[bot]")
+                    and .pullRequestReview.commit.oid == $head))] | length) == 0
+              ' <<<"${threads}" >/dev/null; then
+              echo "Resolved-thread evidence is incomplete or non-authorizing; no rerun is authorized."
+              exit 0
+            fi
+            rerun_reason=resolved-finding
+            trigger_occurred_at="${EVENT_COMMENT_CREATED_AT}"
+          else
             echo "No neutral result exists and this event cannot authorize a rerun."
             exit 0
           fi
 
-          # A missing neutral result may be recovered only from one delayed,
-          # submitted Copilot review. Comment/thread events never authorize a
-          # producer rerun, and this workflow never requests an AI review.
-          # GitHub records the Copilot App as actor/triggering_actor `Copilot`
-          # for this Actions event, while the Review API login below is the
-          # distinct `copilot-pull-request-reviewer[bot]`. Keep both bindings.
-          # Live provenance: Actions run 32602223567 on 2026-08-22.
-          test "${EVENT_NAME}" = pull_request_review
-          test "${EVENT_ACTION}" = submitted
-          test "${GITHUB_ACTOR}" = Copilot
+          # A missing neutral result may be recovered only from one exact
+          # delayed review or one resolved-finding evidence reply. Both paths
+          # reuse the original review and rerun only the verifier job.
           test "${PR_AUTHOR}" != 'lightning-it-release-automation[bot]'
           test "${PR_AUTHOR}" != 'lightning-it-shared-assets-sync[bot]'
           [[ "${CONTROLLER_SHA}" =~ ^[0-9a-f]{40}$ ]]
-          [[ "${REVIEW_COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${REVIEW_ID}" =~ ^[1-9][0-9]*$ ]]
-          test "${REVIEW_COMMIT_SHA}" = "${HEAD_SHA}"
-          test -n "${REVIEW_SUBMITTED_AT}"
 
           review="$(gh api \
             "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}")"
+          REVIEW_COMMIT_SHA="$(jq -er \
+            '.commit_id | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            <<<"${review}")"
+          REVIEW_SUBMITTED_AT="$(jq -er \
+            '.submitted_at | select(type == "string" and length > 0)' \
+            <<<"${review}")"
+          test "${REVIEW_COMMIT_SHA}" = "${HEAD_SHA}"
           jq -e \
             --arg head "${HEAD_SHA}" \
             --arg submitted "${REVIEW_SUBMITTED_AT}" \
@@ -354,6 +500,12 @@ jobs:
                 and (contains("premium requests quota") | not)
                 and (contains("encountered an error") | not))
             ' <<<"${review}" >/dev/null
+          if [ "${rerun_reason}" = delayed-review ]; then
+            # Bind the ordering check and published evidence to the timestamp
+            # re-read from the authoritative Reviews API, not the event copy.
+            trigger_occurred_at="${REVIEW_SUBMITTED_AT}"
+          fi
+          test -n "${trigger_occurred_at}"
 
           for attempt in $(seq 1 10); do
             response="$(gh api "${runs_url}?event=pull_request_target&head_sha=${HEAD_SHA}&per_page=100")"
@@ -418,7 +570,7 @@ jobs:
             <<<"${verifier_jobs}")"
           first_verifier_completed_at="$(jq -er '.[0].completed_at | \
             select(type == "string" and length > 0)' <<<"${verifier_jobs}")"
-          test "$(date -u -d "${REVIEW_SUBMITTED_AT}" +%s)" -gt \
+          test "$(date -u -d "${trigger_occurred_at}" +%s)" -gt \
             "$(date -u -d "${first_verifier_completed_at}" +%s)"
 
           # GitHub documents Pull requests: read as one of the alternative
@@ -445,13 +597,15 @@ jobs:
             select(.head_sha == $head)] | length' \
             <<<"${existing_authorizations}")" -eq 0
 
-          authorization_external_id="rep60-late-review-rerun:v1:${GITHUB_RUN_ID}:${PR_NUMBER}:${producer_run_id}:${BASE_SHA}:${HEAD_SHA}:${REVIEW_ID}"
+          authorization_external_id="rep60-late-review-rerun:v1:${rerun_reason}:${GITHUB_RUN_ID}:${PR_NUMBER}:${producer_run_id}:${BASE_SHA}:${HEAD_SHA}:${REVIEW_ID}"
           authorization_summary="$(jq -cn \
             --arg base "${BASE_SHA}" \
             --arg controller "${CONTROLLER_SHA}" \
             --arg head "${HEAD_SHA}" \
+            --arg reason "${rerun_reason}" \
             --arg refresh_url "${refresh_url}" \
             --arg review_submitted_at "${REVIEW_SUBMITTED_AT}" \
+            --arg trigger_occurred_at "${trigger_occurred_at}" \
             --argjson pr_number "${PR_NUMBER}" \
             --argjson producer_id "${producer_run_id}" \
             --argjson refresh_id "${GITHUB_RUN_ID}" \
@@ -460,8 +614,10 @@ jobs:
                 controller_sha:$controller,head_sha:$head,
                 producer_run_id:$producer_id,pull_request_number:$pr_number,
                 refresh_run_id:$refresh_id,refresh_run_url:$refresh_url,
+                reason:$reason,
                 review_id:$review_id,
-                review_submitted_at:$review_submitted_at}')"
+                review_submitted_at:$review_submitted_at,
+                trigger_occurred_at:$trigger_occurred_at}')"
           authorization="$(gh api --method POST \
             "repos/${REPOSITORY}/check-runs" \
             -f name='Late review rerun authorization' \
