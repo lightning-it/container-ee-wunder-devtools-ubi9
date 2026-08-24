@@ -86,7 +86,7 @@ verify_tag_digest "$VERSION"
 verify_tag_digest "sha-${SHORT_SHA}"
 verify_tag_digest "latest"
 
-echo "Scanning ${IMAGE_NAME}:${RELEASE_TAG} for HIGH findings (report only)..."
+echo "Scanning ${IMAGE_NAME}:${RELEASE_TAG} for HIGH and CRITICAL findings (release gate)..."
 docker run --rm \
   "${trivy_container_args[@]}" \
   "${trivy_workspace_args[@]}" \
@@ -95,20 +95,7 @@ docker run --rm \
   --scanners vuln \
   --ignore-unfixed \
   "${trivy_ignore_args[@]}" \
-  --severity HIGH \
-  --exit-code 0 \
-  "${IMAGE_NAME}:${RELEASE_TAG}"
-
-echo "Scanning ${IMAGE_NAME}:${RELEASE_TAG} for CRITICAL findings (release gate)..."
-docker run --rm \
-  "${trivy_container_args[@]}" \
-  "${trivy_workspace_args[@]}" \
-  "$trivy_image" image \
-  --cache-dir /tmp/trivy-cache \
-  --scanners vuln \
-  --ignore-unfixed \
-  "${trivy_ignore_args[@]}" \
-  --severity CRITICAL \
+  --severity HIGH,CRITICAL \
   --exit-code 1 \
   "${IMAGE_NAME}:${RELEASE_TAG}"
 
@@ -148,7 +135,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "- Signed reference: \`${image_ref}\`"
     echo "- Signing identity: \`${workflow_identity}\`"
     echo "- Tags verified: \`${RELEASE_TAG}\`, \`${VERSION}\`, \`sha-${SHORT_SHA}\`, \`latest\`"
-    echo "- Vulnerability gate: CRITICAL findings fail; HIGH findings are report-only"
+    echo "- Vulnerability gate: HIGH and CRITICAL findings fail"
     echo
   } >> "$GITHUB_STEP_SUMMARY"
 fi
