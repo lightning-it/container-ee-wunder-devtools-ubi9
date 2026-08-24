@@ -61,8 +61,14 @@ image="local/lightning-it-devtools:host-parity"
     terraform version
     ansible --version
     actionlint --version
+    pre-commit --version
+    ruff --version
+    mypy --version
+    renovate-config-validator --version
+    markdownlint-cli2 --version
+    prettier --version
+    pnpm --version
     node --version
-    copilot --version
   '
 finished="$(date +%s)"
 
