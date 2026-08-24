@@ -25,6 +25,7 @@ ARG BUILDX_VERSION=0.36.1
 ARG MOBY_V2_VERSION=2.0.0-beta.21
 ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
 ARG NODE_VERSION=24.19.0
+ARG PNPM_VERSION=11.23.0
 ARG GO_X_CRYPTO_VERSION=0.52.0
 ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.56.0
@@ -148,15 +149,13 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     tar -xJf /tmp/node.tar.xz --strip-components=1 -C /opt/node && \
     export PATH="/opt/node/bin:${PATH}" && \
     cd /opt/node-toolchain && \
-    /opt/node/bin/corepack pnpm@11.22.0 install \
+    /opt/node/bin/corepack pnpm@${PNPM_VERSION} install \
       --frozen-lockfile --ignore-scripts --strict-peer-dependencies \
       --store-dir /tmp/pnpm-store && \
-    for package_version in \
-      brace-expansion:5.0.9 \
-      ip-address:10.3.1 \
-      tar:7.5.22; do \
-      package="${package_version%%:*}" && \
-      version="${package_version##*:}" && \
+    for package in brace-expansion ip-address tar; do \
+      version="$(/opt/node/bin/node -p \
+        'require(process.argv[1]).version' \
+        "/opt/node-toolchain/node_modules/${package}/package.json")" && \
       rm -rf "/opt/node-toolchain/node_modules/npm/node_modules/${package}" && \
       cp -aL "/opt/node-toolchain/node_modules/${package}" \
         "/opt/node-toolchain/node_modules/npm/node_modules/${package}" && \

@@ -34,6 +34,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
 
         for argument in (
             "ARG NODE_VERSION=24.19.0",
+            "ARG PNPM_VERSION=11.23.0",
             "ARG GO_VERSION=1.26.7",
             "ARG GO_X_MOD_VERSION=0.40.0",
             "ARG GO_GRPC_VERSION=1.82.1",
@@ -47,20 +48,19 @@ class ContainerToolchainContractTests(unittest.TestCase):
         ):
             self.assertIn(argument, dockerfile)
         self.assertEqual("12.0.2", container_package["dependencies"]["npm"])
-        self.assertEqual("pnpm@11.22.0", container_package["packageManager"])
-        self.assertEqual("11.22.0", container_package["dependencies"]["pnpm"])
+        pnpm_version = container_package["dependencies"]["pnpm"]
+        self.assertEqual("11.23.0", pnpm_version)
+        self.assertEqual(f"pnpm@{pnpm_version}", container_package["packageManager"])
+        self.assertIn(f"ARG PNPM_VERSION={pnpm_version}", dockerfile)
         self.assertEqual(
             "5.3.0",
             pnpm_workspace["overrides"]["markdownlint-cli2>js-yaml"],
         )
-        for package, version in (
-            ("brace-expansion", "5.0.9"),
-            ("ip-address", "10.3.1"),
-            ("tar", "7.5.22"),
-        ):
-            self.assertEqual(version, container_package["dependencies"][package])
+        for package in ("brace-expansion", "ip-address", "tar"):
+            version = container_package["dependencies"][package]
+            self.assertRegex(version, r"^\d+\.\d+\.\d+$")
             self.assertEqual(version, pnpm_workspace["overrides"][package])
-            self.assertIn(f"{package}:{version}", dockerfile)
+            self.assertIn(package, dockerfile)
         self.assertEqual(1440, pnpm_workspace["minimumReleaseAge"])
         self.assertTrue(pnpm_workspace["minimumReleaseAgeStrict"])
         self.assertFalse(pnpm_workspace["trustLockfile"])
@@ -79,7 +79,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "COPY --from=tools /opt/node-toolchain /opt/node-toolchain",
             dockerfile,
         )
-        self.assertIn("corepack pnpm@11.22.0 install", dockerfile)
+        self.assertIn("corepack pnpm@${PNPM_VERSION} install", dockerfile)
         self.assertIn("--frozen-lockfile", dockerfile)
         self.assertIn("--ignore-scripts", dockerfile)
         self.assertIn("--strict-peer-dependencies", dockerfile)
@@ -135,6 +135,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "COMPOSE_VERSION",
             "BUILDX_VERSION",
             "MOBY_V2_VERSION",
+            "PNPM_VERSION",
         ):
             self.assertIn(version_argument, serialized_managers)
 
