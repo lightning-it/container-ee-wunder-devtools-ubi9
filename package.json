@@ -26,5 +26,6 @@
   "private": true,
   "scripts": {
     "test:fuzz": "node --test tests/fuzz/*.fuzz.test.mjs"
-  }
+  },
+  "name": "container-ee-wunder-devtools-ubi9"
 }
