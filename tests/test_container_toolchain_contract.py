@@ -34,7 +34,6 @@ class ContainerToolchainContractTests(unittest.TestCase):
 
         for argument in (
             "ARG NODE_VERSION=24.19.0",
-            "ARG PNPM_VERSION=11.23.0",
             "ARG GO_VERSION=1.26.7",
             "ARG GO_X_MOD_VERSION=0.40.0",
             "ARG GO_GRPC_VERSION=1.82.1",
@@ -49,7 +48,6 @@ class ContainerToolchainContractTests(unittest.TestCase):
             self.assertIn(argument, dockerfile)
         self.assertEqual("12.0.2", container_package["dependencies"]["npm"])
         pnpm_version = container_package["dependencies"]["pnpm"]
-        self.assertEqual("11.23.0", pnpm_version)
         self.assertEqual(f"pnpm@{pnpm_version}", container_package["packageManager"])
         self.assertIn(f"ARG PNPM_VERSION={pnpm_version}", dockerfile)
         self.assertEqual(
@@ -145,6 +143,10 @@ class ContainerToolchainContractTests(unittest.TestCase):
             )
         )
         self.assertEqual("9.0", str(container_lock["lockfileVersion"]))
+        self.assertEqual(pnpm_workspace["overrides"], container_lock["overrides"])
+        locked_dependencies = container_lock["importers"]["."]["dependencies"]
+        for name, version in container_package["dependencies"].items():
+            self.assertEqual(version, locked_dependencies[name]["specifier"])
         for locked in container_lock["packages"].values():
             resolution = locked.get("resolution", {})
             self.assertIn("integrity", resolution)
