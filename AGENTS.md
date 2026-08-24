@@ -97,6 +97,12 @@
 ## Dependency pinning
 
 - Keep Dockerfile tool/runtime versions pinned (`ARG ..._VERSION=` or pinned image refs).
+- Treat a source-built tool's declared version, immutable source ref or commit,
+  and archive checksum as one atomic pin. Its build must derive the reported
+  version from that source ref or independently verify the source version;
+  never let build flags merely relabel unrelated source. Renovate must update
+  the complete tuple atomically, or leave that tuple unmanaged for a reviewed
+  manual update. Standalone version managers for such tuples are forbidden.
 - For every change to pinned versions in managed files (workflows, scripts, container files), maintain Renovate in the same change (`renovate.json` package rules/custom managers, or the shared-assets-lit Renovate source).
 - Validate Renovate config changes before commit (for example: `pre-commit run renovate-config-validate --files renovate.json`).
 - Do not relax version pinning in managed container templates without an explicit decision in `shared-assets-lit`.
