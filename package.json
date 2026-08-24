@@ -6,7 +6,7 @@
     "@semantic-release/release-notes-generator": "^14.0.1",
     "conventional-changelog-conventionalcommits": "^9.0.0",
     "fast-check": "4.9.0",
-    "markdownlint-cli2": "0.23.0",
+    "markdownlint-cli2": "0.23.2",
     "renovate": "43.288.0",
     "semantic-release": "^25.0.0"
   },
