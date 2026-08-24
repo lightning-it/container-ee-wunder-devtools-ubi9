@@ -166,6 +166,14 @@
   review`. The built-in `:read-only` permission profile technically denies
   writes and command network access. This path never applies to human,
   community, or other automation authors.
+- When the one authorized final Copilot review arrives only after the bounded
+  verifier has failed, the protected refresh normally reuses that review. If
+  GitHub holds the Copilot-authored refresh in `action_required` before its
+  first job, a current write-authorized maintainer may dispatch the protected
+  `develop` refresh with the exact PR, base, head and review ID. Recovery must
+  prove the blocked refresh and the request/review time window, then rerun only
+  the failed verifier job. It never requests another review or reruns the full
+  workflow.
 - `pre-commit` may provide fast feedback, but it is optional and never
   authorizes a push or substitutes for push-ready evidence.
 
@@ -175,15 +183,21 @@
   - `shared-assets-lit/container/overrides/<repo>/...`
 - If a file exists in an override path, it supersedes the baseline file from `shared-assets-lit/container/base`.
 - For `.github/workflows/container-build-publish.yml`, always check for an override before changing downstream repo copies.
+- The Ansible and Toolbox container overrides own repository-specific
+  `renovate.json` files whenever a builder image version and digest or a
+  release version and immutable Git commit are coupled Dockerfile source pins.
+  Renovate must update each pair atomically; never restore a version-only
+  manager downstream or hand-edit these managed policies in a target
+  repository.
 - `container-ee-wunder-devtools-ubi9` receives its pipeline-only
   `.lit/push-ready.json`, Dockerfile-specific `renovate.json`, and clean,
   pull-through `scripts/devtools-container-ci.sh` from its repository-specific
   override. Make those changes in `shared-assets-lit` first; never hand-edit
   the downstream managed copies.
-- When that repository's installed push-ready engine differs from the
-  protected canonical engine, the shared-assets App first opens a policy-only
-  bootstrap containing exactly the engine, `.lit/push-ready.json`, this
-  `AGENTS.md`, and the rebound Copilot instructions. A later protected source
+- When any managed container repository's installed push-ready engine differs
+  from the protected canonical engine, the shared-assets App first opens a
+  policy-only bootstrap containing exactly the engine, `.lit/push-ready.json`,
+  this `AGENTS.md`, and the rebound Copilot instructions. A later protected source
   run performs the full runtime sync only after the bootstrap is part of the
   target base; the two phases must never be collapsed past the 200,000-byte
   fail-closed review limit.

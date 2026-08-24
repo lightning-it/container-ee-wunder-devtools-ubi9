@@ -7,9 +7,6 @@
     ":semanticCommitType(chore)",
     ":semanticCommitScope(deps)"
   ],
-  "renovate-config": {
-    "enabled": false
-  },
   "labels": ["dependencies", "renovate"],
   "baseBranchPatterns": ["develop"],
   "timezone": "UTC",
@@ -143,6 +140,11 @@
     }
   ],
   "packageRules": [
+    {
+      "description": "Do not update Renovate configuration dependencies",
+      "matchManagers": ["renovate-config"],
+      "enabled": false
+    },
     {
       "description": "Automerge safe non-major updates into develop after CI passes",
       "matchUpdateTypes": [
