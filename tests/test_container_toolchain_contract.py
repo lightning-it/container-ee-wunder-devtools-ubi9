@@ -4,6 +4,9 @@ import unittest
 from pathlib import Path
 
 import yaml
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,33 +26,50 @@ class ContainerToolchainContractTests(unittest.TestCase):
             )
         )
 
-        for requirement_name, lock_name in (
-            ("mypy", "mypy"),
-            ("ruff", "ruff"),
-            ("types-PyYAML", "types-pyyaml"),
-            ("uv", "uv"),
+        locked_versions = {}
+        for match in re.finditer(
+            r"(?m)^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[^\s\\]+)(?:\s|$)",
+            requirements_lock,
         ):
-            direct_pin = re.search(
-                rf"(?m)^{re.escape(requirement_name)}==(?P<version>[^\s]+)$",
-                requirements,
+            normalized_name = canonicalize_name(match.group("name"))
+            self.assertNotIn(
+                normalized_name,
+                locked_versions,
+                f"{normalized_name} must occur only once in requirements.lock",
             )
-            self.assertIsNotNone(
-                direct_pin,
-                f"{requirement_name} must be directly and exactly pinned",
+            locked_versions[normalized_name] = Version(match.group("version"))
+
+        direct_requirements = {}
+        for raw_line in requirements.splitlines():
+            requirement_text = raw_line.partition("#")[0].strip()
+            if not requirement_text:
+                continue
+            requirement = Requirement(requirement_text)
+            normalized_name = canonicalize_name(requirement.name)
+            self.assertNotIn(
+                normalized_name,
+                direct_requirements,
+                f"{normalized_name} must occur only once in requirements.txt",
             )
-            locked_pin = re.search(
-                rf"(?m)^{re.escape(lock_name)}==(?P<version>[^\s]+) \\$",
-                requirements_lock,
+            self.assertTrue(
+                requirement.specifier,
+                f"{requirement.name} must have an explicit version constraint",
             )
-            self.assertIsNotNone(
-                locked_pin,
-                f"{lock_name} must be exactly pinned in requirements.lock",
+            direct_requirements[normalized_name] = requirement
+
+        self.assertTrue(direct_requirements, "requirements.txt must not be empty")
+        for normalized_name, requirement in direct_requirements.items():
+            self.assertIn(
+                normalized_name,
+                locked_versions,
+                f"{requirement.name} must be resolved in requirements.lock",
             )
-            self.assertEqual(
-                direct_pin.group("version"),
-                locked_pin.group("version"),
-                f"{requirement_name} must match the version installed from "
-                "requirements.lock",
+            locked_version = locked_versions[normalized_name]
+            self.assertIn(
+                locked_version,
+                requirement.specifier,
+                f"{requirement.name} lock version {locked_version} must satisfy "
+                f"the direct constraint {requirement.specifier}",
             )
         for name in ("renovate", "markdownlint-cli2", "prettier"):
             version = container_package["dependencies"][name]
