@@ -458,6 +458,7 @@ run_contract_tests() {
         pre-commit --version
         ruff --version
         mypy --version
+        uv --version
         renovate-config-validator --version
         markdownlint-cli2 --version
         prettier --version

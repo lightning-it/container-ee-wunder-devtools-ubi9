@@ -64,6 +64,7 @@ image="local/lightning-it-devtools:host-parity"
     pre-commit --version
     ruff --version
     mypy --version
+    uv --version
     renovate-config-validator --version
     markdownlint-cli2 --version
     prettier --version
