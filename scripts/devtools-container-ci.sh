@@ -33,7 +33,7 @@ case "$target_arch" in
     trivy_default="docker.io/aquasec/trivy:0.74.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9"
     hadolint_image="docker.io/hadolint/hadolint:v2.15.1@sha256:fdf19d026b54834f88c62774fdf2a61ff3b586a42632e5070674d41a796bfdf3"
     docker_cli_image="docker.io/library/docker:29-cli@sha256:e650b7a58d7f56be91d4f7be799196380a3bbc1bcbc41f1f4dff1b36ac309e1e"
-    node_image="docker.io/library/node:24-bookworm@sha256:f6d02cf1353049cf3658e6ce9ec03c6877a6479495f122062d195e2279d01055"
+    node_image="docker.io/library/node:24-bookworm@sha256:107ceb6ad85808049dccef12414bf17b08eceb299eaf755c0339dc5fc8958d6b"
     ;;
   arm64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:33ffa3f1ad576165ea9c26f726884defdc411fb1fcb9ccc6a117b2f554ba1723"
@@ -41,7 +41,7 @@ case "$target_arch" in
     trivy_default="docker.io/aquasec/trivy:0.74.0@sha256:55ad20f8a239a3e95427e60b8aaea38788550c18a3f1772976bebf732e6ae166"
     hadolint_image="docker.io/hadolint/hadolint:v2.15.1@sha256:84179f01a1034d34ea470f1808f055f0a02195ba0e0038d097f8384ae878383f"
     docker_cli_image="docker.io/library/docker:29-cli@sha256:d7ee65bd10b7f794c6bba9ce66cf0ec83f4cb9a606f68b2a804b11ceb00d60cb"
-    node_image="docker.io/library/node:24-bookworm@sha256:7e4b2953088599075c288871d109e23bc7a33384b96ca443a7cfb7b5c318b099"
+    node_image="docker.io/library/node:24-bookworm@sha256:b75abb8396290a89c61cfafa80a153b5d660d89c786919cb6745fb0ccc3bb171"
     ;;
 esac
 actionlint_image="${ACTIONLINT_IMAGE:-$actionlint_default}"
