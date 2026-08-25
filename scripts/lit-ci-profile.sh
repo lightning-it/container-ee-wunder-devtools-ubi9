@@ -89,7 +89,8 @@ else
 fi
 
 printf '==> Verify Codex and Copilot instruction binding\n'
-env \
+env -i \
+  PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin \
   CONTAINER_HOME=/tmp/wunder \
   WUNDER_DEVTOOLS_CAP_ADD= \
   WUNDER_DEVTOOLS_DOCKER_SOCKET=disabled \
