@@ -9,7 +9,7 @@ name: Current revision review gate
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -60,6 +60,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_BASE_REF: ${{ github.event.pull_request.base.ref }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -72,17 +73,10 @@ jobs:
           [[ "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${TRUSTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
           test "${DEFAULT_BRANCH}" = develop
+          [[ "${EXPECTED_BASE_REF}" =~ ^(develop|main)$ ]]
           test "${TRUSTED_WORKFLOW_REF}" = \
-            "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${DEFAULT_BRANCH}"
-          default_head="$(gh api "repos/${REPOSITORY}/branches/${DEFAULT_BRANCH}" --jq .commit.sha)"
-          controller_ancestry="$(gh api \
-            "repos/${REPOSITORY}/compare/${TRUSTED_WORKFLOW_SHA}...${default_head}")"
-          jq -e \
-            --arg controller "${TRUSTED_WORKFLOW_SHA}" '
-              .status == "identical"
-              or (.status == "ahead" and .behind_by == 0
-                  and .merge_base_commit.sha == $controller)
-            ' <<<"${controller_ancestry}" >/dev/null
+            "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${EXPECTED_BASE_REF}"
+          test "${TRUSTED_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
           protected_run="$(gh api "repos/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")"
           jq -e \
             --arg branch "${EXPECTED_HEAD_REF}" \
@@ -100,7 +94,7 @@ jobs:
           test "$(jq -r .state <<<"${pr}")" = open
           test "$(jq -r .draft <<<"${pr}")" = false
           base_ref="$(jq -er '.base.ref | select(. == "develop" or . == "main")' <<<"${pr}")"
-          test -n "${base_ref}"
+          test "${base_ref}" = "${EXPECTED_BASE_REF}"
           test "$(jq -r .base.sha <<<"${pr}")" = "${EXPECTED_BASE}"
           test "$(jq -r .base.repo.full_name <<<"${pr}")" = "${REPOSITORY}"
           test "$(jq -r .head.sha <<<"${pr}")" = "${EXPECTED_HEAD}"
@@ -129,6 +123,7 @@ jobs:
                 any(add[];
                   .user.login == $reviewer
                   and .commit_id == $head
+                  and (.state == "COMMENTED" or .state == "APPROVED")
                   and (((.body // "") | ascii_downcase) as $body
                     | ($body | contains($retry_unable) | not)
                     and ($body | contains($retry_no_files) | not)
@@ -198,9 +193,10 @@ jobs:
     if: >-
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' &&
       (github.event.action == 'edited' ||
+        github.event.action == 'labeled' ||
+        github.event.action == 'unlabeled' ||
         github.event.action == 'opened' ||
         github.event.action == 'synchronize' ||
         github.event.action == 'reopened' ||
@@ -221,17 +217,23 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Invalidate prior result after pull-request metadata edit
-        if: github.event.action == 'edited'
+      - name: Invalidate prior result after pull-request metadata change
+        if: >-
+          github.event.action == 'edited' ||
+          github.event.action == 'labeled' ||
+          github.event.action == 'unlabeled'
         env:
+          EVENT_ACTION: ${{ github.event.action }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           EVENT_BODY: ${{ github.event.pull_request.body }}
           EVENT_TITLE: ${{ github.event.pull_request.title }}
           EVENT_EDITED_AT: ${{ github.event.pull_request.updated_at }}
+          EVENT_LABEL: ${{ github.event.label.name }}
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -267,13 +269,16 @@ jobs:
           [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-          # For an edited webhook, REST updated_at is the event's edit
-          # revision. Bind it to GraphQL lastEditedAt because unrelated
-          # comments and reviews may advance only the live REST updated_at.
-          [[ "${EVENT_EDITED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
-          owner="${REPOSITORY%%/*}"
-          repository="${REPOSITORY#*/}"
-          read -r -d '' query <<'GRAPHQL' || true
+          [[ "${HEAD_REPOSITORY}" == */* ]]
+          [[ "${EVENT_ACTION}" =~ ^(edited|labeled|unlabeled)$ ]]
+          if [ "${EVENT_ACTION}" = edited ]; then
+            # For an edited webhook, REST updated_at is the event's edit
+            # revision. Bind it to GraphQL lastEditedAt because unrelated
+            # comments and reviews may advance only the live REST updated_at.
+            [[ "${EVENT_EDITED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+            owner="${REPOSITORY%%/*}"
+            repository="${REPOSITORY#*/}"
+            read -r -d '' query <<'GRAPHQL' || true
           query($owner: String!, $repository: String!, $number: Int!) {
             repository(owner: $owner, name: $repository) {
               pullRequest(number: $number) {
@@ -283,36 +288,68 @@ jobs:
             }
           }
           GRAPHQL
-          metadata="$(api_read graphql \
-            -f query="${query}" \
-            -F owner="${owner}" \
-            -F repository="${repository}" \
-            -F number="${PR_NUMBER}")"
+            metadata="$(api_read graphql \
+              -f query="${query}" \
+              -F owner="${owner}" \
+              -F repository="${repository}" \
+              -F number="${PR_NUMBER}")"
+            jq -e \
+              --arg edited_at "${EVENT_EDITED_AT}" \
+              --argjson number "${PR_NUMBER}" '
+                ((.errors // []) | length) == 0
+                and .data.repository.pullRequest.number == $number
+                and .data.repository.pullRequest.lastEditedAt == $edited_at
+              ' <<<"${metadata}" >/dev/null
+            pr="$(api_read "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          else
+            test -n "${EVENT_LABEL}"
+            transition_observed=false
+            for transition_attempt in $(seq 1 10); do
+              pr="$(api_read "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+              if jq -e --arg action "${EVENT_ACTION}" --arg label "${EVENT_LABEL}" '
+                  (.labels | type) == "array"
+                  and all(.labels[];
+                    type == "object" and (.name | type) == "string")
+                  and (if $action == "labeled" then
+                    any(.labels[]; .name == $label)
+                  else all(.labels[]; .name != $label) end)
+                ' <<<"${pr}" >/dev/null; then
+                transition_observed=true
+                break
+              fi
+              test "${transition_attempt}" -lt 10
+              sleep 2
+            done
+            test "${transition_observed}" = true
+          fi
           jq -e \
-            --arg edited_at "${EVENT_EDITED_AT}" \
-            --argjson number "${PR_NUMBER}" '
-              ((.errors // []) | length) == 0
-              and .data.repository.pullRequest.number == $number
-              and .data.repository.pullRequest.lastEditedAt == $edited_at
-            ' <<<"${metadata}" >/dev/null
-          pr="$(api_read "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          jq -e \
+            --arg action "${EVENT_ACTION}" \
             --arg base_ref "${EVENT_BASE_REF}" \
             --arg base_sha "${BASE_SHA}" \
             --arg body "${EVENT_BODY}" \
             --arg head_ref "${HEAD_REF}" \
+            --arg head_repository "${HEAD_REPOSITORY}" \
             --arg head_sha "${HEAD_SHA}" \
-            --arg repository "${REPOSITORY}" \
+            --arg label "${EVENT_LABEL}" \
             --arg title "${EVENT_TITLE}" '
               .state == "open"
               and .draft == false
-              and .title == $title
-              and (.body // "") == $body
+              and (if $action == "edited" then
+                .title == $title and (.body // "") == $body
+              else true end)
               and .base.ref == $base_ref
               and .base.sha == $base_sha
               and .head.ref == $head_ref
               and .head.sha == $head_sha
-              and .head.repo.full_name == $repository
+              and .head.repo.full_name == $head_repository
+              and (.labels | type) == "array"
+              and all(.labels[];
+                type == "object" and (.name | type) == "string")
+              and (if $action == "labeled" then
+                any(.labels[]; .name == $label)
+              elif $action == "unlabeled" then
+                all(.labels[]; .name != $label)
+              else true end)
             ' <<<"${pr}" >/dev/null
           checks="$(api_read --paginate --slurp \
             "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
@@ -332,10 +369,19 @@ jobs:
           fi
           check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${named}")"
           run_url="${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ "${EVENT_ACTION}" = edited ]; then
+            reason='pull-request title or body changed'
+            result_title='Current revision metadata changed; revalidation required'
+            reservation_kind=edit
+          else
+            reason="pull-request labels changed (${EVENT_ACTION}: ${EVENT_LABEL})"
+            result_title='Current revision labels changed; revalidation required'
+            reservation_kind="${EVENT_ACTION}"
+          fi
           evidence="$(jq -cn \
             --arg base "${BASE_SHA}" \
             --arg head "${HEAD_SHA}" \
-            --arg reason "pull-request metadata changed" \
+            --arg reason "${reason}" \
             --argjson pr_number "${PR_NUMBER}" \
             --argjson run_id "${GITHUB_RUN_ID}" \
             --arg run_url "${run_url}" \
@@ -348,8 +394,8 @@ jobs:
             -f conclusion=failure \
             -f "completed_at=${completed_at}" \
             -f "details_url=${run_url}" \
-            -f "external_id=mlx90-current-revision:metadata-edit:v1:${PR_NUMBER}:${GITHUB_RUN_ID}:${BASE_SHA}:${HEAD_SHA}" \
-            -f "output[title]=Current revision metadata changed; revalidation required" \
+            -f "external_id=mlx90-current-revision:metadata-${reservation_kind}:v1:${PR_NUMBER}:${GITHUB_RUN_ID}:${BASE_SHA}:${HEAD_SHA}" \
+            -f "output[title]=${result_title}" \
             -f "output[summary]=${evidence}")"
           jq -e \
             --arg evidence "${evidence}" \
@@ -416,7 +462,18 @@ jobs:
           last_edited_at="$(jq -r \
             '.data.repository.pullRequest.lastEditedAt // "null"' \
             <<<"${response}")"
+          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          labels_json="$(jq -cer '
+            if (.labels | type) == "array"
+              and all(.labels[]; type == "object" and (.name | type) == "string")
+            then [.labels[].name] | sort
+            else error("malformed pull-request labels")
+            end
+          ' <<<"${live_pr}")"
+          labels_sha256="$(printf '%s' "${labels_json}" | sha256sum | cut -d ' ' -f 1)"
+          [[ "${labels_sha256}" =~ ^[0-9a-f]{64}$ ]]
           echo "last_edited_at=${last_edited_at}" >>"${GITHUB_OUTPUT}"
+          echo "labels_sha256=${labels_sha256}" >>"${GITHUB_OUTPUT}"
 
       - name: Classify trusted automation pull request
         id: trusted-automation
@@ -647,6 +704,7 @@ jobs:
           echo "Verified an exact evidence-bound merge of current develop and main tips."
 
       - name: Verify current Copilot review and resolved findings
+        id: copilot-review
         if: >-
           steps.trusted-automation.outputs.trusted != 'true' &&
           github.event.pull_request.user.login != 'lightning-it-release-automation[bot]'
@@ -1049,15 +1107,20 @@ jobs:
             exit 1
           fi
 
+          [[ "${review_id}" =~ ^[A-Za-z0-9_=-]+$ ]]
+          echo "review_id=${review_id}" >>"${GITHUB_OUTPUT}"
           echo "GitHub Copilot reviewed current head ${head_sha}; no unresolved Copilot findings remain."
 
       - name: Publish bound neutral result
         env:
           BOUND_LAST_EDITED_AT: ${{ steps.metadata-revision.outputs.last_edited_at }}
+          BOUND_LABELS_SHA256: ${{ steps.metadata-revision.outputs.labels_sha256 }}
+          BOUND_REVIEW_ID: ${{ steps.copilot-review.outputs.review_id }}
           EVENT_ACTION: ${{ github.event.action }}
           GH_TOKEN: ${{ github.token }}
           EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
           EVENT_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVENT_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           EVENT_BASE: ${{ github.event.pull_request.base.sha }}
           EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           EVENT_BODY: ${{ github.event.pull_request.body }}
@@ -1143,28 +1206,52 @@ jobs:
               sleep 5
             done
           }
+          read_labels_sha256() {
+            local labels_json live_pr
+            live_pr="$(api_read "repos/${REPOSITORY}/pulls/${PR_NUMBER}")" || return 1
+            labels_json="$(jq -cer '
+              if (.labels | type) == "array"
+                and all(.labels[]; type == "object" and (.name | type) == "string")
+              then [.labels[].name] | sort
+              else error("malformed pull-request labels")
+              end
+            ' <<<"${live_pr}")" || return 1
+            printf '%s' "${labels_json}" | sha256sum | cut -d ' ' -f 1
+          }
+          validate_bound_review() {
+            local reviews
+            [[ "${BOUND_REVIEW_ID}" =~ ^[A-Za-z0-9_=-]+$ ]] || return 1
+            reviews="$(api_read --paginate --slurp \
+              "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")" || return 1
+            jq -e --arg head "${EVENT_HEAD}" --arg review_id "${BOUND_REVIEW_ID}" '
+              [add[]? | select(.node_id == $review_id)] as $reviews |
+              ($reviews | length) == 1
+              and $reviews[0].commit_id == $head
+              and ($reviews[0].user.login == "copilot-pull-request-reviewer"
+                or $reviews[0].user.login == "copilot-pull-request-reviewer[bot]")
+              and ($reviews[0].state == "COMMENTED" or $reviews[0].state == "APPROVED")
+            ' <<<"${reviews}" >/dev/null
+          }
           [[ "${EVENT_BASE}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${EVENT_HEAD}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
           [[ "${TRUSTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${BOUND_LABELS_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${EVENT_HEAD_REPOSITORY}" == */* ]]
           [[ "${BOUND_LAST_EDITED_AT}" == null \
             || "${BOUND_LAST_EDITED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
           test "$(read_metadata_revision)" = "${BOUND_LAST_EDITED_AT}"
+          test "$(read_labels_sha256)" = "${BOUND_LABELS_SHA256}"
+          [[ "${EVENT_BASE_REF}" =~ ^(develop|main)$ ]]
           test "${DEFAULT_BRANCH}" = develop
           test "${TRUSTED_WORKFLOW_REF}" = \
-            "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${DEFAULT_BRANCH}"
+            "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${EVENT_BASE_REF}"
+          test "${TRUSTED_WORKFLOW_SHA}" = "${EVENT_BASE}"
           default_head="$(gh api "repos/${REPOSITORY}/branches/${DEFAULT_BRANCH}" --jq .commit.sha)"
-          controller_ancestry="$(gh api \
-            "repos/${REPOSITORY}/compare/${TRUSTED_WORKFLOW_SHA}...${default_head}")"
-          jq -e \
-            --arg controller "${TRUSTED_WORKFLOW_SHA}" '
-              .status == "identical"
-              or (.status == "ahead" and .behind_by == 0
-                  and .merge_base_commit.sha == $controller)
-            ' <<<"${controller_ancestry}" >/dev/null
           protected_run="$(gh api "repos/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")"
           jq -e \
             --arg branch "${EVENT_HEAD_REF}" \
+            --arg head_repository "${EVENT_HEAD_REPOSITORY}" \
             --arg repository "${REPOSITORY}" \
             --arg sha "${EVENT_HEAD}" '
               .event == "pull_request_target"
@@ -1173,7 +1260,7 @@ jobs:
               and .head_branch == $branch
               and .head_sha == $sha
               and .repository.full_name == $repository
-              and .head_repository.full_name == $repository
+              and .head_repository.full_name == $head_repository
             ' <<<"${protected_run}" >/dev/null
           pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
           jq -e \
@@ -1181,6 +1268,7 @@ jobs:
             --arg base_sha "${EVENT_BASE}" \
             --arg body "${EVENT_BODY}" \
             --arg head_ref "${EVENT_HEAD_REF}" \
+            --arg head_repository "${EVENT_HEAD_REPOSITORY}" \
             --arg head_sha "${EVENT_HEAD}" \
             --arg repository "${REPOSITORY}" \
             --arg title "${EVENT_TITLE}" '
@@ -1192,7 +1280,7 @@ jobs:
               and .base.sha == $base_sha
               and .head.ref == $head_ref
               and .head.sha == $head_sha
-              and .head.repo.full_name == $repository
+              and .head.repo.full_name == $head_repository
             ' <<<"${pr}" >/dev/null
           base_ref="$(jq -er '.base.ref | select(. == "develop" or . == "main")' <<<"${pr}")"
           test -n "${base_ref}"
@@ -1266,20 +1354,32 @@ jobs:
             test "${author}" != 'lightning-it-shared-assets-sync[bot]'
             test "${author}" != 'lightning-it-release-automation[bot]'
           fi
+          if [ "${external_kind}" = copilot ]; then
+            validate_bound_review
+          else
+            test -z "${BOUND_REVIEW_ID}"
+          fi
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           evidence="$(jq -cn \
             --arg base "${EVENT_BASE}" \
             --arg controller "${TRUSTED_WORKFLOW_SHA}" \
+            --arg controller_ref "${EVENT_BASE_REF}" \
             --arg head "${EVENT_HEAD}" \
+            --arg head_repository "${EVENT_HEAD_REPOSITORY}" \
             --arg last_edited_at "${BOUND_LAST_EDITED_AT}" \
+            --arg labels_sha256 "${BOUND_LABELS_SHA256}" \
+            --arg review_id "${BOUND_REVIEW_ID}" \
             --arg review_path "${review_path}" \
             --argjson pr_number "${PR_NUMBER}" \
             --argjson run_id "${GITHUB_RUN_ID}" \
             --arg run_url "${run_url}" \
-            '{schema:4,base_sha:$base,head_sha:$head,controller_sha:$controller,
+            '{schema:4,base_sha:$base,head_sha:$head,head_repository:$head_repository,
+              controller_sha:$controller,controller_ref:$controller_ref,
               pull_request_number:$pr_number,producer_run_id:$run_id,
               pull_request_last_edited_at:(
                 if $last_edited_at == "null" then null else $last_edited_at end),
+              pull_request_labels_sha256:$labels_sha256,
+              review_id:(if $review_id == "" then null else $review_id end),
               review_path:$review_path,run_url:$run_url}')"
           publish_once() {
             local check_name="$1" external_id="$2" title="$3"
@@ -1302,8 +1402,12 @@ jobs:
               exit 1
             fi
             if [ "${count}" -eq 1 ]; then
-              if [ "${EVENT_ACTION}" = edited ]; then
-                expected_reservation="mlx90-current-revision:metadata-edit:v1:${PR_NUMBER}:${GITHUB_RUN_ID}:${EVENT_BASE}:${EVENT_HEAD}"
+              if [[ "${EVENT_ACTION}" =~ ^(edited|labeled|unlabeled)$ ]]; then
+                reservation_kind="${EVENT_ACTION}"
+                if [ "${reservation_kind}" = edited ]; then
+                  reservation_kind=edit
+                fi
+                expected_reservation="mlx90-current-revision:metadata-${reservation_kind}:v1:${PR_NUMBER}:${GITHUB_RUN_ID}:${EVENT_BASE}:${EVENT_HEAD}"
                 test "$(jq -r '.[0].external_id // empty' <<<"${named}")" = \
                   "${expected_reservation}"
               fi
@@ -1409,12 +1513,20 @@ jobs:
             "${result_title}")"
           [[ "${published_check_id}" =~ ^[1-9][0-9]*$ ]]
           final_last_edited_at=''
+          final_labels_sha256=''
+          final_review_valid=true
+          if [ "${external_kind}" = copilot ] && ! validate_bound_review; then
+            final_review_valid=false
+          fi
           if ! final_last_edited_at="$(read_metadata_revision)" \
-            || [ "${final_last_edited_at}" != "${BOUND_LAST_EDITED_AT}" ]; then
+            || [ "${final_last_edited_at}" != "${BOUND_LAST_EDITED_AT}" ] \
+            || ! final_labels_sha256="$(read_labels_sha256)" \
+            || [ "${final_labels_sha256}" != "${BOUND_LABELS_SHA256}" ] \
+            || [ "${final_review_valid}" != true ]; then
             failure_evidence="$(jq -cn \
               --arg base "${EVENT_BASE}" \
               --arg head "${EVENT_HEAD}" \
-              --arg reason "pull-request metadata changed during result publication" \
+              --arg reason "pull-request metadata, labels, or review state changed during result publication" \
               --argjson pr_number "${PR_NUMBER}" \
               --argjson run_id "${GITHUB_RUN_ID}" \
               --arg run_url "${run_url}" \
@@ -1443,7 +1555,7 @@ jobs:
                 and .conclusion == "failure"
                 and .output.summary == $evidence
               ' <<<"${invalidated}" >/dev/null
-            echo "Pull-request metadata changed during result publication." >&2
+            echo "Pull-request metadata, labels, or review state changed during result publication." >&2
             exit 1
           fi
 

@@ -56,7 +56,6 @@ jobs:
       ) ||
       (
         github.event.pull_request.draft == false &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
         (
           (
             github.event_name == 'pull_request_review' &&
@@ -101,6 +100,7 @@ jobs:
           EVENT_COMMENT_ID: ${{ github.event.comment.id }}
           EVENT_COMMENT_UPDATED_AT: ${{ github.event.comment.updated_at }}
           EVENT_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVENT_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
@@ -156,19 +156,83 @@ jobs:
               and .base.sha == $base
               and .head.sha == $head
               and .base.repo.full_name == $repository
-              and .head.repo.full_name == $repository
+              and (.head.repo.full_name | type == "string" and length > 0)
               and (.base.ref == "develop" or .base.ref == "main")
               and (.head.ref | type == "string" and length > 0)
               and (.user.login | type == "string" and length > 0)
+              and (.labels | type) == "array"
+              and all(.labels[];
+                type == "object" and (.name | type) == "string")
             ' <<<"${pr}" >/dev/null
           PR_AUTHOR="$(jq -er .user.login <<<"${pr}")"
           PR_BASE_REF="$(jq -er .base.ref <<<"${pr}")"
           PR_HEAD_REF="$(jq -er .head.ref <<<"${pr}")"
+          PR_HEAD_REPOSITORY="$(jq -er \
+            '.head.repo.full_name | select(type == "string" and length > 0)' \
+            <<<"${pr}")"
           [[ "${PR_BASE_REF}" =~ ^(develop|main)$ ]]
+          if [ "${PR_AUTHOR}" = 'lightning-it-release-automation[bot]' ]; then
+            echo "Release-App PRs use only the protected Exact-Revision Codex path."
+            exit 0
+          fi
+          labels_sha256_from_pr() {
+            local labels_json pr_json="$1"
+            if ! jq -e \
+              --arg base "${BASE_SHA}" \
+              --arg base_ref "${PR_BASE_REF}" \
+              --arg head "${HEAD_SHA}" \
+              --arg head_repository "${PR_HEAD_REPOSITORY}" \
+              --arg repository "${REPOSITORY}" '
+                .state == "open"
+                and .draft == false
+                and .base.ref == $base_ref
+                and .base.sha == $base
+                and .head.sha == $head
+                and .base.repo.full_name == $repository
+                and .head.repo.full_name == $head_repository
+                and (.labels | type) == "array"
+                and all(.labels[];
+                  type == "object" and (.name | type) == "string")
+              ' <<<"${pr_json}" >/dev/null; then
+              return 1
+            fi
+            labels_json="$(jq -cer '[.labels[].name] | sort' <<<"${pr_json}")" || return 1
+            printf '%s' "${labels_json}" | sha256sum | cut -d ' ' -f 1
+          }
+          read_metadata_revision() {
+            local owner="${REPOSITORY%%/*}" repository="${REPOSITORY#*/}"
+            local query response
+            read -r -d '' query <<'GRAPHQL' || true
+          query($owner: String!, $repository: String!, $number: Int!) {
+            repository(owner: $owner, name: $repository) {
+              pullRequest(number: $number) { number lastEditedAt }
+            }
+          }
+          GRAPHQL
+            response="$(gh api graphql \
+              -f query="${query}" \
+              -F owner="${owner}" \
+              -F repository="${repository}" \
+              -F number="${PR_NUMBER}")"
+            jq -er \
+              --argjson number "${PR_NUMBER}" '
+                select(((.errors // []) | length) == 0)
+                | select(.data.repository.pullRequest.number == $number)
+                | .data.repository.pullRequest.lastEditedAt
+                | if . == null then "null"
+                  elif type == "string"
+                    and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+                  then . else error("malformed lastEditedAt") end
+              ' <<<"${response}"
+          }
+          PR_LABELS_SHA256="$(labels_sha256_from_pr "${pr}")"
+          [[ "${PR_LABELS_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          PR_LAST_EDITED_AT="$(read_metadata_revision)"
           if [ "${EVENT_NAME}" != workflow_dispatch ]; then
             test "${EVENT_PR_AUTHOR}" = "${PR_AUTHOR}"
             test "${EVENT_PR_BASE_REF}" = "${PR_BASE_REF}"
             test "${EVENT_HEAD_REF}" = "${PR_HEAD_REF}"
+            test "${EVENT_HEAD_REPOSITORY}" = "${PR_HEAD_REPOSITORY}"
           fi
           runs_url="repos/${REPOSITORY}/actions/runs"
           refresh_url="${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
@@ -276,6 +340,86 @@ jobs:
           if [ "${neutral_count}" -eq 1 ]; then
             check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${neutral}")"
             check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
+            validate_neutral_producer() {
+              local external_id evidence_version kind producer producer_id
+              local producer_jobs producer_jobs_pages producer_run_attempt producer_url
+              local review_id review_pages
+              external_id="$(jq -er '.[0].external_id | select(type == "string")' <<<"${neutral}")"
+              producer_id="$(jq -er '.[0].output.summary | fromjson | .producer_run_id | select(type == "number" and . > 0)' <<<"${neutral}")"
+              producer_url="$(jq -er '.[0].output.summary | fromjson | .run_url | select(type == "string" and length > 0)' <<<"${neutral}")"
+              if [[ "${external_id}" =~ ^mlx90-current-revision:(copilot|managed-sync|ancestry-backmerge):v6:${PR_NUMBER}:([1-9][0-9]*):${BASE_SHA}:${HEAD_SHA}$ ]]; then
+                evidence_version=v6
+                kind="${BASH_REMATCH[1]}"
+                test "${BASH_REMATCH[2]}" = "${producer_id}"
+              elif [[ "${external_id}" =~ ^mlx90-current-revision:(copilot|ancestry-backmerge):v5:([1-9][0-9]*):${BASE_SHA}:${HEAD_SHA}$ ]]; then
+                evidence_version=v5
+                kind="${BASH_REMATCH[1]}"
+                test "${BASH_REMATCH[2]}" = "${producer_id}"
+              else
+                return 1
+              fi
+              test "${producer_url}" = "${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${producer_id}"
+              producer="$(gh api "repos/${REPOSITORY}/actions/runs/${producer_id}")" || return 1
+              jq -e \
+                --arg base_ref "${PR_BASE_REF}" \
+                --arg base_sha "${BASE_SHA}" \
+                --arg head_ref "${PR_HEAD_REF}" \
+                --arg head_repository "${PR_HEAD_REPOSITORY}" \
+                --arg head_sha "${HEAD_SHA}" \
+                --arg repository "${REPOSITORY}" \
+                --arg url "${producer_url}" \
+                --argjson pr "${PR_NUMBER}" '
+                  .event == "pull_request_target"
+                  and .path == ".github/workflows/copilot-review.yml"
+                  and .name == "Current revision review gate"
+                  and .repository.full_name == $repository
+                  and .head_repository.full_name == $head_repository
+                  and .head_branch == $head_ref and .head_sha == $head_sha
+                  and .html_url == $url and .status == "completed"
+                  and .conclusion == "success"
+                  and (.run_attempt | type) == "number"
+                  and .run_attempt >= 1 and .run_attempt <= 2
+                  and (.pull_requests | length) == 1
+                  and .pull_requests[0].number == $pr
+                  and .pull_requests[0].base.ref == $base_ref
+                  and .pull_requests[0].base.sha == $base_sha
+                  and .pull_requests[0].head.ref == $head_ref
+                  and .pull_requests[0].head.sha == $head_sha
+                ' <<<"${producer}" >/dev/null || return 1
+              producer_run_attempt="$(jq -er '.run_attempt | select(type == "number")' <<<"${producer}")"
+              producer_jobs_pages="$(gh api --paginate --slurp \
+                "repos/${REPOSITORY}/actions/runs/${producer_id}/jobs?filter=all&per_page=100")" || return 1
+              producer_jobs="$(jq -c --argjson attempt "${producer_run_attempt}" '
+                [.[].jobs[]? | select(.name == "Verify current revision policy") |
+                  select(.run_attempt == $attempt and .status == "completed"
+                    and .conclusion == "success")]
+              ' <<<"${producer_jobs_pages}")" || return 1
+              test "$(jq 'length' <<<"${producer_jobs}")" -eq 1
+              test "$(jq '[.[0].steps[]? | select(.name == "Publish bound neutral result"
+                and .conclusion == "success")] | length' <<<"${producer_jobs}")" -eq 1
+              if [ "${kind}" = copilot ]; then
+                review_pages="$(gh api --paginate --slurp \
+                  "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")" || return 1
+                if [ "${evidence_version}" = v6 ]; then
+                  review_id="$(jq -er '.[0].output.summary | fromjson | .review_id | select(type == "string" and length > 0)' <<<"${neutral}")" || return 1
+                  jq -e --arg head "${HEAD_SHA}" --arg review_id "${review_id}" '
+                    [add[]? | select(.node_id == $review_id)] as $reviews |
+                    ($reviews | length) == 1 and $reviews[0].commit_id == $head
+                    and ($reviews[0].user.login == "copilot-pull-request-reviewer"
+                      or $reviews[0].user.login == "copilot-pull-request-reviewer[bot]")
+                    and ($reviews[0].state == "COMMENTED" or $reviews[0].state == "APPROVED")
+                  ' <<<"${review_pages}" >/dev/null || return 1
+                else
+                  jq -e --arg head "${HEAD_SHA}" '
+                    [add[]? | select(.commit_id == $head) |
+                      select(.user.login == "copilot-pull-request-reviewer"
+                        or .user.login == "copilot-pull-request-reviewer[bot]")] as $reviews |
+                    ($reviews | length) == 1
+                    and ($reviews[0].state == "COMMENTED" or $reviews[0].state == "APPROVED")
+                  ' <<<"${review_pages}" >/dev/null || return 1
+                fi
+              fi
+            }
             # Managed distribution has its own evidence kind. The sync App may
             # never satisfy the Copilot branch, and inside lightning-it/.github
             # it is accepted only as ancestry-backmerge.
@@ -283,6 +427,9 @@ jobs:
               --arg author "${PR_AUTHOR}" \
               --arg base "${BASE_SHA}" \
               --arg head "${HEAD_SHA}" \
+              --arg head_repository "${PR_HEAD_REPOSITORY}" \
+              --arg labels_sha256 "${PR_LABELS_SHA256}" \
+              --arg last_edited_at "${PR_LAST_EDITED_AT}" \
               --arg pr "${PR_NUMBER}" \
               --arg base_ref "${PR_BASE_REF}" \
               --arg repository "${REPOSITORY}" \
@@ -315,12 +462,20 @@ jobs:
                             + ":[1-9][0-9]*:" + $base + ":" + $head + "$")))
                       or
                       (($repository == "lightning-it/.github"
-                        and $author == "lightning-it-shared-assets-sync[bot]")
+                        and $author == "lightning-it-shared-assets-sync[bot]"
+                        and $base_ref == "develop")
                         and ($check.external_id |
                           test("^mlx90-current-revision:ancestry-backmerge:v6:"
                             + $pr + ":[1-9][0-9]*:" + $base + ":" + $head + "$")))
                     )
                     and $summary.pull_request_number == $pr_number
+                    and $summary.head_repository == $head_repository
+                    and $summary.controller_sha == $base
+                    and $summary.controller_ref == $base_ref
+                    and $summary.pull_request_labels_sha256 == $labels_sha256
+                    and ($summary | has("pull_request_last_edited_at"))
+                    and $summary.pull_request_last_edited_at == (
+                      if $last_edited_at == "null" then null else $last_edited_at end)
                   )
                   or
                   (
@@ -336,15 +491,12 @@ jobs:
                         and ($check.external_id |
                           test("^mlx90-current-revision:ancestry-backmerge:v5:"
                             + "[1-9][0-9]*:" + $base + ":" + $head + "$")))
-                      or
-                      ($author == "lightning-it-release-automation[bot]"
-                        and ($check.external_id |
-                          test("^mlx90-current-revision:v4:[1-9][0-9]*:[0-9a-f]{64}$")))
                     )
                     and $summary.pull_request_number == $pr_number
                   )
                 )
-              ' <<<"${neutral}" >/dev/null; then
+              ' <<<"${neutral}" >/dev/null \
+              || ! validate_neutral_producer; then
               echo "Existing neutral result is stale or malformed; canonical rerun required."
               evidence="$(jq -cn --arg base "${BASE_SHA}" --arg head "${HEAD_SHA}" \
                 '{schema:4,base_sha:$base,head_sha:$head,
@@ -410,6 +562,9 @@ jobs:
               echo "Current-head Copilot findings invalidate the neutral PASS." >&2
               exit 1
             fi
+            current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+            test "$(labels_sha256_from_pr "${current_pr}")" = "${PR_LABELS_SHA256}"
+            test "$(read_metadata_revision)" = "${PR_LAST_EDITED_AT}"
             echo "The exact current-head neutral PASS remains valid; no rerun is needed."
             exit 0
           fi
@@ -666,7 +821,13 @@ jobs:
               fi
               jq -e \
                 --arg author "${PR_AUTHOR}" \
-                --arg head "${HEAD_SHA}" '
+                --arg base_ref "${PR_BASE_REF}" \
+                --arg base_sha "${BASE_SHA}" \
+                --arg head "${HEAD_SHA}" \
+                --arg head_ref "${PR_HEAD_REF}" \
+                --arg head_repository "${PR_HEAD_REPOSITORY}" \
+                --arg repository "${REPOSITORY}" \
+                --argjson pr "${PR_NUMBER}" '
                   .event == "pull_request_target"
                   and .run_attempt == 1
                   and .status == "completed"
@@ -674,6 +835,15 @@ jobs:
                   and .path == ".github/workflows/copilot-review.yml"
                   and .name == "Current revision review gate"
                   and .head_sha == $head
+                  and .head_branch == $head_ref
+                  and .repository.full_name == $repository
+                  and .head_repository.full_name == $head_repository
+                  and (.pull_requests | length) == 1
+                  and .pull_requests[0].number == $pr
+                  and .pull_requests[0].base.ref == $base_ref
+                  and .pull_requests[0].base.sha == $base_sha
+                  and .pull_requests[0].head.ref == $head_ref
+                  and .pull_requests[0].head.sha == $head
                   and .actor.login == $author
                   and .triggering_actor.login == $author
                 ' <<<"${run}" >/dev/null
@@ -801,6 +971,9 @@ jobs:
             -f conclusion=success \
             -f 'output[title]=Late review rerun authorized' \
             -f "output[summary]=${authorization_summary}" >/dev/null
+          current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          test "$(labels_sha256_from_pr "${current_pr}")" = "${PR_LABELS_SHA256}"
+          test "$(read_metadata_revision)" = "${PR_LAST_EDITED_AT}"
           gh api --method POST \
             "repos/${REPOSITORY}/actions/jobs/${verifier_job_id}/rerun" >/dev/null
           trap - EXIT
