@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 import yaml
-from packaging.requirements import Requirement
+from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 
@@ -12,7 +12,24 @@ from packaging.version import Version
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def parse_direct_requirement(raw_line: str) -> Requirement | None:
+    stripped_line = raw_line.strip()
+    if not stripped_line or stripped_line.startswith("#"):
+        return None
+    requirement_text = re.split(r"\s+#", raw_line, maxsplit=1)[0].strip()
+    return Requirement(requirement_text)
+
+
 class ContainerToolchainContractTests(unittest.TestCase):
+    def test_requirement_comments_cannot_hide_malformed_content(self):
+        self.assertIsNone(parse_direct_requirement("  # full-line comment"))
+        self.assertEqual(
+            "example",
+            parse_direct_requirement("example==1.0  # inline comment").name,
+        )
+        with self.assertRaises(InvalidRequirement):
+            parse_direct_requirement("example==1.0#tampered")
+
     def test_language_dependent_repository_checks_are_pinned_in_image(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
@@ -41,10 +58,9 @@ class ContainerToolchainContractTests(unittest.TestCase):
 
         direct_requirements = {}
         for raw_line in requirements.splitlines():
-            requirement_text = raw_line.partition("#")[0].strip()
-            if not requirement_text:
+            requirement = parse_direct_requirement(raw_line)
+            if requirement is None:
                 continue
-            requirement = Requirement(requirement_text)
             normalized_name = canonicalize_name(requirement.name)
             self.assertNotIn(
                 normalized_name,
