@@ -4,15 +4,36 @@ import unittest
 from pathlib import Path
 
 import yaml
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def parse_direct_requirement(raw_line: str) -> Requirement | None:
+    stripped_line = raw_line.strip()
+    if not stripped_line or stripped_line.startswith("#"):
+        return None
+    requirement_text = re.split(r"\s+#", raw_line, maxsplit=1)[0].strip()
+    return Requirement(requirement_text)
+
+
 class ContainerToolchainContractTests(unittest.TestCase):
+    def test_requirement_comments_cannot_hide_malformed_content(self):
+        self.assertIsNone(parse_direct_requirement("  # full-line comment"))
+        self.assertEqual(
+            "example",
+            parse_direct_requirement("example==1.0  # inline comment").name,
+        )
+        with self.assertRaises(InvalidRequirement):
+            parse_direct_requirement("example==1.0#tampered")
+
     def test_language_dependent_repository_checks_are_pinned_in_image(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        requirements_lock = (ROOT / "requirements.lock").read_text(encoding="utf-8")
         container_package = json.loads(
             (ROOT / "container-toolchain/package.json").read_text(encoding="utf-8")
         )
@@ -22,11 +43,49 @@ class ContainerToolchainContractTests(unittest.TestCase):
             )
         )
 
-        for name in ("mypy", "ruff", "types-PyYAML"):
-            self.assertRegex(
-                requirements,
-                rf"(?m)^{re.escape(name)}==[^\s]+$",
-                f"{name} must be directly and exactly pinned",
+        locked_versions = {}
+        for match in re.finditer(
+            r"(?m)^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[^\s\\]+)(?:\s|$)",
+            requirements_lock,
+        ):
+            normalized_name = canonicalize_name(match.group("name"))
+            self.assertNotIn(
+                normalized_name,
+                locked_versions,
+                f"{normalized_name} must occur only once in requirements.lock",
+            )
+            locked_versions[normalized_name] = Version(match.group("version"))
+
+        direct_requirements = {}
+        for raw_line in requirements.splitlines():
+            requirement = parse_direct_requirement(raw_line)
+            if requirement is None:
+                continue
+            normalized_name = canonicalize_name(requirement.name)
+            self.assertNotIn(
+                normalized_name,
+                direct_requirements,
+                f"{normalized_name} must occur only once in requirements.txt",
+            )
+            self.assertTrue(
+                requirement.specifier,
+                f"{requirement.name} must have an explicit version constraint",
+            )
+            direct_requirements[normalized_name] = requirement
+
+        self.assertTrue(direct_requirements, "requirements.txt must not be empty")
+        for normalized_name, requirement in direct_requirements.items():
+            self.assertIn(
+                normalized_name,
+                locked_versions,
+                f"{requirement.name} must be resolved in requirements.lock",
+            )
+            locked_version = locked_versions[normalized_name]
+            self.assertIn(
+                locked_version,
+                requirement.specifier,
+                f"{requirement.name} lock version {locked_version} must satisfy "
+                f"the direct constraint {requirement.specifier}",
             )
         for name in ("renovate", "markdownlint-cli2", "prettier"):
             version = container_package["dependencies"][name]
@@ -126,6 +185,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "pre-commit --version",
             "ruff --version",
             "mypy --version",
+            "uv --version",
             "renovate-config-validator --version",
             "markdownlint-cli2 --version",
             "prettier --version",
@@ -133,9 +193,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
         ):
             self.assertIn(command, dockerfile)
 
-        renovate = json.loads(
-            (ROOT / "renovate.json").read_text(encoding="utf-8")
-        )
+        renovate = json.loads((ROOT / "renovate.json").read_text(encoding="utf-8"))
         serialized_managers = json.dumps(renovate["customManagers"])
         for version_argument in (
             "TFLINT_VERSION",
@@ -156,9 +214,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             self.assertNotIn(atomic_or_derived_argument, serialized_managers)
 
         container_lock = yaml.safe_load(
-            (ROOT / "container-toolchain/pnpm-lock.yaml").read_text(
-                encoding="utf-8"
-            )
+            (ROOT / "container-toolchain/pnpm-lock.yaml").read_text(encoding="utf-8")
         )
         self.assertEqual("9.0", str(container_lock["lockfileVersion"]))
         self.assertEqual(pnpm_workspace["overrides"], container_lock["overrides"])
@@ -175,6 +231,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "pre-commit --version",
             "ruff --version",
             "mypy --version",
+            "uv --version",
             "renovate-config-validator --version",
             "markdownlint-cli2 --version",
             "prettier --version",
@@ -186,7 +243,9 @@ class ContainerToolchainContractTests(unittest.TestCase):
         ):
             content = (ROOT / relative_path).read_text(encoding="utf-8")
             for command in required_commands:
-                self.assertIn(command, content, f"{command} missing from {relative_path}")
+                self.assertIn(
+                    command, content, f"{command} missing from {relative_path}"
+                )
 
         container_ci = (ROOT / "scripts/devtools-container-ci.sh").read_text(
             encoding="utf-8"
@@ -207,9 +266,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
         )
 
     def test_instruction_binding_runs_inside_the_container_boundary(self):
-        profile = (ROOT / "scripts/lit-ci-profile.sh").read_text(
-            encoding="utf-8"
-        )
+        profile = (ROOT / "scripts/lit-ci-profile.sh").read_text(encoding="utf-8")
         self.assertIn(
             '"$DEVTOOLS_WRAPPER" \\\n'
             "  env \\\n"
