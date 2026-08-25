@@ -54,6 +54,7 @@ development. It is based on **Red Hat UBI 9** and includes:
 - yamllint
 - ShellCheck
 - actionlint
+- uv for reproducible, hash-locked Python dependency refreshes
 - Node.js, npm, and pnpm for repository-owned, lockfile-pinned validators
 - Terraform CLI
 - TFLint
@@ -91,6 +92,7 @@ Ubuntu, and macOS pipeline-parity work.
   - `yamllint`
   - `shellcheck`
   - `actionlint`
+  - `uv`
   - `node` / `npm` / `pnpm`
   - `terraform`
   - `tflint`
@@ -250,10 +252,10 @@ Publishing targets: `github-release, quay.io`.
 
 ## Compatibility Matrix
 
-| Image Version | Base Image | Runtime | Validation |
-|---|---|---|---|
-| Latest release | ubi9 | Podman / GitHub Actions | See release evidence |
-| Latest release | podman | Podman / GitHub Actions | See release evidence |
+| Image Version  | Base Image    | Runtime                 | Validation           |
+| -------------- | ------------- | ----------------------- | -------------------- |
+| Latest release | ubi9          | Podman / GitHub Actions | See release evidence |
+| Latest release | podman        | Podman / GitHub Actions | See release evidence |
 | Latest release | docker-buildx | Podman / GitHub Actions | See release evidence |
 
 Validation proof for each released version is stored in the corresponding GitHub Release evidence.

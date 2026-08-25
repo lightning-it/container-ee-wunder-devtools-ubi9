@@ -265,7 +265,8 @@ RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     rm -f /tmp/requirements.txt /tmp/requirements.lock && \
     ansible --version && ansible-galaxy --version && antsibull-changelog --version && \
     shellcheck --version && actionlint --version && pre-commit --version && \
-    ruff --version && mypy --version && renovate-config-validator --version && \
+    ruff --version && mypy --version && uv --version && \
+    renovate-config-validator --version && \
     markdownlint-cli2 --version && prettier --version && pnpm --version && \
     helm version --short && gh --version && \
     copr-cli --version && rpmspec --version && qemu-img --version && \

@@ -13,6 +13,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
     def test_language_dependent_repository_checks_are_pinned_in_image(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        requirements_lock = (ROOT / "requirements.lock").read_text(encoding="utf-8")
         container_package = json.loads(
             (ROOT / "container-toolchain/package.json").read_text(encoding="utf-8")
         )
@@ -22,11 +23,33 @@ class ContainerToolchainContractTests(unittest.TestCase):
             )
         )
 
-        for name in ("mypy", "ruff", "types-PyYAML"):
-            self.assertRegex(
+        for requirement_name, lock_name in (
+            ("mypy", "mypy"),
+            ("ruff", "ruff"),
+            ("types-PyYAML", "types-pyyaml"),
+            ("uv", "uv"),
+        ):
+            direct_pin = re.search(
+                rf"(?m)^{re.escape(requirement_name)}==(?P<version>[^\s]+)$",
                 requirements,
-                rf"(?m)^{re.escape(name)}==[^\s]+$",
-                f"{name} must be directly and exactly pinned",
+            )
+            self.assertIsNotNone(
+                direct_pin,
+                f"{requirement_name} must be directly and exactly pinned",
+            )
+            locked_pin = re.search(
+                rf"(?m)^{re.escape(lock_name)}==(?P<version>[^\s]+) \\$",
+                requirements_lock,
+            )
+            self.assertIsNotNone(
+                locked_pin,
+                f"{lock_name} must be exactly pinned in requirements.lock",
+            )
+            self.assertEqual(
+                direct_pin.group("version"),
+                locked_pin.group("version"),
+                f"{requirement_name} must match the version installed from "
+                "requirements.lock",
             )
         for name in ("renovate", "markdownlint-cli2", "prettier"):
             version = container_package["dependencies"][name]
@@ -126,6 +149,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "pre-commit --version",
             "ruff --version",
             "mypy --version",
+            "uv --version",
             "renovate-config-validator --version",
             "markdownlint-cli2 --version",
             "prettier --version",
@@ -133,9 +157,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
         ):
             self.assertIn(command, dockerfile)
 
-        renovate = json.loads(
-            (ROOT / "renovate.json").read_text(encoding="utf-8")
-        )
+        renovate = json.loads((ROOT / "renovate.json").read_text(encoding="utf-8"))
         serialized_managers = json.dumps(renovate["customManagers"])
         for version_argument in (
             "TFLINT_VERSION",
@@ -156,9 +178,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             self.assertNotIn(atomic_or_derived_argument, serialized_managers)
 
         container_lock = yaml.safe_load(
-            (ROOT / "container-toolchain/pnpm-lock.yaml").read_text(
-                encoding="utf-8"
-            )
+            (ROOT / "container-toolchain/pnpm-lock.yaml").read_text(encoding="utf-8")
         )
         self.assertEqual("9.0", str(container_lock["lockfileVersion"]))
         self.assertEqual(pnpm_workspace["overrides"], container_lock["overrides"])
@@ -186,7 +206,9 @@ class ContainerToolchainContractTests(unittest.TestCase):
         ):
             content = (ROOT / relative_path).read_text(encoding="utf-8")
             for command in required_commands:
-                self.assertIn(command, content, f"{command} missing from {relative_path}")
+                self.assertIn(
+                    command, content, f"{command} missing from {relative_path}"
+                )
 
         container_ci = (ROOT / "scripts/devtools-container-ci.sh").read_text(
             encoding="utf-8"
@@ -207,9 +229,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
         )
 
     def test_instruction_binding_runs_inside_the_container_boundary(self):
-        profile = (ROOT / "scripts/lit-ci-profile.sh").read_text(
-            encoding="utf-8"
-        )
+        profile = (ROOT / "scripts/lit-ci-profile.sh").read_text(encoding="utf-8")
         self.assertIn(
             '"$DEVTOOLS_WRAPPER" \\\n'
             "  env \\\n"
