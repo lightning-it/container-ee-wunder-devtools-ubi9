@@ -1114,7 +1114,7 @@ jobs:
             exit 1
           fi
 
-          [[ "${review_id}" =~ ^[A-Za-z0-9_=-]+$ ]]
+          [[ "${review_id}" =~ ^[A-Za-z0-9_+/=-]+$ ]]
           echo "review_id=${review_id}" >>"${GITHUB_OUTPUT}"
           echo "GitHub Copilot reviewed current head ${head_sha}; no unresolved Copilot findings remain."
 
@@ -1227,7 +1227,7 @@ jobs:
           }
           validate_bound_review() {
             local attempt reviews
-            [[ "${BOUND_REVIEW_ID}" =~ ^[A-Za-z0-9_=-]+$ ]] || return 1
+            [[ "${BOUND_REVIEW_ID}" =~ ^[A-Za-z0-9_+/=-]+$ ]] || return 1
             # GitHub can expose a completed review through GraphQL before the
             # REST review collection converges. Re-prove the same immutable
             # review with a bounded read-only wait; never request AI again.
@@ -1266,7 +1266,6 @@ jobs:
           test "${TRUSTED_WORKFLOW_REF}" = \
             "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${EVENT_BASE_REF}"
           test "${TRUSTED_WORKFLOW_SHA}" = "${EVENT_BASE}"
-          default_head="$(gh api "repos/${REPOSITORY}/branches/${DEFAULT_BRANCH}" --jq .commit.sha)"
           protected_run="$(gh api "repos/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")"
           jq -e \
             --arg branch "${EVENT_HEAD_REF}" \
@@ -1320,6 +1319,7 @@ jobs:
             test "${author}" = 'lightning-it-shared-assets-sync[bot]'
             test "${TRUSTED_KIND}" = ancestry-backmerge
             test "${base_ref}" = develop
+            default_head="$(gh api "repos/${REPOSITORY}/branches/${DEFAULT_BRANCH}" --jq .commit.sha)"
             [[ "${EVENT_HEAD_REF}" == backmerge/*-main ]]
             [[ "$(jq -r .title <<<"${pr}")" == \
               "chore(governance): record main ancestry before "* ]]

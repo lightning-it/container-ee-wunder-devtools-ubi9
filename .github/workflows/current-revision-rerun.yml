@@ -189,6 +189,168 @@ jobs:
             echo "Neutral evidence does not match a supported protected producer binding." >&2
             exit 1
           fi
+          supplementary_sparse_v6_cutover=false
+          if [ "${evidence_version}" = v6 ] \
+            && [ "${external_kind}" = copilot ] \
+            && [ "${REPOSITORY}" = \
+              'lightning-it/ansible-collection-supplementary' ] \
+            && [ "${author}" = litroc ] \
+            && [ "${base_ref}" = develop ] \
+            && [ "${head_repository}" = "${REPOSITORY}" ] \
+            && jq -e '.labels | length == 0' <<<"${pr}" >/dev/null \
+            && jq -e \
+              --arg base "${EXPECTED_BASE}" \
+              --arg head "${EXPECTED_HEAD}" \
+              --arg last_edited_at "${live_last_edited_at}" \
+              --arg run_url "${producer_url}" \
+              --argjson pr_number "${PR_NUMBER}" \
+              --argjson run_id "${producer_id}" '
+                (keys | sort) == ([
+                  "base_sha", "controller_sha", "head_sha",
+                  "producer_run_id", "pull_request_last_edited_at",
+                  "pull_request_number", "review_path", "run_url", "schema"
+                ] | sort)
+                and .schema == 4
+                and .base_sha == $base
+                and .head_sha == $head
+                and .controller_sha == $base
+                and .pull_request_number == $pr_number
+                and .producer_run_id == $run_id
+                and has("pull_request_last_edited_at")
+                and .pull_request_last_edited_at == (
+                  if $last_edited_at == "null" then null else $last_edited_at end)
+                and .review_path
+                  == "applicable Copilot or governed automation exemption"
+                and .run_url == $run_url
+              ' <<<"${neutral_summary}" >/dev/null; then
+            # Bounded bootstrap compatibility for the immutable protected
+            # producer that emitted the sparse v6 shape. This does not bind a
+            # moving PR number or commit. Instead it accepts only one exact
+            # byte manifest that replaces the historical producer with the
+            # expanded v6 controller. A successor PR with byte-identical
+            # contents can therefore complete without another policy edit,
+            # while any changed, added, removed, renamed, or symlinked path
+            # fails closed. The compatibility becomes unreachable as soon as
+            # the protected controller blob changes.
+            legacy_controller_path='.github/workflows/copilot-review.yml'
+            legacy_controller_blob='315789344caff1a9ed4faa54ddf300d2a65ba2b4'
+            legacy_controller_size=67408
+            legacy_controller="$(gh api \
+              "repos/${REPOSITORY}/contents/${legacy_controller_path}?ref=${EXPECTED_BASE}")"
+            jq -e \
+              --arg api_url "${GITHUB_API_URL}" \
+              --arg base "${EXPECTED_BASE}" \
+              --arg blob "${legacy_controller_blob}" \
+              --arg path "${legacy_controller_path}" \
+              --arg repository "${REPOSITORY}" \
+              --arg server_url "${GITHUB_SERVER_URL}" \
+              --argjson size "${legacy_controller_size}" '
+                .type == "file"
+                and .name == "copilot-review.yml"
+                and .path == $path
+                and .sha == $blob
+                and .size == $size
+                and .encoding == "base64"
+                and .url == ($api_url + "/repos/" + $repository
+                  + "/contents/" + $path + "?ref=" + $base)
+                and .git_url == ($api_url + "/repos/" + $repository
+                  + "/git/blobs/" + $blob)
+                and .html_url == ($server_url + "/" + $repository
+                  + "/blob/" + $base + "/" + $path)
+                and .download_url == ("https://raw.githubusercontent.com/"
+                  + $repository + "/" + $base + "/" + $path)
+              ' <<<"${legacy_controller}" >/dev/null
+            cutover_manifest="$(jq -cn '
+              [
+                {
+                  path: ".github/copilot-instructions.md",
+                  sha: "c57e1954fdb457580ba9a187d6dd9afcc393e248",
+                  size: 942,
+                  status: "modified"
+                },
+                {
+                  path: ".github/workflows/copilot-review.yml",
+                  sha: "42b0b2230bde58fbb79f3d2d33e1f698b9623be5",
+                  size: 73821,
+                  status: "modified"
+                },
+                {
+                  path: "AGENTS.md",
+                  sha: "b72fc05f6c87be9343dc0ea874ed65be65ba17f5",
+                  size: 45659,
+                  status: "modified"
+                },
+                {
+                  path: "changelogs/fragments/rep60-review-api-convergence.yml",
+                  sha: "b233d9f2873f18d98733dfaefa861a686305bf9a",
+                  size: 342,
+                  status: "added"
+                },
+                {
+                  path: "tests/unit/test_exact_revision_review.py",
+                  sha: "7d426b141c17ce033af275151d03327497316f75",
+                  size: 35523,
+                  status: "modified"
+                },
+                {
+                  path: "tests/unit/test_workflow_security.py",
+                  sha: "680d6c1d188cd68e2a20eeb3379c48ddec407d88",
+                  size: 77193,
+                  status: "modified"
+                }
+              ] | sort_by(.path)
+            ')"
+            cutover_files_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100")"
+            jq -e \
+              --argjson manifest "${cutover_manifest}" '
+                type == "array"
+                and length > 0
+                and all(.[]; type == "array")
+                and ([.[][] |
+                  {
+                    path: .filename,
+                    sha: .sha,
+                    status: .status,
+                    previous_filename: .previous_filename
+                  }
+                ] | sort_by(.path))
+                  == ($manifest | map({
+                    path,
+                    sha,
+                    status,
+                    previous_filename: null
+                  }))
+              ' <<<"${cutover_files_pages}" >/dev/null
+            while IFS=$'\t' read -r cutover_path cutover_blob cutover_size; do
+              cutover_file="$(gh api \
+                "repos/${REPOSITORY}/contents/${cutover_path}?ref=${EXPECTED_HEAD}")"
+              jq -e \
+                --arg api_url "${GITHUB_API_URL}" \
+                --arg blob "${cutover_blob}" \
+                --arg head "${EXPECTED_HEAD}" \
+                --arg path "${cutover_path}" \
+                --arg repository "${REPOSITORY}" \
+                --arg server_url "${GITHUB_SERVER_URL}" \
+                --argjson size "${cutover_size}" '
+                  .type == "file"
+                  and .path == $path
+                  and .sha == $blob
+                  and .size == $size
+                  and .encoding == "base64"
+                  and .url == ($api_url + "/repos/" + $repository
+                    + "/contents/" + $path + "?ref=" + $head)
+                  and .git_url == ($api_url + "/repos/" + $repository
+                    + "/git/blobs/" + $blob)
+                  and .html_url == ($server_url + "/" + $repository
+                    + "/blob/" + $head + "/" + $path)
+                  and .download_url == ("https://raw.githubusercontent.com/"
+                    + $repository + "/" + $head + "/" + $path)
+                ' <<<"${cutover_file}" >/dev/null
+            done < <(jq -r '.[] | [.path, .sha, (.size | tostring)] | @tsv' \
+              <<<"${cutover_manifest}")
+            supplementary_sparse_v6_cutover=true
+          fi
           jq -e \
             --arg base "${EXPECTED_BASE}" \
             --arg base_ref "${base_ref}" \
@@ -199,6 +361,8 @@ jobs:
             --arg labels_sha256 "${live_labels_sha256}" \
             --arg last_edited_at "${live_last_edited_at}" \
             --arg run_url "${producer_url}" \
+            --argjson supplementary_sparse_v6_cutover \
+              "${supplementary_sparse_v6_cutover}" \
             --argjson pr_number "${PR_NUMBER}" \
             --argjson run_id "${producer_id}" '
               .schema == 4
@@ -210,13 +374,27 @@ jobs:
                 if $evidence_version == "v4" then
                   .input_sha256 == $input_sha256
                 elif $evidence_version == "v6" then
-                  .head_repository == $head_repository
-                  and .controller_sha == $base
-                  and .controller_ref == $base_ref
-                  and .pull_request_labels_sha256 == $labels_sha256
-                  and has("pull_request_last_edited_at")
-                  and .pull_request_last_edited_at == (
-                    if $last_edited_at == "null" then null else $last_edited_at end)
+                  if $supplementary_sparse_v6_cutover then
+                    (keys | sort) == ([
+                      "base_sha", "controller_sha", "head_sha",
+                      "producer_run_id", "pull_request_last_edited_at",
+                      "pull_request_number", "review_path", "run_url", "schema"
+                    ] | sort)
+                    and .controller_sha == $base
+                    and .review_path
+                      == "applicable Copilot or governed automation exemption"
+                    and has("pull_request_last_edited_at")
+                    and .pull_request_last_edited_at == (
+                      if $last_edited_at == "null" then null else $last_edited_at end)
+                  else
+                    .head_repository == $head_repository
+                    and .controller_sha == $base
+                    and .controller_ref == $base_ref
+                    and .pull_request_labels_sha256 == $labels_sha256
+                    and has("pull_request_last_edited_at")
+                    and .pull_request_last_edited_at == (
+                      if $last_edited_at == "null" then null else $last_edited_at end)
+                  end
                 else true end
               )
               and (
@@ -278,12 +456,25 @@ jobs:
             default_branch="$(gh api "repos/${REPOSITORY}" --jq .default_branch)"
             test "${default_branch}" = develop
             if [ "${evidence_version}" = v6 ]; then
-              controller_ref="$(jq -er '.controller_ref | select(. == "develop" or . == "main")' \
-                <<<"${neutral_summary}")"
-              test "${controller_ref}" = "${base_ref}"
-              test "${controller_sha}" = "${EXPECTED_BASE}"
-              protected_head="$(gh api "repos/${REPOSITORY}/branches/${controller_ref}" --jq .commit.sha)"
-              test "${protected_head}" = "${controller_sha}"
+              if [ "${supplementary_sparse_v6_cutover}" = true ]; then
+                test "${base_ref}" = develop
+                test "${controller_sha}" = "${EXPECTED_BASE}"
+                protected_head="$(gh api \
+                  "repos/${REPOSITORY}/branches/develop" --jq .commit.sha)"
+                test "${protected_head}" = "${controller_sha}"
+                jq -e '
+                  .run_attempt == 1
+                  and .actor.login == "litroc"
+                  and .triggering_actor.login == "litroc"
+                ' <<<"${producer}" >/dev/null
+              else
+                controller_ref="$(jq -er '.controller_ref | select(. == "develop" or . == "main")' \
+                  <<<"${neutral_summary}")"
+                test "${controller_ref}" = "${base_ref}"
+                test "${controller_sha}" = "${EXPECTED_BASE}"
+                protected_head="$(gh api "repos/${REPOSITORY}/branches/${controller_ref}" --jq .commit.sha)"
+                test "${protected_head}" = "${controller_sha}"
+              fi
             else
               default_head="$(gh api "repos/${REPOSITORY}/branches/${default_branch}" --jq .commit.sha)"
               controller_ancestry="$(gh api \
