@@ -189,6 +189,11 @@
   Renovate must update each pair atomically; never restore a version-only
   manager downstream or hand-edit these managed policies in a target
   repository.
+- The Ansible override owns its clean-rebuild security surface: `Dockerfile`,
+  `scripts/build-patched-go-tools.sh`,
+  `rpm-security-updates.lock`, and the required Python dependency manifests.
+  The protected Shared-Assets App distributes the complete repository-specific
+  surface byte-for-byte. Do not hand-edit or duplicate those files downstream.
 - `container-ee-wunder-devtools-ubi9` receives its pipeline-only
   `.lit/push-ready.json`, Dockerfile-specific `renovate.json`, and clean,
   pull-through `scripts/devtools-container-ci.sh` from its repository-specific
