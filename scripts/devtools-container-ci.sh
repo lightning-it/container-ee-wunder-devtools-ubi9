@@ -124,7 +124,10 @@ PY
 github_repository_env="${GITHUB_REPOSITORY:-}"
 metadata_repository=""
 if [ -f .lit/repository.yml ]; then
-  metadata_repository="$(repository_metadata_value repository)"
+  if ! metadata_repository="$(repository_metadata_value repository)"; then
+    echo "ERROR: unable to read repository identity from .lit/repository.yml." >&2
+    exit 1
+  fi
 fi
 if [ -n "$metadata_repository" ] \
   && [[ ! "$metadata_repository" =~ ^[A-Za-z0-9._-]+$ ]]
