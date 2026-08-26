@@ -137,11 +137,16 @@ then
 fi
 
 if [ -n "$github_repository_env" ]; then
-  if [[ ! "$github_repository_env" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+  if [[ ! "$github_repository_env" =~ ^([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9._-]+)$ ]]; then
     echo "ERROR: GITHUB_REPOSITORY is not a valid owner/repository identity." >&2
     exit 1
   fi
-  repo_name="${github_repository_env##*/}"
+  github_owner="${BASH_REMATCH[1]}"
+  repo_name="${BASH_REMATCH[2]}"
+  if [[ "$github_owner" == *--* || "$github_owner" == *- ]]; then
+    echo "ERROR: GITHUB_REPOSITORY is not a valid owner/repository identity." >&2
+    exit 1
+  fi
   if [ -n "$metadata_repository" ] && [ "$repo_name" != "$metadata_repository" ]; then
     echo "ERROR: GITHUB_REPOSITORY does not match .lit/repository.yml." >&2
     exit 1
