@@ -692,25 +692,37 @@ jobs:
               conclusion=success
               title='Protected Exact-Revision Codex review passed'
             fi
-            finalized="$(api_patch "repos/${REPOSITORY}/check-runs/${{ steps.dedupe.outputs.check_id }}" \
+            api_patch "repos/${REPOSITORY}/check-runs/${{ steps.dedupe.outputs.check_id }}" \
               -f status=completed \
               -f conclusion="${conclusion}" \
               -f "output[title]=${title}" \
-              -f "output[summary]=${evidence}")"
-            jq -e \
-              --arg conclusion "${conclusion}" \
-              --arg evidence "${evidence}" \
-              --arg head "${EXPECTED_HEAD}" \
-              --argjson check_id "${{ steps.dedupe.outputs.check_id }}" '
-                .id == $check_id
-                and .name == "Protected Exact-Revision Codex result"
-                and .app.id == 15368
-                and .app.slug == "github-actions"
-                and .head_sha == $head
-                and .status == "completed"
-                and .conclusion == $conclusion
-                and .output.summary == $evidence
-              ' <<<"${finalized}" >/dev/null
+              -f "output[summary]=${evidence}" >/dev/null
+            finalized=''
+            for publication_attempt in $(seq 1 5); do
+              if finalized="$(gh api \
+                  "repos/${REPOSITORY}/check-runs/${{ steps.dedupe.outputs.check_id }}")" && \
+                jq -e \
+                  --arg conclusion "${conclusion}" \
+                  --arg evidence "${evidence}" \
+                  --arg head "${EXPECTED_HEAD}" \
+                  --argjson check_id "${{ steps.dedupe.outputs.check_id }}" '
+                    .id == $check_id
+                    and .name == "Protected Exact-Revision Codex result"
+                    and .app.id == 15368
+                    and .app.slug == "github-actions"
+                    and .head_sha == $head
+                    and .status == "completed"
+                    and .conclusion == $conclusion
+                    and .output.summary == $evidence
+                  ' <<<"${finalized}" >/dev/null; then
+                break
+              fi
+              finalized=''
+              if [ "${publication_attempt}" -lt 5 ]; then
+                sleep 2
+              fi
+            done
+            test -n "${finalized}"
             test "${conclusion}" = success
           fi
           [[ "${NEUTRAL_CHECK_ID}" =~ ^[1-9][0-9]*$ ]]
@@ -718,33 +730,45 @@ jobs:
           test "${EXPECTED_NEUTRAL_EXTERNAL_ID}" = "${expected_neutral_external_id}"
           neutral_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${NEUTRAL_CHECK_ID}"
           completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          neutral="$(api_patch "repos/${REPOSITORY}/check-runs/${NEUTRAL_CHECK_ID}" \
+          api_patch "repos/${REPOSITORY}/check-runs/${NEUTRAL_CHECK_ID}" \
             -f status=completed \
             -f conclusion=success \
             -f "completed_at=${completed_at}" \
             -f "details_url=${neutral_url}" \
             -f "external_id=${expected_neutral_external_id}" \
             -f 'output[title]=Protected Exact-Revision Codex review passed' \
-            -f "output[summary]=${evidence}")"
-          jq -e \
-            --arg completed_at "${completed_at}" \
-            --arg evidence "${evidence}" \
-            --arg external_id "${expected_neutral_external_id}" \
-            --arg head "${EXPECTED_HEAD}" \
-            --arg url "${neutral_url}" \
-            --argjson check_id "${NEUTRAL_CHECK_ID}" '
-              .id == $check_id
-              and .name == "Current revision review"
-              and .app.id == 15368
-              and .app.slug == "github-actions"
-              and .head_sha == $head
-              and .details_url == $url
-              and .external_id == $external_id
-              and .completed_at == $completed_at
-              and .status == "completed"
-              and .conclusion == "success"
-              and .output.summary == $evidence
-            ' <<<"${neutral}" >/dev/null
+            -f "output[summary]=${evidence}" >/dev/null
+          neutral=''
+          for publication_attempt in $(seq 1 5); do
+            if neutral="$(gh api \
+                "repos/${REPOSITORY}/check-runs/${NEUTRAL_CHECK_ID}")" && \
+              jq -e \
+                --arg completed_at "${completed_at}" \
+                --arg evidence "${evidence}" \
+                --arg external_id "${expected_neutral_external_id}" \
+                --arg head "${EXPECTED_HEAD}" \
+                --arg url "${neutral_url}" \
+                --argjson check_id "${NEUTRAL_CHECK_ID}" '
+                  .id == $check_id
+                  and .name == "Current revision review"
+                  and .app.id == 15368
+                  and .app.slug == "github-actions"
+                  and .head_sha == $head
+                  and .details_url == $url
+                  and .external_id == $external_id
+                  and .completed_at == $completed_at
+                  and .status == "completed"
+                  and .conclusion == "success"
+                  and .output.summary == $evidence
+                ' <<<"${neutral}" >/dev/null; then
+              break
+            fi
+            neutral=''
+            if [ "${publication_attempt}" -lt 5 ]; then
+              sleep 2
+            fi
+          done
+          test -n "${neutral}"
 
       - name: Fail-close an unfinished protected reservation
         if: >-
