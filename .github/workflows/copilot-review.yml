@@ -108,11 +108,6 @@ jobs:
           test "$(jq -r .base.repo.full_name <<<"${pr}")" = "${REPOSITORY}"
           test "$(jq -r .head.sha <<<"${pr}")" = "${EXPECTED_HEAD}"
           test "$(jq -r .head.repo.full_name <<<"${pr}")" = "${REPOSITORY}"
-          author="$(jq -r .user.login <<<"${pr}")"
-          if [ "${author}" != litroc ]; then
-            echo "Contributor-funded review required; Lightning IT does not request or fund it."
-            exit 0
-          fi
           reviewer_login="${COPILOT_REVIEWER_LOGIN%\[bot\]}"
           reviewer="${reviewer_login}[bot]"
           requested_reviewers_url="repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers"
@@ -1228,18 +1223,30 @@ jobs:
             printf '%s' "${labels_json}" | sha256sum | cut -d ' ' -f 1
           }
           validate_bound_review() {
-            local reviews
+            local attempt reviews
             [[ "${BOUND_REVIEW_ID}" =~ ^[A-Za-z0-9_=-]+$ ]] || return 1
-            reviews="$(api_read --paginate --slurp \
-              "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")" || return 1
-            jq -e --arg head "${EVENT_HEAD}" --arg review_id "${BOUND_REVIEW_ID}" '
-              [add[]? | select(.node_id == $review_id)] as $reviews |
-              ($reviews | length) == 1
-              and $reviews[0].commit_id == $head
-              and ($reviews[0].user.login == "copilot-pull-request-reviewer"
-                or $reviews[0].user.login == "copilot-pull-request-reviewer[bot]")
-              and ($reviews[0].state == "COMMENTED" or $reviews[0].state == "APPROVED")
-            ' <<<"${reviews}" >/dev/null
+            # GitHub can expose a completed review through GraphQL before the
+            # REST review collection converges. Re-prove the same immutable
+            # review with a bounded read-only wait; never request AI again.
+            for attempt in $(seq 1 10); do
+              if reviews="$(api_read --paginate --slurp \
+                  "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")" \
+                && jq -e --arg head "${EVENT_HEAD}" --arg review_id "${BOUND_REVIEW_ID}" '
+                  [add[]? | select(.node_id == $review_id)] as $reviews |
+                  ($reviews | length) == 1
+                  and $reviews[0].commit_id == $head
+                  and ($reviews[0].user.login == "copilot-pull-request-reviewer"
+                    or $reviews[0].user.login == "copilot-pull-request-reviewer[bot]")
+                  and ($reviews[0].state == "COMMENTED" or $reviews[0].state == "APPROVED")
+                ' <<<"${reviews}" >/dev/null; then
+                return 0
+              fi
+              if [ "${attempt}" -eq 10 ]; then
+                echo "The exact bound Copilot review did not converge across GitHub review APIs." >&2
+                return 1
+              fi
+              sleep 3
+            done
           }
           [[ "${EVENT_BASE}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${EVENT_HEAD}" =~ ^[0-9a-f]{40}$ ]]
