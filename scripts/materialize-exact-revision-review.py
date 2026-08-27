@@ -584,8 +584,12 @@ def git_output(
                     fail(f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: {' '.join(command)}")
                 for key, _events in selector.select(remaining):
                     if key.data == "stdout":
-                        remaining_bytes = max_bytes - len(stdout)
-                        read_size = min(65_536, remaining_bytes + 1)
+                        # MLX-90 rejects inputs greater than or equal to the
+                        # protected boundary, so max_bytes is deliberately an
+                        # exclusive limit. Read one sentinel byte beyond the
+                        # remaining allowed payload to detect that boundary.
+                        remaining_allowed = max_bytes - 1 - len(stdout)
+                        read_size = min(65_536, remaining_allowed + 1)
                     else:
                         read_size = 65_536
                     try:
@@ -596,10 +600,10 @@ def git_output(
                         selector.unregister(key.fileobj)
                         continue
                     if key.data == "stdout":
-                        remaining_bytes = max_bytes - len(stdout)
-                        if remaining_bytes > 0:
-                            stdout.extend(chunk[:remaining_bytes])
-                        if len(chunk) >= remaining_bytes:
+                        remaining_allowed = max_bytes - 1 - len(stdout)
+                        if remaining_allowed > 0:
+                            stdout.extend(chunk[:remaining_allowed])
+                        if len(chunk) > remaining_allowed:
                             limit_exceeded = True
                             if process.poll() is None:
                                 process.kill()
