@@ -270,8 +270,8 @@ jobs:
                 },
                 {
                   path: ".github/workflows/copilot-review.yml",
-                  sha: "42b0b2230bde58fbb79f3d2d33e1f698b9623be5",
-                  size: 73821,
+                  sha: "31f9a50d77ca29860c9ca8e0932cd52ca00f1c77",
+                  size: 73914,
                   status: "modified"
                 },
                 {
@@ -294,8 +294,8 @@ jobs:
                 },
                 {
                   path: "tests/unit/test_workflow_security.py",
-                  sha: "680d6c1d188cd68e2a20eeb3379c48ddec407d88",
-                  size: 77193,
+                  sha: "0d0bbbb007aceca873e031c00360799cbbd69372",
+                  size: 77406,
                   status: "modified"
                 }
               ] | sort_by(.path)
