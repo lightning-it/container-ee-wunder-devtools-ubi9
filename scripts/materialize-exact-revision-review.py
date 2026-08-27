@@ -249,6 +249,12 @@ def open_owned_parent_directory(path: Path, name: str, requirement: str) -> tupl
             directory,
             "Validated parent directory",
         )
+    if parent_details.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        fail_after_descriptor_cleanup(
+            f"Protected {name} parent must not be group- or world-writable.",
+            directory,
+            "Validated parent directory",
+        )
     return directory, no_follow, close_on_exec
 
 
