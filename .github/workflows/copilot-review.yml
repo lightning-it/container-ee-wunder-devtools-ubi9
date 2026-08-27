@@ -43,10 +43,180 @@ concurrency:
 # Exact-Revision Codex check, without an exemption in this controller. This
 # workflow retains the final-head GitHub Copilot path for applicable human PRs
 # plus the separately identified Shared-Assets-App automation exemptions.
+# The one main trust-root handoff is authorized only by the immutable job ledger
+# of the organization Required Workflow. Candidate metadata never authorizes an
+# exemption by itself, and a missing or ambiguous protected ledger fails closed.
 jobs:
+  classify-main-trust-root-handoff:
+    name: Classify protected main trust-root handoff
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'litroc'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      active: ${{ steps.handoff.outputs.active }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify protected Required-Workflow handoff provenance
+        id: handoff
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+          EVENT_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo 'active=false' >>"${GITHUB_OUTPUT}"
+          [[ "${REPOSITORY}" =~ ^lightning-it/[A-Za-z0-9_.-]+$ ]]
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${EVENT_BASE}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EVENT_HEAD}" =~ ^[0-9a-f]{40}$ ]]
+          pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg base "${EVENT_BASE}" \
+            --arg head "${EVENT_HEAD}" \
+            --arg head_ref "${EVENT_HEAD_REF}" \
+            --arg repository "${REPOSITORY}" \
+            --argjson number "${PR_NUMBER}" '
+              .number == $number
+              and .state == "open"
+              and .draft == false
+              and .base.sha == $base
+              and .base.repo.full_name == $repository
+              and .head.sha == $head
+              and .head.ref == $head_ref
+              and .head.repo.full_name == $repository
+            ' <<<"${pr}" >/dev/null
+          if ! jq -e '
+              .user.login == "litroc"
+              and .user.type == "User"
+              and .base.ref == "main"
+              and .title
+                == "fix(rep60): bootstrap protected main review trust root"
+            ' <<<"${pr}" >/dev/null; then
+            exit 0
+          fi
+
+          required_workflow_path='.github/workflows/supplementary-current-revision-required.yml'
+          required_workflow_url_prefix="${GITHUB_API_URL}/repos/${REPOSITORY}/actions/required_workflows/"
+          for observation in $(seq 1 60); do
+            run_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/actions/runs?event=pull_request_target&head_sha=${EVENT_HEAD}&per_page=100")"
+            matching_runs="$(jq -c \
+              --arg head "${EVENT_HEAD}" \
+              --arg head_ref "${EVENT_HEAD_REF}" \
+              --arg path "${required_workflow_path}" \
+              --arg repository "${REPOSITORY}" \
+              --arg url_prefix "${required_workflow_url_prefix}" \
+              --argjson number "${PR_NUMBER}" \
+              '
+                [.[].workflow_runs[]? |
+                  select(.workflow_id | type == "number" and . > 0) |
+                  select(
+                    .workflow_url == ($url_prefix + (.workflow_id | tostring))
+                    and .path == $path
+                  ) |
+                  select(.event == "pull_request_target") |
+                  select(.head_sha == $head and .head_branch == $head_ref) |
+                  select(.repository.full_name == $repository) |
+                  select(.head_repository.full_name == $repository) |
+                  select(.actor.login == "litroc") |
+                  select(
+                    (.run_attempt == 1
+                      and .triggering_actor.login == "litroc")
+                    or
+                    (.run_attempt == 2
+                      and .triggering_actor.login == "github-actions[bot]")
+                  ) |
+                  select(
+                    .display_title == ("Protected current revision PR #" + ($number | tostring) + " opened " + $head)
+                    or .display_title == ("Protected current revision PR #" + ($number | tostring) + " synchronize " + $head)
+                    or .display_title == ("Protected current revision PR #" + ($number | tostring) + " reopened " + $head)
+                    or .display_title == ("Protected current revision PR #" + ($number | tostring) + " ready_for_review " + $head)
+                    or .display_title == ("Protected current revision PR #" + ($number | tostring) + " edited " + $head)
+                  )]
+              ' <<<"${run_pages}")"
+            run_count="$(jq 'length' <<<"${matching_runs}")"
+            if [ "${run_count}" -gt 1 ]; then
+              echo 'Multiple protected Required-Workflow runs claim the handoff.' >&2
+              exit 1
+            fi
+            if [ "${run_count}" -eq 0 ]; then
+              if [ "${observation}" -eq 60 ]; then
+                echo 'The protected Required-Workflow handoff never materialized.' >&2
+                exit 1
+              fi
+              sleep 3
+              continue
+            fi
+
+            required_run="$(jq -c '.[0]' <<<"${matching_runs}")"
+            required_run_id="$(jq -er '.id | select(type == "number" and . > 0)' \
+              <<<"${required_run}")"
+            required_attempt="$(jq -er '.run_attempt | select(. == 1 or . == 2)' \
+              <<<"${required_run}")"
+            job_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/actions/runs/${required_run_id}/jobs?filter=all&per_page=100")"
+            required_jobs="$(jq -c \
+              --arg head "${EVENT_HEAD}" \
+              --argjson attempt "${required_attempt}" \
+              --argjson run_id "${required_run_id}" '
+                [.[].jobs[]? |
+                  select(.run_id == $run_id) |
+                  select(.run_attempt == $attempt) |
+                  select(.head_sha == $head) |
+                  select(.name == "Required current-revision workflow")]
+              ' <<<"${job_pages}")"
+            job_count="$(jq 'length' <<<"${required_jobs}")"
+            if [ "${job_count}" -gt 1 ]; then
+              echo 'The protected Required-Workflow job ledger is ambiguous.' >&2
+              exit 1
+            fi
+            if [ "${job_count}" -eq 1 ]; then
+              classification_steps="$(jq -c '
+                [.[0].steps[]? |
+                  select(.name == "Classify protected main trust-root bootstrap handoff")]
+                ' <<<"${required_jobs}")"
+              step_count="$(jq 'length' <<<"${classification_steps}")"
+              if [ "${step_count}" -gt 1 ]; then
+                echo 'The protected handoff classification step is ambiguous.' >&2
+                exit 1
+              fi
+              if [ "${step_count}" -eq 1 ] \
+                && [ "$(jq -r '.[0].status' <<<"${classification_steps}")" = completed ] \
+                && [ "$(jq -r '.[0].conclusion' <<<"${classification_steps}")" = success ]; then
+                echo 'active=true' >>"${GITHUB_OUTPUT}"
+                exit 0
+              fi
+              if [ "$(jq -r '.[0].status' <<<"${required_jobs}")" = completed ]; then
+                echo 'The protected Required-Workflow completed without authorizing the handoff.' >&2
+                exit 1
+              fi
+            fi
+            if [ "${observation}" -eq 60 ]; then
+              echo 'The protected handoff classification did not converge.' >&2
+              exit 1
+            fi
+            sleep 3
+          done
+
   request-current-revision-review:
     name: Request Copilot review for current revision
+    needs: classify-main-trust-root-handoff
     if: >-
+      always() &&
+      (needs.classify-main-trust-root-handoff.result == 'success' ||
+        needs.classify-main-trust-root-handoff.result == 'skipped') &&
+      needs.classify-main-trust-root-handoff.outputs.active != 'true' &&
       github.event_name == 'pull_request_target' &&
       (github.event.action == 'opened' ||
         github.event.action == 'ready_for_review') &&
@@ -197,7 +367,12 @@ jobs:
 
   verify-current-revision-policy:
     name: Verify current revision policy
+    needs: classify-main-trust-root-handoff
     if: >-
+      always() &&
+      (needs.classify-main-trust-root-handoff.result == 'success' ||
+        needs.classify-main-trust-root-handoff.result == 'skipped') &&
+      needs.classify-main-trust-root-handoff.outputs.active != 'true' &&
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' &&
