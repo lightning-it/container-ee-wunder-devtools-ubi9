@@ -355,6 +355,29 @@ jobs:
               else
                 return 1
               fi
+              if [ "${evidence_version}" = v6 ]; then
+                summary_controller_sha="$(jq -er \
+                  '.[0].output.summary | fromjson | .controller_sha
+                    | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+                  <<<"${neutral}")" || return 1
+                summary_controller_ref="$(jq -er \
+                  '.[0].output.summary | fromjson | .controller_ref
+                    | select(type == "string" and length > 0)' \
+                  <<<"${neutral}")" || return 1
+                test "${summary_controller_ref}" = "${default_branch}" \
+                  || return 1
+                summary_controller_ancestry="$(gh api \
+                  "repos/${REPOSITORY}/compare/${summary_controller_sha}...${default_head}")" \
+                  || return 1
+                jq -e \
+                  --arg controller "${summary_controller_sha}" '
+                    .status == "identical"
+                    or (.status == "ahead"
+                      and .behind_by == 0
+                      and .merge_base_commit.sha == $controller)
+                  ' <<<"${summary_controller_ancestry}" >/dev/null \
+                  || return 1
+              fi
               test "${producer_url}" = "${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${producer_id}"
               producer="$(gh api "repos/${REPOSITORY}/actions/runs/${producer_id}")" || return 1
               jq -e \
@@ -427,6 +450,7 @@ jobs:
               --arg head_repository "${PR_HEAD_REPOSITORY}" \
               --arg labels_sha256 "${PR_LABELS_SHA256}" \
               --arg last_edited_at "${PR_LAST_EDITED_AT}" \
+              --arg controller_ref "${default_branch}" \
               --arg pr "${PR_NUMBER}" \
               --arg base_ref "${PR_BASE_REF}" \
               --arg repository "${REPOSITORY}" \
@@ -467,8 +491,8 @@ jobs:
                     )
                     and $summary.pull_request_number == $pr_number
                     and $summary.head_repository == $head_repository
-                    and $summary.controller_sha == $base
-                    and $summary.controller_ref == $base_ref
+                    and ($summary.controller_sha | test("^[0-9a-f]{40}$"))
+                    and $summary.controller_ref == $controller_ref
                     and $summary.pull_request_labels_sha256 == $labels_sha256
                     and ($summary | has("pull_request_last_edited_at"))
                     and $summary.pull_request_last_edited_at == (

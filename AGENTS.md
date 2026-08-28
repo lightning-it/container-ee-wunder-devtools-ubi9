@@ -166,6 +166,15 @@
   review`. The built-in `:read-only` permission profile technically denies
   writes and command network access. This path never applies to human,
   community, or other automation authors.
+- A deterministic ancestry-backmerge retry MUST exhaustively read the open and
+  closed pull-request history for its exact repository-owned branch, base and
+  head before it creates a pull request. Any closed exact match, unexpected
+  response shape, or ambiguous inventory fails before PR creation and before
+  review dispatch. One already-open exact match may be identity- and
+  revision-validated, but the controller MUST exit without redispatching AI or
+  re-enabling a failed workflow path. Recovery after terminal evidence uses a
+  fresh revision through the normal correction, promotion and backmerge chain;
+  it never attaches the same commit to a successor PR.
 - When the one authorized final Copilot review arrives only after the bounded
   verifier has failed, the protected refresh normally reuses that review. If
   GitHub holds the Copilot-authored refresh in `action_required` before its

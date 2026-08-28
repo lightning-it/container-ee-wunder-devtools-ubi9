@@ -300,32 +300,89 @@ jobs:
           local_head="$(git rev-parse HEAD)"
           create_backmerge_branch "${branch}" "${local_head}"
 
-          pr_number="$(
-            gh api --method GET "repos/${REPOSITORY}/pulls" \
-              -f state=open \
+          pr_pages="$(
+            gh api --method GET --paginate --slurp \
+              "repos/${REPOSITORY}/pulls" \
+              -f state=all \
               -f base=develop \
               -f "head=lightning-it:${branch}" \
-              --jq '.[0].number // empty'
+              -f per_page=100
           )"
-          if [ -z "${pr_number}" ]; then
-            pr_url="$(
-              gh pr create \
-                --repo "${REPOSITORY}" \
-                --base develop \
-                --head "${branch}" \
-                --title "${title}" \
-                --body 'Automated ancestry backmerge with a deterministic, reviewable main binding.'
-            )"
-            pr_number="${pr_url##*/}"
-          fi
+          pr_pages_filter='
+            if type != "array" or length == 0 or any(.[]; type != "array") then
+              error("invalid paginated PR inventory")
+            else
+              [.[][]]
+            end
+          '
+          pr_inventory="$(jq -ce "${pr_pages_filter}" <<<"${pr_pages}")"
+          # shellcheck disable=SC2016  # jq variables must not expand in the shell.
+          pr_inventory_filter='
+            type == "array"
+            and all(.[];
+              (.number | type == "number" and . > 0)
+              and (.state == "open" or .state == "closed")
+              and .base.ref == "develop"
+              and .base.sha == $base
+              and .head.ref == $branch
+              and .head.sha == $head
+              and .head.repo.owner.login == "lightning-it"
+            )
+          '
+          jq -e \
+            --arg base "${develop_sha}" \
+            --arg branch "${branch}" \
+            --arg head "${local_head}" \
+            "${pr_inventory_filter}" \
+            <<<"${pr_inventory}" >/dev/null
+          # A deterministic retry recreates the same commit. Never attach that
+          # commit to a second PR or dispatch another review for an existing PR.
+          # shellcheck disable=SC2016  # jq program must not expand in the shell.
+          pr_decision_filter='
+            if length == 0 then "create"
+            elif length == 1 and .[0].state == "open" then "existing-open"
+            elif any(.[]; .state == "closed") then "closed-history"
+            else "ambiguous"
+            end
+          '
+          pr_decision="$(jq -er "${pr_decision_filter}" <<<"${pr_inventory}")"
+          created_new_pr=false
+          case "${pr_decision}" in
+            create)
+              pr_url="$(
+                gh pr create \
+                  --repo "${REPOSITORY}" \
+                  --base develop \
+                  --head "${branch}" \
+                  --title "${title}" \
+                  --body 'Automated ancestry backmerge with a deterministic, reviewable main binding.'
+              )"
+              pr_number="${pr_url##*/}"
+              created_new_pr=true
+              ;;
+            existing-open)
+              pr_number="$(jq -er '.[0].number' <<<"${pr_inventory}")"
+              ;;
+            closed-history)
+              echo '::error::An exact backmerge PR already exists in a terminal state; refusing to create a new PR or dispatch another review.'
+              exit 1
+              ;;
+            *)
+              echo '::error::Exact backmerge PR inventory is ambiguous; refusing to create a new PR or dispatch another review.'
+              exit 1
+              ;;
+          esac
+          [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]
 
           pr_details="$(gh pr view "${pr_number}" \
             --repo "${REPOSITORY}" \
-            --json author,baseRefName,baseRefOid,headRefName,headRefOid,headRepositoryOwner,isDraft,title)"
+            --json author,baseRefName,baseRefOid,headRefName,headRefOid,headRepositoryOwner,isDraft,state,title)"
           # shellcheck disable=SC2016  # jq variables must not expand in the shell.
           pr_filter='
             .author.login == $expected_author
+            and .state == "OPEN"
             and .baseRefName == "develop"
+            and .baseRefOid == $expected_base
             and .headRefName == $branch
             and .headRefOid == $expected_head
             and .headRepositoryOwner.login == "lightning-it"
@@ -334,12 +391,17 @@ jobs:
           '
           jq -e \
               --arg branch "${branch}" \
+              --arg expected_base "${develop_sha}" \
               --arg expected_head "${local_head}" \
               --arg expected_author "${EXPECTED_PR_AUTHOR}" \
               --arg title "${title}" \
               "${pr_filter}" \
               <<<"${pr_details}" \
             | grep -qx true
+          if [ "${created_new_pr}" != true ]; then
+            echo 'Exact open backmerge PR already exists; no review redispatch is permitted.'
+            exit 0
+          fi
           {
             echo "pr_number=${pr_number}"
             echo "base_ref=$(jq -r .baseRefName <<<"${pr_details}")"
