@@ -73,6 +73,15 @@
     },
     {
       "customType": "regex",
+      "description": "Website-selected Node.js version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+WEBSITE_NODE_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "node-version",
+      "packageNameTemplate": "node",
+      "depNameTemplate": "node-website-runtime"
+    },
+    {
+      "customType": "regex",
       "description": "GitHub CLI version pin in Dockerfile",
       "managerFilePatterns": ["/^Dockerfile$/"],
       "matchStrings": ["ARG\\s+GH_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
@@ -143,6 +152,11 @@
     {
       "description": "Do not update Renovate configuration dependencies",
       "matchManagers": ["renovate-config"],
+      "enabled": false
+    },
+    {
+      "description": "Keep the website Node runtime synchronized with its repository contract",
+      "matchDepNames": ["node-website-runtime"],
       "enabled": false
     },
     {
