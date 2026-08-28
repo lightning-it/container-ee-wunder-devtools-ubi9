@@ -975,11 +975,100 @@ jobs:
     if: needs.exact-revision-codex-review.result == 'success'
     permissions:
       actions: write
-      checks: read
       contents: read
-      pull-requests: read
-    uses: ./.github/workflows/current-revision-rerun.yml
-    with:
-      pr_number: ${{ inputs.pr_number }}
-      expected_base: ${{ inputs.expected_base }}
-      expected_head: ${{ inputs.expected_head }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Dispatch the protected re-evaluation helper from the exact base
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+          EXPECTED_BASE: ${{ inputs.expected_base }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          PRODUCER_RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "${BASE_REF}" =~ ^(develop|main)$ ]]
+          [[ "${EXPECTED_BASE}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${PRODUCER_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          test "${GITHUB_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
+          test "${GITHUB_REF}" = "refs/heads/${BASE_REF}"
+          test "${GITHUB_REF_PROTECTED}" = true
+          live_base="$(gh api \
+            "repos/${REPOSITORY}/branches/${BASE_REF}" --jq .commit.sha)"
+          test "${live_base}" = "${EXPECTED_BASE}"
+          gh api --method POST \
+            "repos/${REPOSITORY}/actions/workflows/current-revision-rerun.yml/dispatches" \
+            -f "ref=${BASE_REF}" \
+            -f "inputs[base_ref]=${BASE_REF}" \
+            -f "inputs[pr_number]=${PR_NUMBER}" \
+            -f "inputs[expected_base]=${EXPECTED_BASE}" \
+            -f "inputs[expected_head]=${EXPECTED_HEAD}" \
+            -f "inputs[producer_run_id]=${PRODUCER_RUN_ID}" >/dev/null
+          expected_title="Protected verifier handoff PR #${PR_NUMBER} producer ${PRODUCER_RUN_ID} head ${EXPECTED_HEAD}"
+          handoff=''
+          for observation_attempt in $(seq 1 20); do
+            runs="$(gh api \
+              "repos/${REPOSITORY}/actions/workflows/current-revision-rerun.yml/runs?event=workflow_dispatch&branch=${BASE_REF}&per_page=100")"
+            candidates="$(jq -c \
+              --arg actor 'github-actions[bot]' \
+              --arg base_ref "${BASE_REF}" \
+              --arg title "${expected_title}" '
+                [.workflow_runs[] |
+                  select(.event == "workflow_dispatch") |
+                  select(.path == ".github/workflows/current-revision-rerun.yml") |
+                  select(.display_title == $title) |
+                  select(.head_branch == $base_ref) |
+                  select(.actor.login == $actor and .triggering_actor.login == $actor)]
+              ' <<<"${runs}")"
+            test "$(jq 'length' <<<"${candidates}")" -le 1
+            if [ "$(jq 'length' <<<"${candidates}")" -eq 1 ]; then
+              handoff="$(jq -c '.[0]' <<<"${candidates}")"
+              break
+            fi
+            if [ "${observation_attempt}" -eq 20 ]; then
+              echo "The protected handoff run was not materialized in time." >&2
+              exit 1
+            fi
+            sleep 3
+          done
+          jq -e \
+            --arg base "${EXPECTED_BASE}" \
+            --arg base_ref "${BASE_REF}" \
+            --arg repository "${REPOSITORY}" '
+              .head_sha == $base
+              and .head_branch == $base_ref
+              and .repository.full_name == $repository
+              and (.status == "queued" or .status == "in_progress" or .status == "completed")
+            ' <<<"${handoff}" >/dev/null
+          handoff_id="$(jq -er '.id | select(type == "number" and . > 0)' <<<"${handoff}")"
+          job=''
+          for job_attempt in $(seq 1 20); do
+            jobs="$(gh api \
+              "repos/${REPOSITORY}/actions/runs/${handoff_id}/jobs?filter=all&per_page=100")"
+            materialized="$(jq -c '
+              [.jobs[] |
+                select(.name == "Re-run the one protected verifier attempt")]
+            ' <<<"${jobs}")"
+            test "$(jq 'length' <<<"${materialized}")" -le 1
+            if [ "$(jq 'length' <<<"${materialized}")" -eq 1 ]; then
+              job="$(jq -c '.[0]' <<<"${materialized}")"
+              break
+            fi
+            if [ "${job_attempt}" -eq 20 ]; then
+              echo "The exact protected handoff job was not materialized in time." >&2
+              exit 1
+            fi
+            sleep 3
+          done
+          jq -e \
+            --arg base "${EXPECTED_BASE}" '
+              .head_sha == $base
+              and .run_attempt == 1
+              and (.status == "queued" or .status == "in_progress" or .status == "completed")
+            ' <<<"${job}" >/dev/null
