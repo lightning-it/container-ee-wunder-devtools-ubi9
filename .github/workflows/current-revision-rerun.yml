@@ -9,6 +9,8 @@ run-name: >-
   head ${{ inputs.expected_head }}
 
 on:
+  # Reusable workflows inherit the caller's GitHub event context. The
+  # pull_request_target and push predicates below therefore bind real callers.
   workflow_call:
     inputs:
       base_ref:

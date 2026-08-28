@@ -781,7 +781,10 @@ jobs:
           test -n "${trigger_occurred_at}"
           blocked_refresh_run_id=0
           if [ "${rerun_reason}" = manual-delayed-review ]; then
-            blocked_refresh_title="REP-60 review refresh PR #${PR_NUMBER} review ${REVIEW_ID}"
+            # An action_required run has no evaluated run-name yet; GitHub
+            # exposes the pull-request title as display_title instead.
+            blocked_refresh_title="$(jq -er \
+              '.title | select(type == "string" and length > 0)' <<<"${pr}")"
             blocked_pages="$(gh api --paginate --slurp \
               "${runs_url}?event=pull_request_review&head_sha=${HEAD_SHA}&per_page=100")"
             blocked_refreshes="$(jq -c \
