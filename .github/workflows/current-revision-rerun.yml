@@ -1,0 +1,879 @@
+# Protected helper: it can rerun only the single verifier reservation bound to
+# the exact live PR head, and only once after a neutral PASS exists.
+# yamllint disable rule:truthy rule:line-length
+---
+name: Re-evaluate protected current-revision evidence
+run-name: >-
+  Protected verifier handoff PR #${{ inputs.pr_number }}
+  producer ${{ inputs.producer_run_id || 'reusable' }}
+  head ${{ inputs.expected_head }}
+
+on:
+  workflow_call:
+    inputs:
+      base_ref:
+        description: Frozen protected pull-request base ref for a detached exact-review handoff
+        required: false
+        type: string
+      pr_number:
+        description: Pull request whose protected verifier must be re-evaluated
+        required: true
+        type: number
+      expected_base:
+        description: Frozen pull-request base SHA
+        required: true
+        type: string
+      expected_head:
+        description: Frozen pull-request head SHA
+        required: true
+        type: string
+      producer_run_id:
+        description: Exact-Revision producer run for a detached protected handoff
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Frozen protected pull-request base ref
+        required: true
+        type: string
+      pr_number:
+        description: Pull request whose protected verifier must be re-evaluated
+        required: true
+        type: number
+      expected_base:
+        description: Frozen pull-request base SHA
+        required: true
+        type: string
+      expected_head:
+        description: Frozen pull-request head SHA
+        required: true
+        type: string
+      producer_run_id:
+        description: Frozen Exact-Revision producer run ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    protected-current-revision-rerun-${{ inputs.pr_number }}-${{ inputs.expected_head }}
+  cancel-in-progress: false
+
+jobs:
+  rerun-protected-verifier:
+    name: Re-run the one protected verifier attempt
+    if: >-
+      github.run_attempt == 1 &&
+      (
+        ( github.event_name == 'pull_request_target' && github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', github.event.pull_request.base.ref) && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
+        ( github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]' && github.triggering_actor == 'github-actions[bot]' && github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/current-revision-rerun.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', inputs.base_ref) && github.ref_protected == true ) ||
+        ( github.event_name == 'push' && github.workflow_sha == inputs.expected_head && github.workflow_ref == format('{0}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop', github.repository) && github.ref == 'refs/heads/develop' && github.ref_protected == true && github.sha == inputs.expected_head && github.event.ref == 'refs/heads/develop' && github.event.after == inputs.expected_head )
+      )
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Validate the live binding and rerun exactly once
+        env:
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_BASE_REF: ${{ github.event.inputs.base_ref }}
+          EVENT_EXPECTED_BASE: ${{ github.event.inputs.expected_base }}
+          EVENT_EXPECTED_HEAD: ${{ github.event.inputs.expected_head }}
+          EVENT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          EVENT_PRODUCER_RUN_ID: ${{ github.event.inputs.producer_run_id }}
+          EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          EXPECTED_BASE: ${{ inputs.expected_base }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_RUN_ATTEMPT}" =~ ^1$ ]]
+          [[ "${GITHUB_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request_target) controller_sha="${EXPECTED_BASE}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/copilot-review.yml@${GITHUB_REF}" ;;
+            workflow_dispatch)
+              controller_sha="${EXPECTED_BASE}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/current-revision-rerun.yml@${GITHUB_REF}"
+              test "${EVENT_ACTOR}" = 'github-actions[bot]'
+              test "${EVENT_TRIGGERING_ACTOR}" = 'github-actions[bot]'
+              test "${GITHUB_REF_PROTECTED}" = true
+              [[ "${EVENT_BASE_REF}" =~ ^(develop|main)$ ]]
+              [[ "${EVENT_PRODUCER_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+              test "${GITHUB_REF}" = "refs/heads/${EVENT_BASE_REF}"
+              test "${EVENT_PR_NUMBER}" = "${PR_NUMBER}"
+              test "${EVENT_EXPECTED_BASE}" = "${EXPECTED_BASE}"
+              test "${EVENT_EXPECTED_HEAD}" = "${EXPECTED_HEAD}"
+              ;;
+            push)
+              controller_sha="${EXPECTED_HEAD}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop"
+              test "${GITHUB_REF}:${GITHUB_SHA}" = "refs/heads/develop:${EXPECTED_HEAD}"
+              ;;
+            *) echo "Unsupported protected rerun caller event: ${GITHUB_EVENT_NAME}" >&2; exit 1 ;;
+          esac
+          test "${GITHUB_WORKFLOW_SHA}" = "${controller_sha}"
+          test "${GITHUB_WORKFLOW_REF}" = "${expected_workflow_ref}"
+          case "${GITHUB_REF}" in
+            refs/heads/develop|refs/heads/main) ;;
+            *) echo "Unsupported protected rerun caller ref: ${GITHUB_REF}" >&2; exit 1 ;;
+          esac
+          [[ "${EXPECTED_BASE}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg base "${EXPECTED_BASE}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --arg repository "${REPOSITORY}" '
+              .state == "open"
+              and .draft == false
+              and .base.sha == $base
+              and .head.sha == $head
+              and .base.repo.full_name == $repository
+              and (.head.repo.full_name | type) == "string"
+              and (.head.repo.full_name | length) > 0
+              and (.base.ref == "develop" or .base.ref == "main")
+              and (.labels | type) == "array"
+              and all(.labels[];
+                type == "object" and (.name | type) == "string")
+            ' <<<"${pr}" >/dev/null
+
+          author="$(jq -er '.user.login | select(type == "string" and length > 0)' <<<"${pr}")"
+          base_ref="$(jq -er '.base.ref | select(. == "develop" or . == "main")' <<<"${pr}")"
+          head_ref="$(jq -er '.head.ref | select(type == "string" and length > 0)' <<<"${pr}")"
+          head_repository="$(jq -er '.head.repo.full_name | select(type == "string" and length > 0)' <<<"${pr}")"
+          labels_sha256_from_pr() {
+            local labels_json pr_json="$1"
+            if ! jq -e \
+              --arg base "${EXPECTED_BASE}" \
+              --arg base_ref "${base_ref}" \
+              --arg head "${EXPECTED_HEAD}" \
+              --arg head_repository "${head_repository}" \
+              --arg repository "${REPOSITORY}" '
+                .state == "open"
+                and .draft == false
+                and .base.ref == $base_ref
+                and .base.sha == $base
+                and .head.sha == $head
+                and .base.repo.full_name == $repository
+                and .head.repo.full_name == $head_repository
+                and (.labels | type) == "array"
+                and all(.labels[];
+                  type == "object" and (.name | type) == "string")
+              ' <<<"${pr_json}" >/dev/null; then
+              return 1
+            fi
+            labels_json="$(jq -cer '[.labels[].name] | sort' <<<"${pr_json}")" || return 1
+            printf '%s' "${labels_json}" | sha256sum | cut -d ' ' -f 1
+          }
+          read_metadata_revision() {
+            local owner="${REPOSITORY%%/*}" repository="${REPOSITORY#*/}"
+            local query response
+            read -r -d '' query <<'GRAPHQL' || true
+          query($owner: String!, $repository: String!, $number: Int!) {
+            repository(owner: $owner, name: $repository) {
+              pullRequest(number: $number) { number lastEditedAt }
+            }
+          }
+          GRAPHQL
+            response="$(gh api graphql \
+              -f query="${query}" \
+              -F owner="${owner}" \
+              -F repository="${repository}" \
+              -F number="${PR_NUMBER}")"
+            jq -er \
+              --argjson number "${PR_NUMBER}" '
+                select(((.errors // []) | length) == 0)
+                | select(.data.repository.pullRequest.number == $number)
+                | .data.repository.pullRequest.lastEditedAt
+                | if . == null then "null"
+                  elif type == "string"
+                    and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+                  then . else error("malformed lastEditedAt") end
+              ' <<<"${response}"
+          }
+          read_neutral_inventory() {
+            local pages; pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
+            jq -ce --arg head "${EXPECTED_HEAD}" '
+              def nullable_string: type == "string" or . == null;
+              select(
+                type == "array" and length > 0
+                and all(.[]; type == "object"
+                  and (.total_count | type) == "number" and (.check_runs | type) == "array")
+                and all(.[].check_runs[];
+                  type == "object" and (.id | type) == "number" and .id > 0
+                  and (.name | type) == "string" and (.head_sha | type) == "string" and (.status | type) == "string"
+                  and has("conclusion") and (.conclusion | nullable_string)
+                  and has("details_url") and (.details_url | nullable_string)
+                  and has("external_id") and (.external_id | nullable_string)
+                  and (.app | type) == "object" and (.app.id | type) == "number"
+                  and (.app.slug | type) == "string" and (.output | type) == "object"
+                  and (.output | has("summary")) and (.output.summary | nullable_string)))
+              | [.[].check_runs[] |
+                  select(.name == "Current revision review") |
+                  select(.app.id == 15368 and .app.slug == "github-actions") |
+                  select(.head_sha == $head)]
+            ' <<<"${pages}"
+          }
+          revalidate_pr_metadata() {
+            local current_pr; current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+            test "$(labels_sha256_from_pr "${current_pr}")" = "${live_labels_sha256}"
+            test "$(read_metadata_revision)" = "${live_last_edited_at}"
+          }
+          live_labels_sha256="$(labels_sha256_from_pr "${pr}")"
+          [[ "${live_labels_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          live_last_edited_at="$(read_metadata_revision)"
+
+          neutral=''
+          for neutral_attempt in $(seq 1 40); do
+            neutral_inventory="$(read_neutral_inventory)"
+            neutral_count="$(jq 'length' <<<"${neutral_inventory}")"
+            test "${neutral_count}" -le 1
+            if [ "${neutral_count}" -eq 1 ]; then
+              neutral_status="$(jq -er '.[0].status | select(type == "string")' \
+                <<<"${neutral_inventory}")"
+              neutral_conclusion="$(jq -r '.[0].conclusion // empty' \
+                <<<"${neutral_inventory}")"
+              if [ "${neutral_status}" = completed ]; then
+                test "${neutral_conclusion}" = success
+                neutral="${neutral_inventory}"
+                break
+              fi
+            fi
+            if [ "${neutral_attempt}" -eq 40 ]; then
+              echo "Protected neutral evidence did not complete successfully in time." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          test "$(jq 'length' <<<"${neutral}")" -eq 1
+          neutral_check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${neutral}")"
+          neutral_details_url="$(jq -r '.[0].details_url // empty' <<<"${neutral}")"
+          test "${neutral_details_url}" = "${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${neutral_check_id}"
+          neutral_external_id="$(jq -er '.[0].external_id | select(type == "string" and length > 0)' <<<"${neutral}")"
+          neutral_summary="$(jq -er '.[0].output.summary | fromjson | select(type == "object")' <<<"${neutral}")"
+          producer_id="$(jq -er '.producer_run_id | select(type == "number" and . > 0)' <<<"${neutral_summary}")"
+          if [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]; then
+            test "${EVENT_PRODUCER_RUN_ID}" = "${producer_id}"
+            test "${EVENT_PRODUCER_RUN_ID}" != "${GITHUB_RUN_ID}"
+          fi
+          producer_url="$(jq -er '.run_url | select(type == "string" and length > 0)' <<<"${neutral_summary}")"
+          producer_prefix="${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/"
+          test "${producer_url}" = "${producer_prefix}${producer_id}"
+          evidence_version=''
+          external_kind=''
+          input_sha256=''
+          if [[ "${neutral_external_id}" =~ ^mlx90-current-revision:v4:${producer_id}:([0-9a-f]{64})$ ]]; then
+            evidence_version=v4
+            input_sha256="${BASH_REMATCH[1]}"
+          elif [[ "${neutral_external_id}" =~ ^mlx90-current-revision:(copilot|managed-sync|ancestry-backmerge):v6:${PR_NUMBER}:${producer_id}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
+            evidence_version=v6
+            external_kind="${BASH_REMATCH[1]}"
+          elif [[ "${neutral_external_id}" =~ ^mlx90-current-revision:(copilot|ancestry-backmerge):v5:${producer_id}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
+            evidence_version=v5
+            external_kind="${BASH_REMATCH[1]}"
+          else
+            echo "Neutral evidence does not match a supported protected producer binding." >&2
+            exit 1
+          fi
+          supplementary_sparse_v6_cutover=false
+          if [ "${evidence_version}" = v6 ] \
+            && [ "${external_kind}" = copilot ] \
+            && [ "${REPOSITORY}" = \
+              'lightning-it/ansible-collection-supplementary' ] \
+            && [ "${author}" = litroc ] \
+            && [ "${base_ref}" = develop ] \
+            && [ "${head_repository}" = "${REPOSITORY}" ] \
+            && jq -e '.labels | length == 0' <<<"${pr}" >/dev/null \
+            && jq -e \
+              --arg base "${EXPECTED_BASE}" \
+              --arg head "${EXPECTED_HEAD}" \
+              --arg last_edited_at "${live_last_edited_at}" \
+              --arg run_url "${producer_url}" \
+              --argjson pr_number "${PR_NUMBER}" \
+              --argjson run_id "${producer_id}" '
+                (keys | sort) == ([
+                  "base_sha", "controller_sha", "head_sha",
+                  "producer_run_id", "pull_request_last_edited_at",
+                  "pull_request_number", "review_path", "run_url", "schema"
+                ] | sort)
+                and .schema == 4
+                and .base_sha == $base
+                and .head_sha == $head
+                and .controller_sha == $base
+                and .pull_request_number == $pr_number
+                and .producer_run_id == $run_id
+                and has("pull_request_last_edited_at")
+                and .pull_request_last_edited_at == (
+                  if $last_edited_at == "null" then null else $last_edited_at end)
+                and .review_path
+                  == "applicable Copilot or governed automation exemption"
+                and .run_url == $run_url
+              ' <<<"${neutral_summary}" >/dev/null; then
+            # Bounded bootstrap compatibility for the immutable protected
+            # producer that emitted the sparse v6 shape. This does not bind a
+            # moving PR number or commit. Instead it accepts only one exact
+            # byte manifest that replaces the historical producer with the
+            # expanded v6 controller. A successor PR with byte-identical
+            # contents can therefore complete without another policy edit,
+            # while any changed, added, removed, renamed, or symlinked path
+            # fails closed. The compatibility becomes unreachable as soon as
+            # the protected controller blob changes.
+            legacy_controller_path='.github/workflows/copilot-review.yml'
+            legacy_controller_blob='315789344caff1a9ed4faa54ddf300d2a65ba2b4'
+            legacy_controller_size=67408
+            legacy_controller="$(gh api \
+              "repos/${REPOSITORY}/contents/${legacy_controller_path}?ref=${EXPECTED_BASE}")"
+            jq -e \
+              --arg api_url "${GITHUB_API_URL}" \
+              --arg base "${EXPECTED_BASE}" \
+              --arg blob "${legacy_controller_blob}" \
+              --arg path "${legacy_controller_path}" \
+              --arg repository "${REPOSITORY}" \
+              --arg server_url "${GITHUB_SERVER_URL}" \
+              --argjson size "${legacy_controller_size}" '
+                .type == "file"
+                and .name == "copilot-review.yml"
+                and .path == $path
+                and .sha == $blob
+                and .size == $size
+                and .encoding == "base64"
+                and .url == ($api_url + "/repos/" + $repository
+                  + "/contents/" + $path + "?ref=" + $base)
+                and .git_url == ($api_url + "/repos/" + $repository
+                  + "/git/blobs/" + $blob)
+                and .html_url == ($server_url + "/" + $repository
+                  + "/blob/" + $base + "/" + $path)
+                and .download_url == ("https://raw.githubusercontent.com/"
+                  + $repository + "/" + $base + "/" + $path)
+              ' <<<"${legacy_controller}" >/dev/null
+            cutover_manifest="$(jq -cn '
+              [
+                {
+                  path: ".github/copilot-instructions.md",
+                  sha: "c57e1954fdb457580ba9a187d6dd9afcc393e248",
+                  size: 942,
+                  status: "modified"
+                },
+                {
+                  path: ".github/workflows/copilot-review.yml",
+                  sha: "31f9a50d77ca29860c9ca8e0932cd52ca00f1c77",
+                  size: 73914,
+                  status: "modified"
+                },
+                {
+                  path: "AGENTS.md",
+                  sha: "b72fc05f6c87be9343dc0ea874ed65be65ba17f5",
+                  size: 45659,
+                  status: "modified"
+                },
+                {
+                  path: "changelogs/fragments/rep60-review-api-convergence.yml",
+                  sha: "b233d9f2873f18d98733dfaefa861a686305bf9a",
+                  size: 342,
+                  status: "added"
+                },
+                {
+                  path: "tests/unit/test_exact_revision_review.py",
+                  sha: "7d426b141c17ce033af275151d03327497316f75",
+                  size: 35523,
+                  status: "modified"
+                },
+                {
+                  path: "tests/unit/test_workflow_security.py",
+                  sha: "0d0bbbb007aceca873e031c00360799cbbd69372",
+                  size: 77406,
+                  status: "modified"
+                }
+              ] | sort_by(.path)
+            ')"
+            cutover_files_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100")"
+            jq -e \
+              --argjson manifest "${cutover_manifest}" '
+                type == "array"
+                and length > 0
+                and all(.[]; type == "array")
+                and ([.[][] |
+                  {
+                    path: .filename,
+                    sha: .sha,
+                    status: .status,
+                    previous_filename: .previous_filename
+                  }
+                ] | sort_by(.path))
+                  == ($manifest | map({
+                    path,
+                    sha,
+                    status,
+                    previous_filename: null
+                  }))
+              ' <<<"${cutover_files_pages}" >/dev/null
+            while IFS=$'\t' read -r cutover_path cutover_blob cutover_size; do
+              cutover_file="$(gh api \
+                "repos/${REPOSITORY}/contents/${cutover_path}?ref=${EXPECTED_HEAD}")"
+              jq -e \
+                --arg api_url "${GITHUB_API_URL}" \
+                --arg blob "${cutover_blob}" \
+                --arg head "${EXPECTED_HEAD}" \
+                --arg path "${cutover_path}" \
+                --arg repository "${REPOSITORY}" \
+                --arg server_url "${GITHUB_SERVER_URL}" \
+                --argjson size "${cutover_size}" '
+                  .type == "file"
+                  and .path == $path
+                  and .sha == $blob
+                  and .size == $size
+                  and .encoding == "base64"
+                  and .url == ($api_url + "/repos/" + $repository
+                    + "/contents/" + $path + "?ref=" + $head)
+                  and .git_url == ($api_url + "/repos/" + $repository
+                    + "/git/blobs/" + $blob)
+                  and .html_url == ($server_url + "/" + $repository
+                    + "/blob/" + $head + "/" + $path)
+                  and .download_url == ("https://raw.githubusercontent.com/"
+                    + $repository + "/" + $head + "/" + $path)
+                ' <<<"${cutover_file}" >/dev/null
+            done < <(jq -r '.[] | [.path, .sha, (.size | tostring)] | @tsv' \
+              <<<"${cutover_manifest}")
+            supplementary_sparse_v6_cutover=true
+          fi
+          default_branch="$(gh api "repos/${REPOSITORY}" --jq .default_branch)"
+          test "${default_branch}" = develop
+          jq -e \
+            --arg base "${EXPECTED_BASE}" \
+            --arg base_ref "${base_ref}" \
+            --arg controller_ref "${default_branch}" \
+            --arg evidence_version "${evidence_version}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --arg head_repository "${head_repository}" \
+            --arg input_sha256 "${input_sha256}" \
+            --arg labels_sha256 "${live_labels_sha256}" \
+            --arg last_edited_at "${live_last_edited_at}" \
+            --arg run_url "${producer_url}" \
+            --argjson supplementary_sparse_v6_cutover \
+              "${supplementary_sparse_v6_cutover}" \
+            --argjson pr_number "${PR_NUMBER}" \
+            --argjson run_id "${producer_id}" '
+              .schema == 4
+              and .base_sha == $base
+              and .head_sha == $head
+              and .producer_run_id == $run_id
+              and .run_url == $run_url
+              and (
+                if $evidence_version == "v4" then
+                  .input_sha256 == $input_sha256
+                elif $evidence_version == "v6" then
+                  if $supplementary_sparse_v6_cutover then
+                    (keys | sort) == ([
+                      "base_sha", "controller_sha", "head_sha",
+                      "producer_run_id", "pull_request_last_edited_at",
+                      "pull_request_number", "review_path", "run_url", "schema"
+                    ] | sort)
+                    and .controller_sha == $base
+                    and .review_path
+                      == "applicable Copilot or governed automation exemption"
+                    and has("pull_request_last_edited_at")
+                    and .pull_request_last_edited_at == (
+                      if $last_edited_at == "null" then null else $last_edited_at end)
+                  else
+                    .head_repository == $head_repository
+                    and (.controller_sha | test("^[0-9a-f]{40}$"))
+                    and .controller_ref == $controller_ref
+                    and .pull_request_labels_sha256 == $labels_sha256
+                    and has("pull_request_last_edited_at")
+                    and .pull_request_last_edited_at == (
+                      if $last_edited_at == "null" then null else $last_edited_at end)
+                  end
+                else true end
+              )
+              and (
+                if $evidence_version == "v6" then
+                  .pull_request_number == $pr_number
+                else
+                  ((has("pull_request_number") | not)
+                    or .pull_request_number == $pr_number)
+                end
+              )
+            ' <<<"${neutral_summary}" >/dev/null
+          producer="$(gh api "repos/${REPOSITORY}/actions/runs/${producer_id}")"
+          wait_for_successful_detached_producer() {
+            local attempt producer_conclusion producer_status
+            for attempt in $(seq 1 40); do
+              producer="$(gh api \
+                "repos/${REPOSITORY}/actions/runs/${producer_id}")"
+              producer_status="$(jq -er '.status | select(type == "string")' \
+                <<<"${producer}")"
+              producer_conclusion="$(jq -r '.conclusion // empty' \
+                <<<"${producer}")"
+              if [ "${producer_status}" = completed ]; then
+                test "${producer_conclusion}" = success
+                return 0
+              fi
+              test "${producer_status}" = queued \
+                || test "${producer_status}" = in_progress
+              test -z "${producer_conclusion}"
+              if [ "${attempt}" -lt 40 ]; then
+                sleep 5
+              fi
+            done
+            echo "The exact detached producer did not complete successfully in time." >&2
+            return 1
+          }
+          if [ "${external_kind}" = copilot ]; then
+            test "${producer_id}" = "${GITHUB_RUN_ID}"
+            jq -e '
+              .run_attempt == 1
+              and .status == "in_progress"
+              and .conclusion == null
+            ' <<<"${producer}" >/dev/null
+            producer_jobs_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/actions/runs/${producer_id}/jobs?filter=all&per_page=100")"
+            jq -e \
+              --arg head "${EXPECTED_HEAD}" \
+              --argjson run_id "${producer_id}" '
+                def exact_job($name):
+                  select(.run_id == $run_id and .run_attempt == 1
+                    and .head_sha == $head and .name == $name);
+                type == "array" and length > 0
+                and all(.[]; type == "object" and (.jobs | type) == "array")
+                and ([.[].jobs[] |
+                  exact_job("Verify current revision policy")
+                  | select(.status == "completed" and .conclusion == "success")] | length) == 1
+                and ([.[].jobs[] |
+                  exact_job("Request protected verifier re-evaluation / Re-run the one protected verifier attempt")
+                  | select(.status == "in_progress" and .conclusion == null)] | length) == 1
+              ' <<<"${producer_jobs_pages}" >/dev/null
+          else
+            # The Exact-Revision producer dispatches this detached verifier and
+            # then exits after observing that this job was materialized. Wait
+            # here, without mutating or redispatching anything, until that exact
+            # producer reaches its terminal successful state. This ordering is
+            # the synchronization boundary that prevents the verifier from
+            # racing the still-running dispatch job.
+            wait_for_successful_detached_producer
+          fi
+          if [ "${evidence_version}" = v4 ]; then
+            test "${author}" = 'lightning-it-release-automation[bot]'
+            expected_title="Exact-Revision Codex PR #${PR_NUMBER} ${EXPECTED_BASE}..${EXPECTED_HEAD}"
+            jq -e \
+              --arg actor "${author}" \
+              --arg base_ref "${base_ref}" \
+              --arg base_sha "${EXPECTED_BASE}" \
+              --arg run_url "${producer_url}" \
+              --arg title "${expected_title}" '
+                .event == "workflow_dispatch"
+                and .path == ".github/workflows/release-bot-exact-head-review.yml"
+                and .display_title == $title
+                and .head_branch == $base_ref
+                and .head_sha == $base_sha
+                and .html_url == $run_url
+                and .actor.login == $actor
+                and .triggering_actor.login == $actor
+                and .status == "completed"
+                and .conclusion == "success"
+              ' <<<"${producer}" >/dev/null
+          else
+            if [ "${external_kind}" != copilot ]; then
+              jq -e '
+                .status == "completed" and .conclusion == "success"
+              ' <<<"${producer}" >/dev/null
+            fi
+            if [ "${external_kind}" = ancestry-backmerge ]; then
+              test "${REPOSITORY}" = 'lightning-it/.github'
+              test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+              test "$(jq -r .review_path <<<"${neutral_summary}")" = \
+                'deterministic evidence-bound ancestry exemption'
+            elif [ "${external_kind}" = managed-sync ]; then
+              test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+              test "${REPOSITORY}" != 'lightning-it/.github'
+              test "${base_ref}" = develop
+              test "$(jq -r .review_path <<<"${neutral_summary}")" = \
+                'deterministic provenance-bound managed distribution exemption'
+            else
+              test "${author}" != 'lightning-it-release-automation[bot]'
+              test "${author}" != 'lightning-it-shared-assets-sync[bot]'
+              test "$(jq -r .review_path <<<"${neutral_summary}")" = \
+                'applicable Copilot or governed automation exemption'
+            fi
+            controller_sha="$(jq -er '.controller_sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+              <<<"${neutral_summary}")"
+            if [ "${evidence_version}" = v6 ]; then
+              if [ "${supplementary_sparse_v6_cutover}" = true ]; then
+                test "${base_ref}" = develop
+                test "${controller_sha}" = "${EXPECTED_BASE}"
+                protected_head="$(gh api \
+                  "repos/${REPOSITORY}/branches/develop" --jq .commit.sha)"
+                test "${protected_head}" = "${controller_sha}"
+                jq -e '
+                  .run_attempt == 1
+                  and .actor.login == "litroc"
+                  and .triggering_actor.login == "litroc"
+                ' <<<"${producer}" >/dev/null
+              else
+                controller_ref="$(jq -er '.controller_ref | select(. == "develop" or . == "main")' \
+                  <<<"${neutral_summary}")"
+                test "${controller_ref}" = "${default_branch}"
+                controller_branch="$(gh api \
+                  "repos/${REPOSITORY}/branches/${controller_ref}")"
+                jq -e \
+                  --arg branch "${controller_ref}" '
+                    .name == $branch
+                    and .protected == true
+                    and (.commit.sha | test("^[0-9a-f]{40}$"))
+                  ' <<<"${controller_branch}" >/dev/null
+                protected_head="$(jq -er .commit.sha <<<"${controller_branch}")"
+                controller_ancestry="$(gh api \
+                  "repos/${REPOSITORY}/compare/${controller_sha}...${protected_head}")"
+                jq -e \
+                  --arg controller "${controller_sha}" '
+                    .status == "identical"
+                    or (.status == "ahead"
+                      and .behind_by == 0
+                      and .merge_base_commit.sha == $controller)
+                  ' <<<"${controller_ancestry}" >/dev/null
+              fi
+            else
+              default_head="$(gh api "repos/${REPOSITORY}/branches/${default_branch}" --jq .commit.sha)"
+              controller_ancestry="$(gh api \
+                "repos/${REPOSITORY}/compare/${controller_sha}...${default_head}")"
+              jq -e \
+                --arg controller "${controller_sha}" '
+                  .status == "identical"
+                  or (.status == "ahead" and .behind_by == 0
+                      and .merge_base_commit.sha == $controller)
+                ' <<<"${controller_ancestry}" >/dev/null
+            fi
+            jq -e \
+              --arg head_ref "${head_ref}" \
+              --arg head_repository "${head_repository}" \
+              --arg head_sha "${EXPECTED_HEAD}" \
+              --arg repository "${REPOSITORY}" \
+              --arg run_url "${producer_url}" '
+                .event == "pull_request_target"
+                and .path == ".github/workflows/copilot-review.yml"
+                and .name == "Current revision review gate"
+                and .head_branch == $head_ref
+                and .head_sha == $head_sha
+                and .repository.full_name == $repository
+                and .head_repository.full_name == $head_repository
+                and .html_url == $run_url
+                and (.actor.login | type) == "string" and (.actor.login | length) > 0
+                and (.triggering_actor.login | type) == "string"
+                and (.triggering_actor.login | length) > 0
+              ' <<<"${producer}" >/dev/null
+          fi
+
+          reservations=''
+          for reservation_attempt in $(seq 1 40); do
+            reservations_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20current-revision%20verifier&filter=all&per_page=100")"
+            same_head_reservations="$(jq -c \
+              --arg head "${EXPECTED_HEAD}" '
+                [.[].check_runs[]? |
+                  select(.name == "Protected current-revision verifier") |
+                  select(.app.id == 15368 and .app.slug == "github-actions") |
+                  select(.head_sha == $head)]
+              ' <<<"${reservations_pages}")"
+            if ! jq -e \
+                --arg head "${EXPECTED_HEAD}" '
+                  all(.[];
+                    (.external_id | type) == "string"
+                    and (.external_id as $external_id |
+                      ($external_id | test(
+                        "^rep60-required-workflow:v3:[1-9][0-9]*:[1-9][0-9]*:[0-9a-f]{40}:"
+                        + $head + "$"))
+                      or ($external_id | test(
+                        "^rep60-required-workflow:v2:[1-9][0-9]*:[1-9][0-9]*:"
+                        + $head + "$"))))
+                ' <<<"${same_head_reservations}" >/dev/null; then
+              echo "Protected verifier evidence is malformed, unsupported, or version-ambiguous." >&2
+              exit 1
+            fi
+            matching_reservations="$(jq -c \
+              --arg base "${EXPECTED_BASE}" \
+              --arg head "${EXPECTED_HEAD}" \
+              --arg pr "${PR_NUMBER}" '
+                [.[] |
+                  select(.external_id as $external_id |
+                    ($external_id | test(
+                      "^rep60-required-workflow:v3:[1-9][0-9]*:"
+                      + $pr + ":" + $base + ":" + $head + "$"))
+                    or ($external_id | test(
+                      "^rep60-required-workflow:v2:[1-9][0-9]*:"
+                      + $pr + ":" + $head + "$")))]
+              ' <<<"${same_head_reservations}")"
+            reservation_count="$(jq 'length' <<<"${matching_reservations}")"
+            if [ "${reservation_count}" -eq 1 ]; then
+              reservations="${matching_reservations}"
+              break
+            elif [ "${reservation_count}" -ne 0 ]; then
+              echo "Protected verifier evidence is malformed, unsupported, or version-ambiguous." >&2
+              exit 1
+            fi
+            if [ "${reservation_attempt}" -eq 40 ]; then
+              echo "Protected verifier evidence did not materialize in time." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          test "$(jq 'length' <<<"${reservations}")" -eq 1
+          reservation_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${reservations}")"
+          reservation_url="$(jq -r '.[0].details_url // empty' <<<"${reservations}")"
+          test "${reservation_url}" = "${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${reservation_id}"
+          reservation_external_id="$(jq -er '.[0].external_id | select(type == "string" and length > 0)' <<<"${reservations}")"
+          if [[ "${reservation_external_id}" =~ ^rep60-required-workflow:v3:([1-9][0-9]*):${PR_NUMBER}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
+            run_id="${BASH_REMATCH[1]}"
+          else
+            [[ "${reservation_external_id}" =~ ^rep60-required-workflow:v2:([1-9][0-9]*):${PR_NUMBER}:${EXPECTED_HEAD}$ ]]
+            run_id="${BASH_REMATCH[1]}"
+          fi
+          verifier_run_url="${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${run_id}"
+          run=''
+          for verifier_attempt in $(seq 1 40); do
+            run="$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}")"
+            jq -e '
+              .status == "queued"
+              or .status == "in_progress"
+              or .status == "completed"
+            ' <<<"${run}" >/dev/null
+            if jq -e '
+                .status == "completed"
+                and (.conclusion | type) == "string"
+              ' <<<"${run}" >/dev/null; then
+              break
+            fi
+            revalidate_pr_metadata
+            if [ "${verifier_attempt}" -eq 40 ]; then
+              echo "Protected verifier did not reach a terminal conclusion in time." >&2
+              exit 1
+            fi
+            sleep 3
+          done
+          jq -e \
+            --arg api_url "${GITHUB_API_URL}" \
+              --arg base_ref "${base_ref}" \
+              --arg base_sha "${EXPECTED_BASE}" \
+              --arg head_ref "${head_ref}" \
+              --arg head_repository "${head_repository}" \
+              --arg head_sha "${EXPECTED_HEAD}" \
+            --arg repository "${REPOSITORY}" \
+            --arg run_url "${verifier_run_url}" \
+            --argjson pr_number "${PR_NUMBER}" '
+              .event == "pull_request_target"
+              and .path == ".github/workflows/supplementary-current-revision-required.yml"
+              and (.workflow_id | type == "number" and . > 0)
+              and .workflow_url == ($api_url + "/repos/" + $repository
+                + "/actions/required_workflows/" + (.workflow_id | tostring))
+              and .head_branch == $head_ref
+              and .head_sha == $head_sha
+              and .html_url == $run_url
+              and (.actor.login | type == "string" and length > 0)
+              and (.triggering_actor.login | type == "string" and length > 0)
+              and (.pull_requests | length) == 1
+              and .pull_requests[0].number == $pr_number
+              and .pull_requests[0].url == ($api_url + "/repos/" + $repository
+                + "/pulls/" + ($pr_number | tostring))
+              and .pull_requests[0].base.ref == $base_ref
+              and .pull_requests[0].base.sha == $base_sha
+              and .pull_requests[0].base.repo.url == ($api_url + "/repos/" + $repository)
+              and .pull_requests[0].head.ref == $head_ref
+              and .pull_requests[0].head.sha == $head_sha
+              and .pull_requests[0].head.repo.url == ($api_url + "/repos/" + $head_repository)
+              and .status == "completed"
+              and (.conclusion | type) == "string"
+            ' <<<"${run}" >/dev/null
+          revalidate_pr_metadata
+          verifier_conclusion="$(jq -er '.conclusion | select(type == "string")' \
+            <<<"${run}")"
+          case "${verifier_conclusion}" in
+            success)
+              echo "Protected verifier already passed; no rerun is needed."
+              exit 0
+              ;;
+            failure) ;;
+            *)
+              echo "Protected verifier ended with unsupported conclusion ${verifier_conclusion}." >&2
+              exit 1
+              ;;
+          esac
+          run_attempt=$(jq -er '.run_attempt | select(type == "number" and . >= 1)' <<<"${run}")
+          if [ "${run_attempt}" -gt 2 ]; then
+            echo "Protected verifier exceeded its single allowed rerun." >&2
+            exit 1
+          fi
+          if [ "${run_attempt}" -eq 2 ]; then
+            echo "Protected verifier already consumed its single rerun; no further retry is allowed."
+            exit 0
+          fi
+          attempt_one_jobs_pages="$(gh api --paginate --slurp \
+            "repos/${REPOSITORY}/actions/runs/${run_id}/attempts/1/jobs?filter=all&per_page=100")"
+          jq -e '
+            type == "array"
+            and length > 0
+            and all(.[];
+              type == "object"
+              and (.total_count | type) == "number"
+              and (.jobs | type) == "array")
+            and all(.[].jobs[];
+              type == "object"
+              and (.id | type) == "number" and .id > 0
+              and (.name | type) == "string"
+              and (.run_attempt | type) == "number" and .run_attempt >= 1
+              and (.steps | type) == "array"
+              and has("runner_id")
+              and (.runner_id == null
+                or ((.runner_id | type) == "number" and .runner_id > 0))
+              and .status == "completed"
+              and (.conclusion | type) == "string")
+          ' <<<"${attempt_one_jobs_pages}" >/dev/null
+          attempt_one_jobs=$(jq -c '[.[].jobs[]]' <<<"${attempt_one_jobs_pages}")
+          jq -e 'all(.[]; has("runner_id") and (.steps | type) == "array")' <<<"${attempt_one_jobs}" >/dev/null
+          synthetic_evidence_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Current revision review" or .name == "Protected current-revision verifier")]' <<<"${attempt_one_jobs}")
+          runner_backed_jobs=$(jq -c \
+            '[.[] | select(.runner_id != null or (.steps | length) > 0)]' \
+            <<<"${attempt_one_jobs}")
+          test "$(jq 'length' <<<"${attempt_one_jobs}")" -eq \
+            "$(jq -n --argjson evidence "${synthetic_evidence_jobs}" --argjson runners "${runner_backed_jobs}" '(($evidence | length) + ($runners | length))')"
+          test "$(jq 'length' <<<"${runner_backed_jobs}")" -eq 1
+          rerunnable_jobs=$(jq -c '[.[] | select(.name == "Required current-revision workflow") | select(.runner_id != null and (.steps | length) > 0) | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${runner_backed_jobs}")
+          test "$(jq 'length' <<<"${rerunnable_jobs}")" -eq 1
+          revalidate_pr_metadata
+          if ! gh api --method POST \
+              "repos/${REPOSITORY}/actions/runs/${run_id}/rerun" >/dev/null; then
+            # GitHub can accept the run rerun and still close the client request
+            # with a non-success response when another service-side request
+            # wins the same transition. Accept that outcome only after the
+            # live run proves that attempt two was actually materialized.
+            run="$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}")"
+            observed_attempt="$(jq -er '.run_attempt | select(type == "number" and . >= 1)' <<<"${run}")"
+            if [ "${observed_attempt}" -ne 2 ]; then
+              echo "Required-run rerun failed without exactly one materialized second attempt." >&2
+              exit 1
+            fi
+            echo "A concurrent service-side request already materialized the required-run rerun."
+          fi
+          # Waiting here creates a circular dependency.
+          revalidate_pr_metadata
+          post_neutral="$(read_neutral_inventory)"
+          test "$(jq 'length' <<<"${post_neutral}")" -eq 1
+          jq -e \
+            --arg external_id "${neutral_external_id}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --argjson check_id "${neutral_check_id}" '
+              .[0].id == $check_id
+              and .[0].head_sha == $head
+              and .[0].external_id == $external_id
+              and .[0].status == "completed"
+              and .[0].conclusion == "success"
+            ' <<<"${post_neutral}" >/dev/null
+          echo "Protected verifier rerun request published; required workflow attempt two owns final verification."

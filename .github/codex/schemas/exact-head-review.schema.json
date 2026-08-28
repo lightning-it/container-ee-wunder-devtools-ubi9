@@ -21,7 +21,10 @@
       "type": "array"
     },
     "head_sha": { "pattern": "^[0-9a-f]{40}$", "type": "string" },
-    "patch_sha256": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+    "merge_base_sha": { "pattern": "^[0-9a-f]{40}$", "type": "string" },
+    "integration_tree_sha": { "pattern": "^[0-9a-f]{40}$", "type": "string" },
+    "diff_sha256": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+    "input_sha256": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
     "summary": { "minLength": 1, "type": "string" },
     "verdict": { "enum": ["PASS", "FAIL"] }
   },
@@ -29,7 +32,10 @@
     "verdict",
     "base_sha",
     "head_sha",
-    "patch_sha256",
+    "merge_base_sha",
+    "integration_tree_sha",
+    "diff_sha256",
+    "input_sha256",
     "summary",
     "findings"
   ],
