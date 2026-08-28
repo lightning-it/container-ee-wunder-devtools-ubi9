@@ -10,7 +10,7 @@ fail_closed() {
   exit 64
 }
 
-if [ -e "$version_file" ]; then
+if [ -e "$version_file" ] || [ -L "$version_file" ]; then
   [ -f "$version_file" ] && [ ! -L "$version_file" ] \
     || fail_closed ".node-version must be one regular, non-symlinked file"
   [ -r "$version_file" ] \

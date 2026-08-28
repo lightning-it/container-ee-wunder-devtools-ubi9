@@ -255,6 +255,10 @@ class ContainerToolchainContractTests(unittest.TestCase):
         content = selector.read_text(encoding="utf-8")
         self.assertIn('default_node_bin="/opt/node/bin"', content)
         self.assertIn("/opt/node-website/bin", content)
+        self.assertIn(
+            'if [ -e "$version_file" ] || [ -L "$version_file" ]; then',
+            content,
+        )
         self.assertIn('[ -r "$version_file" ]', content)
         self.assertIn('"$default_node_bin/node"', content)
         self.assertIn('"$website_node_bin/node"', content)
