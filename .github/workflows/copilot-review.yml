@@ -254,8 +254,34 @@ jobs:
           test "${DEFAULT_BRANCH}" = develop
           [[ "${EXPECTED_BASE_REF}" =~ ^(develop|main)$ ]]
           test "${TRUSTED_WORKFLOW_REF}" = \
-            "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${EXPECTED_BASE_REF}"
-          test "${TRUSTED_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
+            "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${DEFAULT_BRANCH}"
+          controller_branch="$(gh api \
+            "repos/${REPOSITORY}/branches/${DEFAULT_BRANCH}")"
+          jq -e \
+            --arg branch "${DEFAULT_BRANCH}" '
+              .name == $branch
+              and .protected == true
+              and (.commit.sha | test("^[0-9a-f]{40}$"))
+            ' <<<"${controller_branch}" >/dev/null
+          controller_head="$(jq -er .commit.sha <<<"${controller_branch}")"
+          controller_ancestry="$(gh api \
+            "repos/${REPOSITORY}/compare/${TRUSTED_WORKFLOW_SHA}...${controller_head}")"
+          jq -e \
+            --arg controller "${TRUSTED_WORKFLOW_SHA}" '
+              .status == "identical"
+              or (.status == "ahead"
+                and .behind_by == 0
+                and .merge_base_commit.sha == $controller)
+            ' <<<"${controller_ancestry}" >/dev/null
+          base_branch="$(gh api \
+            "repos/${REPOSITORY}/branches/${EXPECTED_BASE_REF}")"
+          jq -e \
+            --arg branch "${EXPECTED_BASE_REF}" \
+            --arg sha "${EXPECTED_BASE}" '
+              .name == $branch
+              and .protected == true
+              and .commit.sha == $sha
+            ' <<<"${base_branch}" >/dev/null
           protected_run="$(gh api "repos/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")"
           jq -e \
             --arg branch "${EXPECTED_HEAD_REF}" \
@@ -1439,8 +1465,34 @@ jobs:
           [[ "${EVENT_BASE_REF}" =~ ^(develop|main)$ ]]
           test "${DEFAULT_BRANCH}" = develop
           test "${TRUSTED_WORKFLOW_REF}" = \
-            "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${EVENT_BASE_REF}"
-          test "${TRUSTED_WORKFLOW_SHA}" = "${EVENT_BASE}"
+            "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${DEFAULT_BRANCH}"
+          controller_branch="$(api_read \
+            "repos/${REPOSITORY}/branches/${DEFAULT_BRANCH}")"
+          jq -e \
+            --arg branch "${DEFAULT_BRANCH}" '
+              .name == $branch
+              and .protected == true
+              and (.commit.sha | test("^[0-9a-f]{40}$"))
+            ' <<<"${controller_branch}" >/dev/null
+          controller_head="$(jq -er .commit.sha <<<"${controller_branch}")"
+          controller_ancestry="$(api_read \
+            "repos/${REPOSITORY}/compare/${TRUSTED_WORKFLOW_SHA}...${controller_head}")"
+          jq -e \
+            --arg controller "${TRUSTED_WORKFLOW_SHA}" '
+              .status == "identical"
+              or (.status == "ahead"
+                and .behind_by == 0
+                and .merge_base_commit.sha == $controller)
+            ' <<<"${controller_ancestry}" >/dev/null
+          base_branch="$(api_read \
+            "repos/${REPOSITORY}/branches/${EVENT_BASE_REF}")"
+          jq -e \
+            --arg branch "${EVENT_BASE_REF}" \
+            --arg sha "${EVENT_BASE}" '
+              .name == $branch
+              and .protected == true
+              and .commit.sha == $sha
+            ' <<<"${base_branch}" >/dev/null
           protected_run="$(gh api "repos/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")"
           jq -e \
             --arg branch "${EVENT_HEAD_REF}" \
@@ -1557,7 +1609,7 @@ jobs:
           evidence="$(jq -cn \
             --arg base "${EVENT_BASE}" \
             --arg controller "${TRUSTED_WORKFLOW_SHA}" \
-            --arg controller_ref "${EVENT_BASE_REF}" \
+            --arg controller_ref "${DEFAULT_BRANCH}" \
             --arg head "${EVENT_HEAD}" \
             --arg head_repository "${EVENT_HEAD_REPOSITORY}" \
             --arg last_edited_at "${BOUND_LAST_EDITED_AT}" \
