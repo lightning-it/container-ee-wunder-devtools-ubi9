@@ -55,27 +55,24 @@ jobs:
         github.actor == github.triggering_actor
       ) ||
       (
-        github.event.pull_request.draft == false &&
         (
+          github.event_name == 'pull_request_review' &&
           (
-            github.event_name == 'pull_request_review' &&
             (
-              (
-                contains(fromJSON('["Copilot","copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]"]'), github.actor) &&
-                github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
-              ) ||
-              contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.review.author_association)
-            )
-          ) ||
+              contains(fromJSON('["Copilot","copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]"]'), github.actor) &&
+              github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
+            ) ||
+            contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.review.author_association)
+          )
+        ) ||
+        (
+          github.event_name == 'pull_request_review_comment' &&
           (
-            github.event_name == 'pull_request_review_comment' &&
             (
-              (
-                contains(fromJSON('["Copilot","copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]"]'), github.actor) &&
-                github.event.comment.user.login == 'copilot-pull-request-reviewer[bot]'
-              ) ||
-              contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.comment.author_association)
-            )
+              contains(fromJSON('["Copilot","copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]"]'), github.actor) &&
+              github.event.comment.user.login == 'copilot-pull-request-reviewer[bot]'
+            ) ||
+            contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.comment.author_association)
           )
         )
       )
