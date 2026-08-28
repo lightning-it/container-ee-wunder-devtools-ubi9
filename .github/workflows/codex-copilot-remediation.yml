@@ -3,6 +3,10 @@
 # yamllint disable rule:truthy rule:line-length
 ---
 name: Codex Copilot remediation
+run-name: >-
+  REP-60 Copilot rereview PR #${{ inputs.pr_number || github.event.pull_request.number }}
+  head ${{ inputs.expected_head || github.event.pull_request.head.sha }}
+  round ${{ inputs.round || 'event' }}
 
 on:
   pull_request_review:
@@ -10,11 +14,11 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: Pull request to continue after a trusted Codex push
+        description: Pull request to continue after one authorized correction push
         required: true
         type: number
       expected_head:
-        description: Exact head SHA pushed by the preceding remediation run
+        description: Exact authorized correction-head SHA
         required: true
         type: string
       round:
@@ -52,18 +56,37 @@ jobs:
     steps:
       - name: Verify exact head and request Copilot review
         env:
+          CONTROLLER_REF: ${{ github.workflow_ref }}
+          CONTROLLER_SHA: ${{ github.workflow_sha }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           EXPECTED_HEAD: ${{ inputs.expected_head }}
           REPOSITORY: ${{ github.repository }}
+          ROUND: ${{ inputs.round }}
         run: |
           set -euo pipefail
           test "${GITHUB_REPOSITORY_OWNER}" = lightning-it
+          test "${ROUND}" = 1
           pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
           test "$(jq -r .state <<<"${pr}")" = open
           test "$(jq -r .draft <<<"${pr}")" = false
           base_ref="$(jq -er '.base.ref | select(. == "develop" or . == "main")' \
             <<<"${pr}")"
+          base_sha="$(jq -er '.base.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            <<<"${pr}")"
+          test "${GITHUB_REF}" = "refs/heads/${base_ref}"
+          test "${CONTROLLER_REF}" = \
+            "${REPOSITORY}/.github/workflows/codex-copilot-remediation.yml@refs/heads/${base_ref}"
+          [[ "${CONTROLLER_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          protected_head="$(gh api \
+            "repos/${REPOSITORY}/branches/${base_ref}" --jq .commit.sha)"
+          protected_ancestry="$(gh api \
+            "repos/${REPOSITORY}/compare/${CONTROLLER_SHA}...${protected_head}")"
+          jq -e --arg controller "${CONTROLLER_SHA}" '
+            .status == "identical"
+            or (.status == "ahead" and .behind_by == 0
+              and .merge_base_commit.sha == $controller)
+          ' <<<"${protected_ancestry}" >/dev/null
           test "$(jq -r .head.repo.full_name <<<"${pr}")" = "${REPOSITORY}"
           author="$(jq -r .user.login <<<"${pr}")"
           if [ "${author}" = 'lightning-it-release-automation[bot]' ]; then
@@ -76,7 +99,10 @@ jobs:
           fi
           current_head="$(jq -r .head.sha <<<"${pr}")"
           test "${current_head}" = "${EXPECTED_HEAD}"
-          marker="<!-- rep60-copilot-rereview repository=${REPOSITORY} pr=${PR_NUMBER} head=${EXPECTED_HEAD} state=consumed -->"
+          scope_marker="<!-- rep60-copilot-rereview-scope/v2 repository=${REPOSITORY} pr=${PR_NUMBER} head=${EXPECTED_HEAD} -->"
+          evidence_marker="<!-- rep60-copilot-rereview-evidence/v2 repository=${REPOSITORY} pr=${PR_NUMBER} base_ref=${base_ref} base=${base_sha} head=${EXPECTED_HEAD} run=${GITHUB_RUN_ID} controller=${CONTROLLER_SHA} round=${ROUND} state=consumed -->"
+          marker="${scope_marker}"$'\n'"${evidence_marker}"
+          legacy_marker="<!-- rep60-copilot-rereview repository=${REPOSITORY} pr=${PR_NUMBER} head=${EXPECTED_HEAD} state=consumed -->"
           reviews="$(gh api --paginate --slurp "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
           if jq -e --arg login "${COPILOT_LOGIN}" --arg head "${EXPECTED_HEAD}" \
             'any(add[]; .user.login == $login and .commit_id == $head)' <<<"${reviews}" >/dev/null; then
@@ -89,8 +115,9 @@ jobs:
             exit 0
           fi
           comments="$(gh api --paginate --slurp "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100")"
-          if jq -e --arg marker "${marker}" \
-            'any(add[]; .user.login == "github-actions[bot]" and (.body | contains($marker)))' \
+          if jq -e --arg legacy "${legacy_marker}" --arg scope "${scope_marker}" \
+            'any(add[]; .user.login == "github-actions[bot]"
+              and ((.body | contains($legacy)) or (.body | contains($scope))))' \
             <<<"${comments}" >/dev/null; then
             echo "The one-time request marker is already consumed; automatic retry is forbidden." >&2
             exit 1

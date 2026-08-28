@@ -6,10 +6,7 @@ name: Re-evaluate protected current-revision evidence
 
 on:
   workflow_call:
-    inputs: &rerun_inputs
-      base_ref:
-        required: false
-        type: string
+    inputs:
       pr_number:
         description: Pull request whose protected verifier must be re-evaluated
         required: true
@@ -22,8 +19,6 @@ on:
         description: Frozen pull-request head SHA
         required: true
         type: string
-  workflow_dispatch:
-    inputs: *rerun_inputs
 
 permissions:
   contents: read
@@ -40,7 +35,7 @@ jobs:
       github.run_attempt == 1 &&
       (
         ( github.event_name == 'pull_request_target' && github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', github.event.pull_request.base.ref) && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
-        ( github.event_name == 'workflow_dispatch' && github.actor == 'lightning-it-release-automation[bot]' && github.triggering_actor == 'lightning-it-release-automation[bot]' && github.event.inputs.pr_number == format('{0}', inputs.pr_number) && github.event.inputs.expected_base == inputs.expected_base && github.event.inputs.expected_head == inputs.expected_head && ( ( github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/release-bot-exact-head-review.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', github.event.inputs.base_ref) ) || ( github.workflow_sha == inputs.expected_head && github.workflow_ref == format('{0}/.github/workflows/current-revision-rerun.yml@refs/heads/develop', github.repository) && github.ref == 'refs/heads/develop' && github.ref_protected == true && github.sha == inputs.expected_head ) ) ) ||
+        ( github.event_name == 'workflow_dispatch' && github.workflow_sha == inputs.expected_base && ( github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' ) ) ||
         ( github.event_name == 'push' && github.workflow_sha == inputs.expected_head && github.workflow_ref == format('{0}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop', github.repository) && github.ref == 'refs/heads/develop' && github.ref_protected == true && github.sha == inputs.expected_head && github.event.ref == 'refs/heads/develop' && github.event.after == inputs.expected_head )
       )
     permissions:
@@ -54,6 +49,12 @@ jobs:
     steps:
       - name: Validate the live binding and rerun exactly once
         env:
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_BASE_REF: ${{ github.event.inputs.base_ref }}
+          EVENT_EXPECTED_BASE: ${{ github.event.inputs.expected_base }}
+          EVENT_EXPECTED_HEAD: ${{ github.event.inputs.expected_head }}
+          EVENT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           EXPECTED_BASE: ${{ inputs.expected_base }}
           EXPECTED_HEAD: ${{ inputs.expected_head }}
           GH_TOKEN: ${{ github.token }}
@@ -67,12 +68,15 @@ jobs:
           case "${GITHUB_EVENT_NAME}" in
             pull_request_target) controller_sha="${EXPECTED_BASE}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/copilot-review.yml@${GITHUB_REF}" ;;
             workflow_dispatch)
-              legacy_dispatch_ref="${REPOSITORY}/.github/workflows/current-revision-rerun.yml@refs/heads/develop"
-              if [ "${GITHUB_WORKFLOW_REF}" = "${legacy_dispatch_ref}" ]; then
-                controller_sha="${EXPECTED_HEAD}"; expected_workflow_ref="${legacy_dispatch_ref}"; test "${GITHUB_REF}:${GITHUB_SHA}" = "refs/heads/develop:${EXPECTED_HEAD}"
-              else
-                controller_sha="${EXPECTED_BASE}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/release-bot-exact-head-review.yml@${GITHUB_REF}"
-              fi
+              controller_sha="${EXPECTED_BASE}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/release-bot-exact-head-review.yml@${GITHUB_REF}"
+              test "${EVENT_ACTOR}" = 'lightning-it-release-automation[bot]'
+              test "${EVENT_TRIGGERING_ACTOR}" = 'lightning-it-release-automation[bot]'
+              test "${GITHUB_REF_PROTECTED}" = true
+              [[ "${EVENT_BASE_REF}" =~ ^(develop|main)$ ]]
+              test "${GITHUB_REF}" = "refs/heads/${EVENT_BASE_REF}"
+              test "${EVENT_PR_NUMBER}" = "${PR_NUMBER}"
+              test "${EVENT_EXPECTED_BASE}" = "${EXPECTED_BASE}"
+              test "${EVENT_EXPECTED_HEAD}" = "${EXPECTED_HEAD}"
               ;;
             push)
               controller_sha="${EXPECTED_HEAD}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop"
@@ -761,12 +765,23 @@ jobs:
               and (.id | type) == "number" and .id > 0
               and (.name | type) == "string"
               and (.run_attempt | type) == "number" and .run_attempt >= 1
+              and (.steps | type) == "array"
+              and has("runner_id")
+              and (.runner_id == null
+                or ((.runner_id | type) == "number" and .runner_id > 0))
               and .status == "completed"
               and (.conclusion | type) == "string")
           ' <<<"${attempt_one_jobs_pages}" >/dev/null
           attempt_one_jobs=$(jq -c '[.[].jobs[]]' <<<"${attempt_one_jobs_pages}")
-          test "$(jq 'length' <<<"${attempt_one_jobs}")" -eq 1
-          rerunnable_jobs=$(jq -c '[.[].jobs[] | select(.name == "Required current-revision workflow") | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${attempt_one_jobs_pages}")
+          jq -e 'all(.[]; has("runner_id") and (.steps | type) == "array")' <<<"${attempt_one_jobs}" >/dev/null
+          synthetic_evidence_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Current revision review" or .name == "Protected current-revision verifier")]' <<<"${attempt_one_jobs}")
+          runner_backed_jobs=$(jq -c \
+            '[.[] | select(.runner_id != null or (.steps | length) > 0)]' \
+            <<<"${attempt_one_jobs}")
+          test "$(jq 'length' <<<"${attempt_one_jobs}")" -eq \
+            "$(jq -n --argjson evidence "${synthetic_evidence_jobs}" --argjson runners "${runner_backed_jobs}" '(($evidence | length) + ($runners | length))')"
+          test "$(jq 'length' <<<"${runner_backed_jobs}")" -eq 1
+          rerunnable_jobs=$(jq -c '[.[] | select(.name == "Required current-revision workflow") | select(.runner_id != null and (.steps | length) > 0) | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${runner_backed_jobs}")
           test "$(jq 'length' <<<"${rerunnable_jobs}")" -eq 1
           revalidate_pr_metadata
           if ! gh api --method POST \
