@@ -447,9 +447,12 @@ jobs:
               <<<"${cutover_manifest}")
             supplementary_sparse_v6_cutover=true
           fi
+          default_branch="$(gh api "repos/${REPOSITORY}" --jq .default_branch)"
+          test "${default_branch}" = develop
           jq -e \
             --arg base "${EXPECTED_BASE}" \
             --arg base_ref "${base_ref}" \
+            --arg controller_ref "${default_branch}" \
             --arg evidence_version "${evidence_version}" \
             --arg head "${EXPECTED_HEAD}" \
             --arg head_repository "${head_repository}" \
@@ -484,8 +487,8 @@ jobs:
                       if $last_edited_at == "null" then null else $last_edited_at end)
                   else
                     .head_repository == $head_repository
-                    and .controller_sha == $base
-                    and .controller_ref == $base_ref
+                    and (.controller_sha | test("^[0-9a-f]{40}$"))
+                    and .controller_ref == $controller_ref
                     and .pull_request_labels_sha256 == $labels_sha256
                     and has("pull_request_last_edited_at")
                     and .pull_request_last_edited_at == (
@@ -604,8 +607,6 @@ jobs:
             fi
             controller_sha="$(jq -er '.controller_sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
               <<<"${neutral_summary}")"
-            default_branch="$(gh api "repos/${REPOSITORY}" --jq .default_branch)"
-            test "${default_branch}" = develop
             if [ "${evidence_version}" = v6 ]; then
               if [ "${supplementary_sparse_v6_cutover}" = true ]; then
                 test "${base_ref}" = develop
@@ -621,10 +622,25 @@ jobs:
               else
                 controller_ref="$(jq -er '.controller_ref | select(. == "develop" or . == "main")' \
                   <<<"${neutral_summary}")"
-                test "${controller_ref}" = "${base_ref}"
-                test "${controller_sha}" = "${EXPECTED_BASE}"
-                protected_head="$(gh api "repos/${REPOSITORY}/branches/${controller_ref}" --jq .commit.sha)"
-                test "${protected_head}" = "${controller_sha}"
+                test "${controller_ref}" = "${default_branch}"
+                controller_branch="$(gh api \
+                  "repos/${REPOSITORY}/branches/${controller_ref}")"
+                jq -e \
+                  --arg branch "${controller_ref}" '
+                    .name == $branch
+                    and .protected == true
+                    and (.commit.sha | test("^[0-9a-f]{40}$"))
+                  ' <<<"${controller_branch}" >/dev/null
+                protected_head="$(jq -er .commit.sha <<<"${controller_branch}")"
+                controller_ancestry="$(gh api \
+                  "repos/${REPOSITORY}/compare/${controller_sha}...${protected_head}")"
+                jq -e \
+                  --arg controller "${controller_sha}" '
+                    .status == "identical"
+                    or (.status == "ahead"
+                      and .behind_by == 0
+                      and .merge_base_commit.sha == $controller)
+                  ' <<<"${controller_ancestry}" >/dev/null
               fi
             else
               default_head="$(gh api "repos/${REPOSITORY}/branches/${default_branch}" --jq .commit.sha)"
