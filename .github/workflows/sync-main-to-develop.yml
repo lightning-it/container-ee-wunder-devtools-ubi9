@@ -364,11 +364,12 @@ jobs:
               pr_number="$(jq -er '.[0].number' <<<"${pr_inventory}")"
               ;;
             closed-history)
-              echo '::error::An exact backmerge PR already exists in a terminal state; refusing to create a new PR or dispatch another review.'
+              echo '::error::An exact backmerge PR already exists in a terminal state;'
+              echo '::error::Refusing PR creation or review dispatch.'
               exit 1
               ;;
             *)
-              echo '::error::Exact backmerge PR inventory is ambiguous; refusing to create a new PR or dispatch another review.'
+              echo '::error::Exact backmerge PR inventory is ambiguous; refusing creation or review dispatch.'
               exit 1
               ;;
           esac
