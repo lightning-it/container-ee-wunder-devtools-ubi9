@@ -361,7 +361,7 @@ jobs:
               ;;
           esac
 
-      - name: Approve and enable auto-merge
+      - name: Verify required checks and merge exact head
         if: steps.guard.outputs.trusted == 'true'
         env:
           EXPECTED_SUBJECT: ${{ steps.guard.outputs.subject }}
@@ -621,12 +621,15 @@ jobs:
             disable_auto_merge
             exit 1
           fi
-          # A synchronize event can disable a previous auto-merge request after
-          # this job starts. Clear it first so the final enable is authoritative.
+          # Clear any stale native auto-merge request before the exact-head merge.
+          # A prior cancelled guard check can make GitHub report the PR as
+          # unstable and deadlock a new --auto request even after every required
+          # check has passed. A normal exact-head merge still enforces every
+          # branch rule and grants no bypass.
           disable_auto_merge
           if ! assert_live_safe; then
             disable_auto_merge
             exit 1
           fi
-          gh pr merge "$PR_URL" --auto --merge --delete-branch \
+          gh pr merge "$PR_URL" --merge --delete-branch \
             --match-head-commit "$PR_HEAD_SHA"
