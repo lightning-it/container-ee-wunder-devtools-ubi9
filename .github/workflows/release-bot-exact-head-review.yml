@@ -975,23 +975,11 @@ jobs:
     if: needs.exact-revision-codex-review.result == 'success'
     permissions:
       actions: write
+      checks: read
       contents: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
-      - name: Dispatch the protected re-evaluation helper from develop
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          REPOSITORY: ${{ github.repository }}
-          EXPECTED_BASE: ${{ inputs.expected_base }}
-          EXPECTED_HEAD: ${{ inputs.expected_head }}
-        run: |
-          set -euo pipefail
-          gh api --method POST \
-            "repos/${REPOSITORY}/actions/workflows/current-revision-rerun.yml/dispatches" \
-            -f ref=develop \
-            -f "inputs[pr_number]=${PR_NUMBER}" \
-            -f "inputs[expected_base]=${EXPECTED_BASE}" \
-            -f "inputs[expected_head]=${EXPECTED_HEAD}" >/dev/null
+      pull-requests: read
+    uses: ./.github/workflows/current-revision-rerun.yml
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      expected_base: ${{ inputs.expected_base }}
+      expected_head: ${{ inputs.expected_head }}

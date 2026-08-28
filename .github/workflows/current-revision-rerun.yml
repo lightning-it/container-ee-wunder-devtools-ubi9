@@ -5,8 +5,11 @@
 name: Re-evaluate protected current-revision evidence
 
 on:
-  workflow_dispatch:
-    inputs:
+  workflow_call:
+    inputs: &rerun_inputs
+      base_ref:
+        required: false
+        type: string
       pr_number:
         description: Pull request whose protected verifier must be re-evaluated
         required: true
@@ -19,6 +22,8 @@ on:
         description: Frozen pull-request head SHA
         required: true
         type: string
+  workflow_dispatch:
+    inputs: *rerun_inputs
 
 permissions:
   contents: read
@@ -31,6 +36,13 @@ concurrency:
 jobs:
   rerun-protected-verifier:
     name: Re-run the one protected verifier attempt
+    if: >-
+      github.run_attempt == 1 &&
+      (
+        ( github.event_name == 'pull_request_target' && github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', github.event.pull_request.base.ref) && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
+        ( github.event_name == 'workflow_dispatch' && github.actor == 'lightning-it-release-automation[bot]' && github.triggering_actor == 'lightning-it-release-automation[bot]' && github.event.inputs.pr_number == format('{0}', inputs.pr_number) && github.event.inputs.expected_base == inputs.expected_base && github.event.inputs.expected_head == inputs.expected_head && ( ( github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/release-bot-exact-head-review.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', github.event.inputs.base_ref) ) || ( github.workflow_sha == inputs.expected_head && github.workflow_ref == format('{0}/.github/workflows/current-revision-rerun.yml@refs/heads/develop', github.repository) && github.ref == 'refs/heads/develop' && github.ref_protected == true && github.sha == inputs.expected_head ) ) ) ||
+        ( github.event_name == 'push' && github.workflow_sha == inputs.expected_head && github.workflow_ref == format('{0}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop', github.repository) && github.ref == 'refs/heads/develop' && github.ref_protected == true && github.sha == inputs.expected_head && github.event.ref == 'refs/heads/develop' && github.event.after == inputs.expected_head )
+      )
     permissions:
       actions: write
       checks: read
@@ -49,7 +61,31 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          test "${GITHUB_REF}" = refs/heads/develop
+          [[ "${GITHUB_RUN_ATTEMPT}" =~ ^1$ ]]
+          [[ "${GITHUB_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          promotion_handoff=false
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request_target) controller_sha="${EXPECTED_BASE}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/copilot-review.yml@${GITHUB_REF}" ;;
+            workflow_dispatch)
+              legacy_dispatch_ref="${REPOSITORY}/.github/workflows/current-revision-rerun.yml@refs/heads/develop"
+              if [ "${GITHUB_WORKFLOW_REF}" = "${legacy_dispatch_ref}" ]; then
+                controller_sha="${EXPECTED_HEAD}"; expected_workflow_ref="${legacy_dispatch_ref}"; test "${GITHUB_REF}:${GITHUB_SHA}" = "refs/heads/develop:${EXPECTED_HEAD}"
+              else
+                controller_sha="${EXPECTED_BASE}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/release-bot-exact-head-review.yml@${GITHUB_REF}"
+              fi
+              ;;
+            push)
+              controller_sha="${EXPECTED_HEAD}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop"
+              test "${GITHUB_REF}:${GITHUB_SHA}" = "refs/heads/develop:${EXPECTED_HEAD}"; promotion_handoff=true
+              ;;
+            *) echo "Unsupported protected rerun caller event: ${GITHUB_EVENT_NAME}" >&2; exit 1 ;;
+          esac
+          test "${GITHUB_WORKFLOW_SHA}" = "${controller_sha}"
+          test "${GITHUB_WORKFLOW_REF}" = "${expected_workflow_ref}"
+          case "${GITHUB_REF}" in
+            refs/heads/develop|refs/heads/main) ;;
+            *) echo "Unsupported protected rerun caller ref: ${GITHUB_REF}" >&2; exit 1 ;;
+          esac
           [[ "${EXPECTED_BASE}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
@@ -125,44 +161,61 @@ jobs:
                   then . else error("malformed lastEditedAt") end
               ' <<<"${response}"
           }
+          read_neutral_inventory() {
+            local pages; pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
+            jq -ce --arg head "${EXPECTED_HEAD}" '
+              def nullable_string: type == "string" or . == null;
+              select(
+                type == "array" and length > 0
+                and all(.[]; type == "object"
+                  and (.total_count | type) == "number" and (.check_runs | type) == "array")
+                and all(.[].check_runs[];
+                  type == "object" and (.id | type) == "number" and .id > 0
+                  and (.name | type) == "string" and (.head_sha | type) == "string" and (.status | type) == "string"
+                  and has("conclusion") and (.conclusion | nullable_string)
+                  and has("details_url") and (.details_url | nullable_string)
+                  and has("external_id") and (.external_id | nullable_string)
+                  and (.app | type) == "object" and (.app.id | type) == "number"
+                  and (.app.slug | type) == "string" and (.output | type) == "object"
+                  and (.output | has("summary")) and (.output.summary | nullable_string)))
+              | [.[].check_runs[] |
+                  select(.name == "Current revision review") |
+                  select(.app.id == 15368 and .app.slug == "github-actions") |
+                  select(.head_sha == $head)]
+            ' <<<"${pages}"
+          }
+          revalidate_pr_metadata() {
+            local current_pr; current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+            test "$(labels_sha256_from_pr "${current_pr}")" = "${live_labels_sha256}"
+            test "$(read_metadata_revision)" = "${live_last_edited_at}"
+          }
           live_labels_sha256="$(labels_sha256_from_pr "${pr}")"
           [[ "${live_labels_sha256}" =~ ^[0-9a-f]{64}$ ]]
           live_last_edited_at="$(read_metadata_revision)"
 
-          neutral_pages="$(gh api --paginate --slurp \
-            "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
-          jq -e '
-            type == "array"
-            and length > 0
-            and all(.[];
-              type == "object"
-              and (.total_count | type) == "number"
-              and (.check_runs | type) == "array")
-            and all(.[].check_runs[];
-              type == "object"
-              and (.id | type) == "number" and .id > 0
-              and (.name | type) == "string"
-              and (.head_sha | type) == "string"
-              and (.status | type) == "string"
-              and has("conclusion")
-              and ((.conclusion | type) == "string" or .conclusion == null)
-              and has("details_url")
-              and ((.details_url | type) == "string" or .details_url == null)
-              and has("external_id")
-              and ((.external_id | type) == "string" or .external_id == null)
-              and (.app | type) == "object"
-              and (.app.id | type) == "number"
-              and (.app.slug | type) == "string"
-              and (.output | type) == "object"
-              and (.output | has("summary"))
-              and ((.output.summary | type) == "string" or .output.summary == null))
-          ' <<<"${neutral_pages}" >/dev/null
-          neutral="$(jq -c '
-            [.[].check_runs[] |
-              select(.name == "Current revision review") |
-              select(.app.id == 15368 and .app.slug == "github-actions") |
-              select(.status == "completed" and .conclusion == "success")]
-          ' <<<"${neutral_pages}")"
+          neutral=''
+          for neutral_attempt in $(seq 1 40); do
+            neutral_inventory="$(read_neutral_inventory)"
+            neutral_count="$(jq 'length' <<<"${neutral_inventory}")"
+            test "${neutral_count}" -le 1
+            if [ "${neutral_count}" -eq 1 ]; then
+              neutral_status="$(jq -er '.[0].status | select(type == "string")' \
+                <<<"${neutral_inventory}")"
+              neutral_conclusion="$(jq -r '.[0].conclusion // empty' \
+                <<<"${neutral_inventory}")"
+              if [ "${neutral_status}" = completed ]; then
+                test "${neutral_conclusion}" = success
+                neutral="${neutral_inventory}"
+                break
+              fi
+            fi
+            if [ "${neutral_attempt}" -eq 40 ]; then
+              echo "Protected neutral evidence did not complete successfully in time." >&2
+              exit 1
+            fi
+            sleep 5
+          done
           test "$(jq 'length' <<<"${neutral}")" -eq 1
           neutral_check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${neutral}")"
           neutral_details_url="$(jq -r '.[0].details_url // empty' <<<"${neutral}")"
@@ -406,15 +459,41 @@ jobs:
                 end
               )
             ' <<<"${neutral_summary}" >/dev/null
-          for attempt in $(seq 1 40); do
-            producer="$(gh api "repos/${REPOSITORY}/actions/runs/${producer_id}")"
-            if [ "$(jq -r .status <<<"${producer}")" = completed ]; then
-              test "$(jq -r .conclusion <<<"${producer}")" = success
-              break
-            fi
-            test "${attempt}" -lt 40
-            sleep 5
-          done
+          producer="$(gh api "repos/${REPOSITORY}/actions/runs/${producer_id}")"
+          if [ "${external_kind}" = copilot ]; then
+            test "${producer_id}" = "${GITHUB_RUN_ID}"
+            jq -e '
+              .run_attempt == 1
+              and .status == "in_progress"
+              and .conclusion == null
+            ' <<<"${producer}" >/dev/null
+            producer_jobs_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/actions/runs/${producer_id}/jobs?filter=all&per_page=100")"
+            jq -e \
+              --arg head "${EXPECTED_HEAD}" \
+              --argjson run_id "${producer_id}" '
+                def exact_job($name):
+                  select(.run_id == $run_id and .run_attempt == 1
+                    and .head_sha == $head and .name == $name);
+                type == "array" and length > 0
+                and all(.[]; type == "object" and (.jobs | type) == "array")
+                and ([.[].jobs[] |
+                  exact_job("Verify current revision policy")
+                  | select(.status == "completed" and .conclusion == "success")] | length) == 1
+                and ([.[].jobs[] |
+                  exact_job("Request protected verifier re-evaluation / Re-run the one protected verifier attempt")
+                  | select(.status == "in_progress" and .conclusion == null)] | length) == 1
+              ' <<<"${producer_jobs_pages}" >/dev/null
+          else
+            for attempt in $(seq 1 40); do
+              producer="$(gh api "repos/${REPOSITORY}/actions/runs/${producer_id}")"
+              if [ "$(jq -r .status <<<"${producer}")" = completed ]; then
+                break
+              fi
+              test "${attempt}" -lt 40
+              sleep 5
+            done
+          fi
           if [ "${evidence_version}" = v4 ]; then
             test "${author}" = 'lightning-it-release-automation[bot]'
             expected_title="Exact-Revision Codex PR #${PR_NUMBER} ${EXPECTED_BASE}..${EXPECTED_HEAD}"
@@ -433,7 +512,62 @@ jobs:
                 and .actor.login == $actor
                 and .triggering_actor.login == $actor
               ' <<<"${producer}" >/dev/null
+            producer_conclusion="$(jq -er '.conclusion | select(type == "string")' \
+              <<<"${producer}")"
+            if [ "${producer_conclusion}" != success ]; then
+              test "${promotion_handoff}" = true
+              test "${REPOSITORY}" = lightning-it/shared-assets-lit
+              test "${EXPECTED_BASE}" = b978d446c336ff2e6d86bef303f2dec5faad612c
+              jq -e \
+                --arg api_url "${GITHUB_API_URL}" \
+                --arg repository "${REPOSITORY}" '
+                  .workflow_id == 332483855
+                  and .workflow_url == ($api_url + "/repos/" + $repository
+                    + "/actions/workflows/332483855")
+                  and .run_attempt == 1
+                  and .status == "completed"
+                  and .conclusion == "failure"
+                ' <<<"${producer}" >/dev/null
+              producer_jobs_pages="$(gh api --paginate --slurp \
+                "repos/${REPOSITORY}/actions/runs/${producer_id}/jobs?filter=all&per_page=100")"
+              jq -e \
+                --arg base "${EXPECTED_BASE}" \
+                --argjson run_id "${producer_id}" '
+                  def exact_job($name):
+                    select(.run_id == $run_id and .run_attempt == 1
+                      and .head_sha == $base and .name == $name);
+                  type == "array" and length > 0
+                  and all(.[]; type == "object" and (.jobs | type) == "array")
+                  and ([.[].jobs[] | select(.run_id == $run_id
+                    and .run_attempt == 1 and .head_sha == $base)] | length) == 2
+                  and ([.[].jobs[] |
+                    exact_job("Current revision review")
+                    | select(.status == "completed" and .conclusion == "success")] | length) == 1
+                  and ([.[].jobs[] |
+                    exact_job("Current revision review")
+                    | .steps[]?
+                    | select((.name == "Run protected history-free Exact-Revision Codex review"
+                        or .name == "Re-prove exact revision and enforce the Codex verdict")
+                      and .status == "completed" and .conclusion == "success")
+                    | .name] | sort) == (["Re-prove exact revision and enforce the Codex verdict",
+                      "Run protected history-free Exact-Revision Codex review"] | sort)
+                  and ([.[].jobs[] |
+                    exact_job("Request protected verifier re-evaluation")
+                    | [.name, .status, .conclusion,
+                        [.steps[]? | [.name, .status, .conclusion]]]]) == [
+                    ["Request protected verifier re-evaluation", "completed", "failure",
+                      [
+                        ["Set up job", "completed", "success"],
+                        ["Dispatch the protected re-evaluation helper from develop", "completed", "failure"],
+                        ["Complete job", "completed", "success"]]
+                    ]
+                  ]
+                ' <<<"${producer_jobs_pages}" >/dev/null
+            fi
           else
+            if [ "${external_kind}" != copilot ]; then
+              test "$(jq -r .conclusion <<<"${producer}")" = success
+            fi
             if [ "${external_kind}" = ancestry-backmerge ]; then
               test "${REPOSITORY}" = 'lightning-it/.github'
               test "${author}" = 'lightning-it-shared-assets-sync[bot]'
@@ -506,40 +640,39 @@ jobs:
               ' <<<"${producer}" >/dev/null
           fi
 
-          reservations_pages="$(gh api --paginate --slurp \
-            "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20current-revision%20verifier&filter=all&per_page=100")"
-          all_reservations="$(jq -c \
-            --arg head "${EXPECTED_HEAD}" '
-              [.[].check_runs[]? |
-                select(.name == "Protected current-revision verifier") |
-                select(.app.id == 15368 and .app.slug == "github-actions") |
-                select(.head_sha == $head) |
-                select((.external_id | type) == "string")]
-            ' <<<"${reservations_pages}")"
-          v3_reservations="$(jq -c \
-            --arg prefix "rep60-required-workflow:v3:" \
-            --arg suffix ":${PR_NUMBER}:${EXPECTED_BASE}:${EXPECTED_HEAD}" '
-              [.[] |
-                select(.external_id | startswith($prefix) and endswith($suffix))]
-            ' <<<"${all_reservations}")"
-          v2_reservations="$(jq -c \
-            --arg prefix "rep60-required-workflow:v2:" \
-            --arg suffix ":${PR_NUMBER}:${EXPECTED_HEAD}" '
-              [.[] |
-                select(.external_id | startswith($prefix) and endswith($suffix))]
-            ' <<<"${all_reservations}")"
-          v3_count="$(jq 'length' <<<"${v3_reservations}")"
-          v2_count="$(jq 'length' <<<"${v2_reservations}")"
-          if [ "${v3_count}" -eq 1 ] && [ "${v2_count}" -eq 0 ]; then
-            reservations="${v3_reservations}"
-          elif [ "${v3_count}" -eq 0 ] && [ "${v2_count}" -eq 1 ]; then
-            # Bounded cutover compatibility: v2 lacks the base in external_id,
-            # so the protected run payload below must bind the exact live base.
-            reservations="${v2_reservations}"
-          else
-            echo "Protected verifier evidence is missing or version-ambiguous." >&2
-            exit 1
-          fi
+          reservations=''
+          for reservation_attempt in $(seq 1 40); do
+            reservations_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20current-revision%20verifier&filter=all&per_page=100")"
+            matching_reservations="$(jq -c \
+              --arg head "${EXPECTED_HEAD}" '
+                [.[].check_runs[]? |
+                  select(.name == "Protected current-revision verifier") |
+                  select(.app.id == 15368 and .app.slug == "github-actions") |
+                  select(.head_sha == $head)]
+              ' <<<"${reservations_pages}")"
+            reservation_count="$(jq 'length' <<<"${matching_reservations}")"
+            if [ "${reservation_count}" -eq 1 ]; then
+              candidate_external_id="$(jq -r '.[0].external_id // empty' \
+                <<<"${matching_reservations}")"
+              if [[ "${candidate_external_id}" =~ ^rep60-required-workflow:v3:[1-9][0-9]*:${PR_NUMBER}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]] \
+                || [[ "${candidate_external_id}" =~ ^rep60-required-workflow:v2:[1-9][0-9]*:${PR_NUMBER}:${EXPECTED_HEAD}$ ]]; then
+                reservations="${matching_reservations}"
+                break
+              fi
+              echo "Protected verifier evidence is malformed, unsupported, or version-ambiguous." >&2
+              exit 1
+            elif [ "${reservation_count}" -ne 0 ]; then
+              echo "Protected verifier evidence is malformed, unsupported, or version-ambiguous." >&2
+              exit 1
+            fi
+            if [ "${reservation_attempt}" -eq 40 ]; then
+              echo "Protected verifier evidence did not materialize in time." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          test "$(jq 'length' <<<"${reservations}")" -eq 1
           reservation_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${reservations}")"
           reservation_url="$(jq -r '.[0].details_url // empty' <<<"${reservations}")"
           test "${reservation_url}" = "${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${reservation_id}"
@@ -551,7 +684,22 @@ jobs:
             run_id="${BASH_REMATCH[1]}"
           fi
           verifier_run_url="${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${run_id}"
-          run="$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}")"
+          run=''
+          for verifier_attempt in $(seq 1 20); do
+            run="$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}")"
+            jq -e '
+              .status == "queued"
+              or .status == "in_progress"
+              or .status == "completed"
+            ' <<<"${run}" >/dev/null
+            if [ "$(jq -r .status <<<"${run}")" = completed ]; then
+              break
+            fi
+            revalidate_pr_metadata
+            if [ "${verifier_attempt}" -lt 20 ]; then
+              sleep 3
+            fi
+          done
           jq -e \
             --arg api_url "${GITHUB_API_URL}" \
               --arg base_ref "${base_ref}" \
@@ -584,6 +732,7 @@ jobs:
               and .pull_requests[0].head.repo.url == ($api_url + "/repos/" + $head_repository)
               and .status == "completed"
             ' <<<"${run}" >/dev/null
+          revalidate_pr_metadata
           if [ "$(jq -r .conclusion <<<"${run}")" = success ]; then
             echo "Protected verifier already passed; no rerun is needed."
             exit 0
@@ -615,116 +764,37 @@ jobs:
               and .status == "completed"
               and (.conclusion | type) == "string")
           ' <<<"${attempt_one_jobs_pages}" >/dev/null
+          attempt_one_jobs=$(jq -c '[.[].jobs[]]' <<<"${attempt_one_jobs_pages}")
+          test "$(jq 'length' <<<"${attempt_one_jobs}")" -eq 1
           rerunnable_jobs=$(jq -c '[.[].jobs[] | select(.name == "Required current-revision workflow") | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${attempt_one_jobs_pages}")
           test "$(jq 'length' <<<"${rerunnable_jobs}")" -eq 1
-          required_job_id=$(jq -er '.[0].id | select(type == "number" and . > 0)' \
-            <<<"${rerunnable_jobs}")
-          current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          test "$(labels_sha256_from_pr "${current_pr}")" = "${live_labels_sha256}"
-          test "$(read_metadata_revision)" = "${live_last_edited_at}"
+          revalidate_pr_metadata
           if ! gh api --method POST \
-              "repos/${REPOSITORY}/actions/jobs/${required_job_id}/rerun" >/dev/null; then
-            # GitHub can accept the job rerun and still close the client request
+              "repos/${REPOSITORY}/actions/runs/${run_id}/rerun" >/dev/null; then
+            # GitHub can accept the run rerun and still close the client request
             # with a non-success response when another service-side request
             # wins the same transition. Accept that outcome only after the
             # live run proves that attempt two was actually materialized.
             run="$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}")"
             observed_attempt="$(jq -er '.run_attempt | select(type == "number" and . >= 1)' <<<"${run}")"
             if [ "${observed_attempt}" -ne 2 ]; then
-              echo "Required-job rerun failed without exactly one materialized second attempt." >&2
+              echo "Required-run rerun failed without exactly one materialized second attempt." >&2
               exit 1
             fi
-            echo "A concurrent service-side request already materialized the required-job rerun."
+            echo "A concurrent service-side request already materialized the required-run rerun."
           fi
-          for completion_attempt in $(seq 1 60); do
-            run="$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}")"
-            observed_attempt="$(jq -er '.run_attempt | select(type == "number" and . >= 1)' <<<"${run}")"
-            status="$(jq -er '.status | select(type == "string" and length > 0)' <<<"${run}")"
-            if [ "${observed_attempt}" -gt 2 ]; then
-              echo "Protected verifier exceeded its single allowed rerun." >&2
-              exit 1
-            fi
-            if [ "${observed_attempt}" -eq 2 ] && [ "${status}" = completed ]; then
-              test "$(jq -r .conclusion <<<"${run}")" = success
-              attempt_two_jobs_pages="$(gh api --paginate --slurp \
-                "repos/${REPOSITORY}/actions/runs/${run_id}/attempts/2/jobs?filter=all&per_page=100")"
-              jq -e '
-                type == "array"
-                and length > 0
-                and all(.[];
-                  type == "object"
-                  and (.total_count | type) == "number"
-                  and (.jobs | type) == "array")
-                and all(.[].jobs[];
-                  type == "object"
-                  and (.id | type) == "number" and .id > 0
-                  and (.name | type) == "string"
-                  and (.run_attempt | type) == "number" and .run_attempt >= 1
-                  and .status == "completed"
-                  and (.conclusion | type) == "string")
-              ' <<<"${attempt_two_jobs_pages}" >/dev/null
-              completed_required_jobs="$(jq -c '
-                [.[].jobs[] |
-                  select(.name == "Required current-revision workflow") |
-                  select(.run_attempt == 2) |
-                  select(.status == "completed" and .conclusion == "success")]
-              ' <<<"${attempt_two_jobs_pages}")"
-              test "$(jq 'length' <<<"${completed_required_jobs}")" -eq 1
-              current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-              test "$(labels_sha256_from_pr "${current_pr}")" = "${live_labels_sha256}"
-              test "$(read_metadata_revision)" = "${live_last_edited_at}"
-              post_neutral_pages="$(gh api --paginate --slurp \
-                "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
-              jq -e '
-                type == "array"
-                and length > 0
-                and all(.[];
-                  type == "object"
-                  and (.total_count | type) == "number"
-                  and (.check_runs | type) == "array")
-                and all(.[].check_runs[];
-                  type == "object"
-                  and (.id | type) == "number" and .id > 0
-                  and (.name | type) == "string"
-                  and (.head_sha | type) == "string"
-                  and (.status | type) == "string"
-                  and has("conclusion")
-                  and ((.conclusion | type) == "string" or .conclusion == null)
-                  and has("details_url")
-                  and ((.details_url | type) == "string" or .details_url == null)
-                  and has("external_id")
-                  and ((.external_id | type) == "string" or .external_id == null)
-                  and (.app | type) == "object"
-                  and (.app.id | type) == "number"
-                  and (.app.slug | type) == "string"
-                  and (.output | type) == "object"
-                  and (.output | has("summary"))
-                  and ((.output.summary | type) == "string" or .output.summary == null))
-              ' <<<"${post_neutral_pages}" >/dev/null
-              post_neutral="$(jq -c \
-                --arg head "${EXPECTED_HEAD}" '
-                  [.[].check_runs[] |
-                    select(.name == "Current revision review") |
-                    select(.app.id == 15368 and .app.slug == "github-actions") |
-                    select(.head_sha == $head)]
-                ' <<<"${post_neutral_pages}")"
-              test "$(jq 'length' <<<"${post_neutral}")" -eq 1
-              jq -e \
-                --arg external_id "${neutral_external_id}" \
-                --arg head "${EXPECTED_HEAD}" \
-                --argjson check_id "${neutral_check_id}" '
-                  .[0].id == $check_id
-                  and .[0].head_sha == $head
-                  and .[0].external_id == $external_id
-                  and .[0].status == "completed"
-                  and .[0].conclusion == "success"
-                ' <<<"${post_neutral}" >/dev/null
-              echo "Protected verifier job rerun completed without duplicating neutral evidence."
-              exit 0
-            fi
-            if [ "${completion_attempt}" -eq 60 ]; then
-              echo "Protected verifier job rerun did not complete successfully in time." >&2
-              exit 1
-            fi
-            sleep 5
-          done
+          # Waiting here creates a circular dependency.
+          revalidate_pr_metadata
+          post_neutral="$(read_neutral_inventory)"
+          test "$(jq 'length' <<<"${post_neutral}")" -eq 1
+          jq -e \
+            --arg external_id "${neutral_external_id}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --argjson check_id "${neutral_check_id}" '
+              .[0].id == $check_id
+              and .[0].head_sha == $head
+              and .[0].external_id == $external_id
+              and .[0].status == "completed"
+              and .[0].conclusion == "success"
+            ' <<<"${post_neutral}" >/dev/null
+          echo "Protected verifier rerun request published; required workflow attempt two owns final verification."
