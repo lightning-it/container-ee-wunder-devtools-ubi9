@@ -26,6 +26,11 @@ jobs:
     # rendered to exactly one inventory-authorized target before installation;
     # public repositories never receive the private fleet inventory.
     if: github.repository == 'lightning-it/container-ee-wunder-devtools-ubi9'
+    outputs:
+      dispatch_review: ${{ steps.exact-review-target.outputs.dispatch_review }}
+      expected_base: ${{ steps.exact-review-target.outputs.expected_base }}
+      expected_head: ${{ steps.exact-review-target.outputs.expected_head }}
+      pr_number: ${{ steps.exact-review-target.outputs.pr_number }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -665,3 +670,24 @@ jobs:
           fi
           echo '::error::Closed the failed promotion; a fresh PR bound to a new develop head is required.'
           exit 1
+
+  request-protected-verifier-reevaluation:
+    name: Request protected verifier re-evaluation
+    needs: promote
+    if: >-
+      needs.promote.result == 'success' &&
+      needs.promote.outputs.dispatch_review == 'true' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/develop' &&
+      github.ref_protected == true &&
+      github.sha == needs.promote.outputs.expected_head
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/current-revision-rerun.yml
+    with:
+      pr_number: ${{ fromJSON(needs.promote.outputs.pr_number) }}
+      expected_base: ${{ needs.promote.outputs.expected_base }}
+      expected_head: ${{ needs.promote.outputs.expected_head }}
