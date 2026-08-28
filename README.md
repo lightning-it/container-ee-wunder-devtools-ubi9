@@ -56,6 +56,8 @@ development. It is based on **Red Hat UBI 9** and includes:
 - actionlint
 - uv for reproducible, hash-locked Python dependency refreshes
 - Node.js, npm, and pnpm for repository-owned, lockfile-pinned validators
+- automatic image-native Node.js `24.18.0` / npm `11.16.0` selection for
+  repositories that declare `24.18.0` in `.node-version`
 - Terraform CLI
 - TFLint
 - terraform-docs

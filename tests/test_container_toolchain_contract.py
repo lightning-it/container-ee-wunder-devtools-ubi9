@@ -93,6 +93,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
 
         for argument in (
             "ARG NODE_VERSION=24.19.0",
+            "ARG WEBSITE_NODE_VERSION=24.18.0",
             "ARG GO_VERSION=1.26.7",
             "ARG GO_X_MOD_VERSION=0.40.0",
             "ARG GO_GRPC_VERSION=1.82.1",
@@ -106,6 +107,9 @@ class ContainerToolchainContractTests(unittest.TestCase):
         ):
             self.assertIn(argument, dockerfile)
         self.assertEqual("12.0.2", container_package["dependencies"]["npm"])
+        self.assertEqual(
+            "npm:npm@11.16.0", container_package["dependencies"]["npm-website"]
+        )
         pnpm_version = container_package["dependencies"]["pnpm"]
         self.assertEqual(f"pnpm@{pnpm_version}", container_package["packageManager"])
         self.assertNotIn("ARG PNPM_VERSION=", dockerfile)
@@ -120,6 +124,12 @@ class ContainerToolchainContractTests(unittest.TestCase):
             self.assertRegex(version, r"^\d+\.\d+\.\d+$")
             self.assertEqual(version, pnpm_workspace["overrides"][package])
             self.assertIn(package, dockerfile)
+        for package, version in {"pacote": "21.5.1", "undici": "6.27.0"}.items():
+            self.assertEqual(version, container_package["dependencies"][package])
+            self.assertEqual(version, pnpm_workspace["overrides"][package])
+        self.assertIn(
+            "node_modules/npm-website/node_modules/${package}", dockerfile
+        )
         self.assertEqual(1440, pnpm_workspace["minimumReleaseAge"])
         self.assertTrue(pnpm_workspace["minimumReleaseAgeStrict"])
         self.assertFalse(pnpm_workspace["trustLockfile"])
@@ -128,8 +138,9 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertTrue(pnpm_workspace["strictPeerDependencies"])
         self.assertTrue(pnpm_workspace["verifyStoreIntegrity"])
         self.assertTrue(pnpm_workspace["strictStorePkgContentCheck"])
+        self.assertIn("for npm_tree in npm npm-website", dockerfile)
         self.assertIn(
-            "node_modules/npm/node_modules/${package}",
+            "node_modules/${npm_tree}/node_modules/${package}",
             dockerfile,
         )
         self.assertEqual(1, dockerfile.count("ENV PATH=/opt/node/bin:$PATH"))
@@ -137,6 +148,18 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn(
             "COPY --from=tools /opt/node-toolchain /opt/node-toolchain",
             dockerfile,
+        )
+        self.assertIn(
+            "COPY --from=tools /opt/node-website /opt/node-website",
+            dockerfile,
+        )
+        self.assertIn(
+            "COPY scripts/devtools-node-selector.sh "
+            "/usr/local/bin/devtools-node-selector.sh",
+            dockerfile,
+        )
+        self.assertIn(
+            'ENTRYPOINT ["/usr/local/bin/devtools-node-selector.sh"]', dockerfile
         )
         self.assertIn("--frozen-lockfile", dockerfile)
         self.assertIn("--ignore-scripts", dockerfile)
@@ -225,6 +248,24 @@ class ContainerToolchainContractTests(unittest.TestCase):
             resolution = locked.get("resolution", {})
             self.assertIn("integrity", resolution)
             self.assertNotIn("tarball", resolution)
+
+    def test_node_selector_is_fail_closed_and_source_owned(self):
+        selector = ROOT / "scripts/devtools-node-selector.sh"
+        self.assertTrue(selector.stat().st_mode & 0o111)
+        content = selector.read_text(encoding="utf-8")
+        self.assertIn('default_node_bin="/opt/node/bin"', content)
+        self.assertIn("/opt/node-website/bin", content)
+        self.assertIn(
+            'if [ -e "$version_file" ] || [ -L "$version_file" ]; then',
+            content,
+        )
+        self.assertIn('[ -r "$version_file" ]', content)
+        self.assertIn('"$default_node_bin/node"', content)
+        self.assertIn('"$website_node_bin/node"', content)
+        self.assertIn('exec 3<"$version_file"', content)
+        self.assertNotIn("awk", content)
+        self.assertIn("requested Node.js version is not bundled", content)
+        self.assertIn('exec "$@"', content)
 
     def test_local_and_ci_contracts_probe_the_same_toolchain(self):
         required_commands = (
