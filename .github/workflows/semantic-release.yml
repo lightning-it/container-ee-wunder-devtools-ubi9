@@ -94,7 +94,7 @@ jobs:
             --package @semantic-release/commit-analyzer@13 \
             --package @semantic-release/github@12 \
             --package @semantic-release/release-notes-generator@14 \
-            --package conventional-changelog-conventionalcommits@10 \
+            --package conventional-changelog-conventionalcommits@9 \
             semantic-release
 
   release_dry_run:
