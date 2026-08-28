@@ -24,6 +24,7 @@ ARG BUILDX_VERSION=0.36.1
 ARG MOBY_V2_VERSION=2.0.0-beta.21
 ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
 ARG NODE_VERSION=24.19.0
+ARG WEBSITE_NODE_VERSION=24.18.0
 ARG GO_X_CRYPTO_VERSION=0.52.0
 ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.56.0
@@ -134,8 +135,10 @@ RUN /usr/local/lib/container-build-compose.sh \
       "${MOBY_NAMESGENERATOR_SHA256}" \
       "${GO_X_MOD_VERSION}"
 
-# Node.js LTS plus deterministic repository validators. Node release checksums
-# and the committed pnpm lock's integrity hashes cover both target architectures.
+# Node.js LTS plus deterministic repository validators. The independently
+# selected website runtime remains bundled so repositories declaring its exact
+# .node-version never need a host or worktree-local bootstrap. Node release
+# checksums and the committed pnpm lock cover both target architectures.
 # The image deliberately contains no local AI client or AI credentials.
 RUN source /usr/local/lib/container-download-verified.sh && \
     source /tmp/arch.env && \
@@ -147,6 +150,13 @@ RUN source /usr/local/lib/container-download-verified.sh && \
       "node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
     mkdir -p /opt/node && \
     tar -xJf /tmp/node.tar.xz --strip-components=1 -C /opt/node && \
+    download_verified \
+      "https://nodejs.org/download/release/v${WEBSITE_NODE_VERSION}/node-v${WEBSITE_NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
+      /tmp/node-website.tar.xz \
+      "https://nodejs.org/download/release/v${WEBSITE_NODE_VERSION}/SHASUMS256.txt" \
+      "node-v${WEBSITE_NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
+    mkdir -p /opt/node-website && \
+    tar -xJf /tmp/node-website.tar.xz --strip-components=1 -C /opt/node-website && \
     export PATH="/opt/node/bin:${PATH}" && \
     cd /opt/node-toolchain && \
     pnpm_version="$(/opt/node/bin/node -p \
@@ -155,20 +165,36 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     /opt/node/bin/corepack "pnpm@${pnpm_version}" install \
       --frozen-lockfile --ignore-scripts --strict-peer-dependencies \
       --store-dir /tmp/pnpm-store && \
-    for package in brace-expansion ip-address tar; do \
+    for npm_tree in npm npm-website; do \
+      for package in brace-expansion ip-address tar; do \
+        version="$(/opt/node/bin/node -p \
+          'require(process.argv[1]).version' \
+          "/opt/node-toolchain/node_modules/${package}/package.json")" && \
+        rm -rf "/opt/node-toolchain/node_modules/${npm_tree}/node_modules/${package}" && \
+        cp -aL "/opt/node-toolchain/node_modules/${package}" \
+          "/opt/node-toolchain/node_modules/${npm_tree}/node_modules/${package}" && \
+        test "$(/opt/node/bin/node -p \
+          'require(process.argv[1]).version' \
+          "/opt/node-toolchain/node_modules/${npm_tree}/node_modules/${package}/package.json")" \
+          = "${version}"; \
+      done; \
+    done && \
+    for package in pacote undici; do \
       version="$(/opt/node/bin/node -p \
         'require(process.argv[1]).version' \
         "/opt/node-toolchain/node_modules/${package}/package.json")" && \
-      rm -rf "/opt/node-toolchain/node_modules/npm/node_modules/${package}" && \
+      rm -rf "/opt/node-toolchain/node_modules/npm-website/node_modules/${package}" && \
       cp -aL "/opt/node-toolchain/node_modules/${package}" \
-        "/opt/node-toolchain/node_modules/npm/node_modules/${package}" && \
+        "/opt/node-toolchain/node_modules/npm-website/node_modules/${package}" && \
       test "$(/opt/node/bin/node -p \
         'require(process.argv[1]).version' \
-        "/opt/node-toolchain/node_modules/npm/node_modules/${package}/package.json")" \
+        "/opt/node-toolchain/node_modules/npm-website/node_modules/${package}/package.json")" \
         = "${version}"; \
     done && \
     rm -rf /opt/node/lib/node_modules/npm && \
     rm -f /opt/node/bin/npm /opt/node/bin/npx /opt/node/bin/pnpm && \
+    rm -rf /opt/node-website/lib/node_modules/npm && \
+    rm -f /opt/node-website/bin/npm /opt/node-website/bin/npx && \
     chmod 0755 /opt/node-toolchain/node_modules/pnpm/bin/pnpm.cjs && \
     ln -s /opt/node-toolchain/node_modules/npm/bin/npm-cli.js /opt/node/bin/npm && \
     ln -s /opt/node-toolchain/node_modules/npm/bin/npx-cli.js /opt/node/bin/npx && \
@@ -177,13 +203,17 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     ln -s /opt/node-toolchain/node_modules/renovate/dist/config-validator.js /opt/node/bin/renovate-config-validator && \
     ln -s /opt/node-toolchain/node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs /opt/node/bin/markdownlint-cli2 && \
     ln -s /opt/node-toolchain/node_modules/prettier/bin/prettier.cjs /opt/node/bin/prettier && \
+    ln -s /opt/node-toolchain/node_modules/npm-website/bin/npm-cli.js /opt/node-website/bin/npm && \
+    ln -s /opt/node-toolchain/node_modules/npm-website/bin/npx-cli.js /opt/node-website/bin/npx && \
     /opt/node/bin/node --version && \
     /opt/node/bin/npm --version && \
     /opt/node/bin/pnpm --version && \
     /opt/node/bin/renovate-config-validator --version && \
     /opt/node/bin/markdownlint-cli2 --version && \
     /opt/node/bin/prettier --version && \
-    rm -f /tmp/node.tar.xz && \
+    test "$(/opt/node-website/bin/node --version)" = "v${WEBSITE_NODE_VERSION}" && \
+    test "$(PATH=/opt/node-website/bin:${PATH} /opt/node-website/bin/npm --version)" = "11.16.0" && \
+    rm -f /tmp/node.tar.xz /tmp/node-website.tar.xz && \
     rm -rf /tmp/pnpm-store /opt/node-toolchain/.npm
 
 
@@ -254,7 +284,9 @@ COPY --from=tools /out/actionlint /usr/local/bin/actionlint
 COPY --from=tools /out/docker /usr/local/bin/docker
 COPY --from=tools /out/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 COPY --from=tools /opt/node /opt/node
+COPY --from=tools /opt/node-website /opt/node-website
 COPY --from=tools /opt/node-toolchain /opt/node-toolchain
+COPY scripts/devtools-node-selector.sh /usr/local/bin/devtools-node-selector.sh
 ENV PATH=/opt/node/bin:$PATH
 
 # Python deps: this *is* the right place for pip
@@ -283,4 +315,5 @@ ENV HOME=/home/wunder \
     ANSIBLE_REMOTE_TEMP=/tmp/ansible/tmp
 
 USER wunder
+ENTRYPOINT ["/usr/local/bin/devtools-node-selector.sh"]
 CMD ["/bin/bash"]
