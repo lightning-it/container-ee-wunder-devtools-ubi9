@@ -280,6 +280,8 @@ def protected_asset_bytes(path: Path, name: str) -> bytes:
             fail(f"Protected {name} must be one regular non-symlink file.")
         if details.st_uid != os.geteuid():
             fail(f"Protected {name} must be owned by the current user.")
+        if details.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            fail(f"Protected {name} must not be group- or world-writable.")
         if details.st_size <= 0 or details.st_size > MAX_PROTECTED_ASSET_BYTES:
             fail(f"Protected {name} must contain 1..{MAX_PROTECTED_ASSET_BYTES} bytes.")
         with os.fdopen(descriptor, "rb", closefd=False) as protected_asset:
@@ -342,6 +344,8 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
                     fail(f"Protected {name} must be one regular non-symlink file.")
                 if existing.st_uid != os.geteuid():
                     fail(f"Protected {name} must be owned by the current user.")
+                if existing.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                    fail(f"Protected {name} must not be group- or world-writable.")
         finally:
             if existing_descriptor >= 0:
                 descriptor_to_close = existing_descriptor
