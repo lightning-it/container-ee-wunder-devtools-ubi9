@@ -253,7 +253,13 @@ class ContainerToolchainContractTests(unittest.TestCase):
         selector = ROOT / "scripts/devtools-node-selector.sh"
         self.assertTrue(selector.stat().st_mode & 0o111)
         content = selector.read_text(encoding="utf-8")
+        self.assertIn('default_node_bin="/opt/node/bin"', content)
         self.assertIn("/opt/node-website/bin", content)
+        self.assertIn('[ -r "$version_file" ]', content)
+        self.assertIn('"$default_node_bin/node"', content)
+        self.assertIn('"$website_node_bin/node"', content)
+        self.assertIn('exec 3<"$version_file"', content)
+        self.assertNotIn("awk", content)
         self.assertIn("requested Node.js version is not bundled", content)
         self.assertIn('exec "$@"', content)
 
