@@ -3,7 +3,8 @@
 @@ -127,7 +127,7 @@
               classpath="${depsDir}/maven-ant-tasks-${maven-ant-tasks-version}.jar"/>
    </target>
- 
+-
++
 -  <property name="jetty-version" value="12.0.34" />
 +  <property name="jetty-version" value="12.0.38" />
    <target name="dl-deps-jetty" unless="${offline}">
@@ -63,7 +64,7 @@
      <fileset dir="${depsDir}/" includes="htmlunit-csp-${htmlunit-csp-version}.jar" />
      <pathelement location="css-validator/css-validator.jar"/>
      <pathelement location="${jarsDir}/galimatias.jar"/>
-@@ -547,7 +547,7 @@
+@@ -547,6 +547,6 @@
      <fileset dir="${depsDir}/" includes="jetty-server-${jetty-version}.jar" />
      <fileset dir="${depsDir}/" includes="jetty-ee10-servlet-${jetty-version}.jar" />
      <fileset dir="${depsDir}/" includes="jetty-util-${jetty-version}.jar" />
@@ -71,7 +72,6 @@
 +    <fileset dir="${depsDir}/" includes="reload4j-${reload4j-version}.jar" />
      <pathelement path="${validator.build.basedir}/core/classes/"/>
    </path>
- 
 @@ -785,7 +785,7 @@
        <dependency groupId="org.apache.commons" artifactId="commons-text" version="${commons-text-version}"/>
        <dependency groupId="isorelax" artifactId="isorelax" version="20030108"/>
