@@ -1180,17 +1180,9 @@ def expected_integration_tree(change: PlannedChange) -> str:
                     capture=True,
                     cwd=worktree,
                 )
-                status_value = git_output_at(
-                    worktree,
-                    "status",
-                    "--porcelain=v1",
-                    "--untracked-files=all",
-                    "-z",
-                )
                 current_head = git_output_at(worktree, "rev-parse", "HEAD").strip()
                 if (
                     merge_head.returncode == 1
-                    and not status_value
                     and current_head == change.base_tip
                     and directory_identity(
                         worktree,
@@ -1198,28 +1190,75 @@ def expected_integration_tree(change: PlannedChange) -> str:
                     )
                     == worktree_identity
                 ):
-                    refreshed = run(
+                    staged_drift = run(
                         [
                             "git",
-                            "-c",
-                            f"core.hooksPath={disabled_hooks}",
-                            "update-index",
-                            "--really-refresh",
+                            "diff",
+                            "--cached",
+                            "--quiet",
+                            "--no-ext-diff",
+                            "--no-textconv",
+                            change.base_tip,
+                            "--",
                         ],
                         capture=True,
                         cwd=worktree,
                     )
-                    if refreshed.returncode:
-                        raise RuntimeError(
-                            "could not refresh the clean compatibility merge "
-                            "worktree after a transient stash race: "
-                            + refreshed.stdout.strip()
-                        )
-                    merged = run(
-                        merge_command,
+                    tracked_drift = run(
+                        [
+                            "git",
+                            "diff",
+                            "--quiet",
+                            "--no-ext-diff",
+                            "--no-textconv",
+                            "--",
+                        ],
                         capture=True,
                         cwd=worktree,
                     )
+                    untracked_drift = git_output_at(
+                        worktree,
+                        "ls-files",
+                        "--others",
+                        "--exclude-standard",
+                        "-z",
+                    )
+                    pre_refresh_clean = (
+                        staged_drift.returncode == 0
+                        and tracked_drift.returncode == 0
+                        and not untracked_drift
+                    )
+                    if pre_refresh_clean:
+                        refreshed = run(
+                            [
+                                "git",
+                                "-c",
+                                f"core.hooksPath={disabled_hooks}",
+                                "update-index",
+                                "--really-refresh",
+                            ],
+                            capture=True,
+                            cwd=worktree,
+                        )
+                        if refreshed.returncode:
+                            raise RuntimeError(
+                                "could not refresh the compatibility merge "
+                                "worktree after a transient stash race: "
+                                + refreshed.stdout.strip()
+                            )
+                        status_value = git_output_at(
+                            worktree,
+                            "status",
+                            "--porcelain=v1",
+                            "--untracked-files=all",
+                            "-z",
+                        )
+                        if not status_value:
+                            merged = run(
+                                merge_command,
+                                capture=True,
+                                cwd=worktree,
+                            )
             if merged.returncode:
                 raise RuntimeError(
                     "the reviewed HEAD does not merge cleanly with the "
