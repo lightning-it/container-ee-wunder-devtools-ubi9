@@ -255,10 +255,11 @@ Publishing targets: `github-release, quay.io`.
 
 ### Release scanner isolation
 
-Release vulnerability scanning runs read-only with all Linux capabilities
-dropped, `no-new-privileges` enabled, and no container-engine socket mounted.
-Its ephemeral 8 GiB `/tmp` workspace accommodates extraction of the current
-Trivy Java vulnerability database without bind-mounting `/tmp` from the host.
+Release vulnerability scanning bind-mounts the repository read-only, drops all
+Linux capabilities, enables `no-new-privileges`, and mounts no container-engine
+socket. A separate memory-backed 8 GiB `/tmp` accommodates extraction of the
+current Trivy Java vulnerability database without bind-mounting a host path for
+that temporary workspace.
 
 <!-- BEGIN LIT_COMPATIBILITY_MATRIX -->
 
