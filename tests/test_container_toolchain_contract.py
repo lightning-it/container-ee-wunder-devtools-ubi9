@@ -34,6 +34,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn("--exit-code 1", verifier)
         self.assertIn("--read-only", verifier)
         self.assertIn("--cap-drop ALL", verifier)
+        self.assertIn("--security-opt no-new-privileges=true", verifier)
         self.assertNotIn("/var/run/docker.sock", verifier)
         self.assertNotIn("--privileged", verifier)
 
