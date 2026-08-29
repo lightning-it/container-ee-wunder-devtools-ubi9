@@ -42,11 +42,11 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    outputs:
+      trusted: ${{ steps.guard.outputs.trusted }}
     permissions:
-      checks: read
-      contents: write
+      contents: read
       pull-requests: write
-      statuses: read
 
     steps:
       - name: Verify automated sync PR identity
@@ -198,15 +198,6 @@ jobs:
             echo "kind=$sync_kind"
             echo "subject=$expected_subject"
           } >>"$GITHUB_OUTPUT"
-
-      - name: Mint policy-read App token
-        id: policy-app
-        if: steps.guard.outputs.trusted == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.SHARED_ASSETS_SYNC_APP_CLIENT_ID }}
-          private-key: ${{ secrets.SHARED_ASSETS_SYNC_APP_PRIVATE_KEY }}
-          permission-administration: read
 
       - name: Revoke auto-merge for an untrusted state or event
         if: steps.guard.outputs.trusted != 'true'
@@ -361,20 +352,20 @@ jobs:
               ;;
           esac
 
-      - name: Verify required checks and merge exact head
+      - name: Verify exact provenance before merge finalization
         if: steps.guard.outputs.trusted == 'true'
         env:
           EXPECTED_SUBJECT: ${{ steps.guard.outputs.subject }}
           GH_TOKEN: ${{ github.token }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_TITLE: ${{ github.event.pull_request.title }}
-          POLICY_TOKEN: ${{ steps.policy-app.outputs.token }}
           REPO: ${{ github.repository }}
           SYNC_APP_BOT: lightning-it-shared-assets-sync[bot]
           SYNC_APP_ID: ${{ vars.SHARED_ASSETS_SYNC_APP_ID }}
@@ -393,13 +384,15 @@ jobs:
             if ! jq -e \
               --arg author "$PR_AUTHOR" \
               --arg base "$PR_BASE" \
+              --arg base_sha "$PR_BASE_SHA" \
               --arg head "$PR_HEAD" \
               --arg head_repo "$PR_HEAD_REPO" \
               --arg head_sha "$PR_HEAD_SHA" \
               --arg title "$PR_TITLE" \
               '(.state == "open") and (.draft == false)
                and (.user.login == $author) and (.base.ref == $base)
-               and (.head.ref == $head) and (.head.repo.full_name == $head_repo)
+               and (.base.sha == $base_sha) and (.head.ref == $head)
+               and (.head.repo.full_name == $head_repo)
                and (.head.sha == $head_sha) and (.title == $title)
                and ([.labels[].name] | index("chore") != null)
                and ([.labels[].name] | index("shared-assets-lit") != null)' \
@@ -474,16 +467,22 @@ jobs:
                 -F number="$PR_NUMBER" \
                 --jq '.data.repository.pullRequest.autoMergeRequest != null'
             }
-            auto_merge_enabled="$(query_auto_merge)"
-            [ "$auto_merge_enabled" = false ] && return 0
+            if auto_merge_enabled="$(query_auto_merge)"; then
+              [ "$auto_merge_enabled" = false ] && return 0
+            fi
+            disable_error=""
             if ! disable_error="$(
               gh pr merge "$PR_URL" --disable-auto 2>&1
             )"; then
-              auto_merge_enabled="$(query_auto_merge)"
-              if [ "$auto_merge_enabled" != false ]; then
-                printf '%s\n' "$disable_error" >&2
-                return 1
-              fi
+              :
+            fi
+            if ! auto_merge_enabled="$(query_auto_merge)"; then
+              [ -z "$disable_error" ] || printf '%s\n' "$disable_error" >&2
+              return 1
+            fi
+            if [ "$auto_merge_enabled" != false ]; then
+              [ -z "$disable_error" ] || printf '%s\n' "$disable_error" >&2
+              return 1
             fi
           }
 
@@ -491,6 +490,165 @@ jobs:
             disable_auto_merge
             exit 1
           fi
+          # Clear any stale native auto-merge request before this required guard
+          # completes. The separate finalizer starts only after this job is
+          # durably successful, so the merge cannot wait on its own running
+          # required check.
+          # A prior cancelled guard check can make GitHub report the PR as
+          # unstable and deadlock a new --auto request even after every required
+          # check has passed. A normal exact-head merge still enforces every
+          # branch rule and grants no bypass.
+          disable_auto_merge
+          if ! assert_live_safe; then
+            disable_auto_merge
+            exit 1
+          fi
+          echo "Exact PR provenance is ready for the post-guard finalizer."
+
+  finalize-shared-assets-merge:
+    name: Finalize exact trusted shared-assets merge
+    needs: verify-shared-assets
+    if: >-
+      needs.verify-shared-assets.result == 'success'
+      && needs.verify-shared-assets.outputs.trusted == 'true'
+      && github.event.pull_request.user.login
+        == 'lightning-it-shared-assets-sync[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      checks: read
+      contents: write
+      pull-requests: write
+      statuses: read
+
+    steps:
+      - name: Mint finalizer policy-read App token
+        id: policy-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SHARED_ASSETS_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SHARED_ASSETS_SYNC_APP_PRIVATE_KEY }}
+          permission-administration: read
+
+      - name: Re-prove completed guard and merge exact head
+        env:
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          POLICY_TOKEN: ${{ steps.policy-app.outputs.token }}
+          REPO: ${{ github.repository }}
+          SYNC_APP_BOT: lightning-it-shared-assets-sync[bot]
+        run: |
+          set -euo pipefail
+
+          assert_live_safe() {
+            local live_pr repo_name repository_quality_prefix shared_assets_prefix
+            if ! live_pr="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"; then
+              return 1
+            fi
+            if ! jq -e \
+              --arg author "$PR_AUTHOR" \
+              --arg base "$PR_BASE" \
+              --arg base_sha "$PR_BASE_SHA" \
+              --arg head "$PR_HEAD" \
+              --arg head_repo "$PR_HEAD_REPO" \
+              --arg head_sha "$PR_HEAD_SHA" \
+              --arg title "$PR_TITLE" \
+              '(.state == "open") and (.draft == false)
+               and (.user.login == $author) and (.base.ref == $base)
+               and (.base.sha == $base_sha) and (.head.ref == $head)
+               and (.head.repo.full_name == $head_repo)
+               and (.head.sha == $head_sha) and (.title == $title)
+               and ([.labels[].name] | index("chore") != null)
+               and ([.labels[].name] | index("shared-assets-lit") != null)' \
+              >/dev/null <<<"$live_pr"; then
+              return 1
+            fi
+            repo_name="${REPO#*/}"
+            repository_quality_prefix="chore/sync-repository-quality-${repo_name}-"
+            shared_assets_prefix="chore/sync-shared-assets-lit-${repo_name}-"
+            if [[ "$PR_HEAD" == "$repository_quality_prefix"* ]] \
+              && [[ "${PR_HEAD#"$repository_quality_prefix"}" \
+                =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]] \
+              && [ "$PR_TITLE" = "chore: sync repository quality assets" ]; then
+              return 0
+            fi
+            [[ "$PR_HEAD" == "$shared_assets_prefix"* ]] \
+              && [[ "${PR_HEAD#"$shared_assets_prefix"}" \
+                =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]] \
+              && { [ "$PR_TITLE" = "chore: sync shared-assets-lit" ] \
+                || [ "$PR_TITLE" = "chore: sync shared assets" ]; }
+          }
+
+          completed_guard_is_bound() {
+            local guard_pages run_prefix
+            run_prefix="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${CURRENT_RUN_ID}/job/"
+            if ! guard_pages="$(
+              gh api --paginate --slurp \
+                "repos/${REPO}/commits/${PR_HEAD_SHA}/check-runs?filter=all&per_page=100"
+            )"; then
+              return 1
+            fi
+            jq -e \
+              --arg head "$PR_HEAD_SHA" \
+              --arg run_prefix "$run_prefix" '
+              [ .[] | .check_runs[]
+                | select(.name == "Verify trusted shared-assets PR")
+                | select(.app.id == 15368 and .app.slug == "github-actions")
+                | select(.head_sha == $head)
+                | select(.details_url | startswith($run_prefix))
+              ] as $matches
+              | ($matches | length) == 1
+              and $matches[0].status == "completed"
+              and $matches[0].conclusion == "success"
+            ' >/dev/null <<<"$guard_pages"
+          }
+
+          strict_base_guard_is_enforced() {
+            local branch_rules classic classic_state
+            if ! branch_rules="$(
+              GH_TOKEN="$POLICY_TOKEN" gh api "repos/${REPO}/rules/branches/${PR_BASE}"
+            )"; then
+              echo "Unable to read branch rules for ${REPO}/${PR_BASE}; administration read access may be required." >&2
+              return 1
+            fi
+            if classic="$(
+              GH_TOKEN="$POLICY_TOKEN" gh api \
+                "repos/${REPO}/branches/${PR_BASE}/protection/required_status_checks" \
+                2>&1
+            )"; then
+              classic_state=0
+            else
+              classic_state="$?"
+            fi
+            if [ "$classic_state" -ne 0 ]; then
+              if grep -Fq "HTTP 404" <<<"$classic"; then
+                classic='{}'
+              else
+                printf '%s\n' "$classic" >&2
+                return 1
+              fi
+            fi
+            jq -en \
+              --argjson branch_rules "$branch_rules" \
+              --argjson classic "$classic" '
+              ([ $branch_rules[]
+                 | select(.type == "required_status_checks")
+                 | (.parameters.strict_required_status_checks_policy // false)
+               ] + [($classic.strict // false)])
+              | any(.[]; . == true)
+            ' >/dev/null
+          }
+
           required_checks_state() {
             local branch_rules check_runs classic classic_state context evidence pending required required_check state status_pages
             if ! branch_rules="$(
@@ -530,6 +688,9 @@ jobs:
               '
             )"
             [ "$(jq 'length' <<<"$required")" -gt 0 ] || return 1
+            jq -e '
+              all(.[]; .context != "Finalize exact trusted shared-assets merge")
+            ' >/dev/null <<<"$required" || return 1
             if ! check_runs="$(
               gh api --paginate --slurp \
                 "repos/${REPO}/commits/${PR_HEAD_SHA}/check-runs?filter=latest&per_page=100"
@@ -593,43 +754,117 @@ jobs:
             [ "$pending" = false ] || return 2
           }
 
+          disable_auto_merge() {
+            local auto_merge_enabled disable_error name owner
+            owner="${REPO%%/*}"
+            name="${REPO#*/}"
+            query_auto_merge() {
+              gh api graphql \
+                -f query="query(\$owner:String!,\$name:String!,\$number:Int!){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){autoMergeRequest{__typename}}}}" \
+                -f owner="$owner" \
+                -f name="$name" \
+                -F number="$PR_NUMBER" \
+                --jq '.data.repository.pullRequest.autoMergeRequest != null'
+            }
+            if auto_merge_enabled="$(query_auto_merge)"; then
+              [ "$auto_merge_enabled" = false ] && return 0
+            fi
+            disable_error=""
+            if ! disable_error="$(
+              gh pr merge "$PR_URL" --disable-auto 2>&1
+            )"; then
+              :
+            fi
+            if ! auto_merge_enabled="$(query_auto_merge)"; then
+              [ -z "$disable_error" ] || printf '%s\n' "$disable_error" >&2
+              return 1
+            fi
+            if [ "$auto_merge_enabled" != false ]; then
+              [ -z "$disable_error" ] || printf '%s\n' "$disable_error" >&2
+              return 1
+            fi
+          }
+
           wait_for_required_checks() {
-            local state
-            for _ in $(seq 1 180); do
-              if ! assert_live_safe; then
-                return 1
-              fi
+            local state remaining sleep_for
+            local deadline
+            # Count API latency inside the bounded 30-minute window and poll at
+            # most once per minute to avoid secondary GitHub API rate limits.
+            deadline=$((SECONDS + 1800))
+            while [ "$SECONDS" -lt "$deadline" ]; do
+              assert_live_safe || return 1
+              completed_guard_is_bound || return 1
               if required_checks_state; then
+                strict_base_guard_is_enforced || return 1
                 state=0
               else
                 state="$?"
               fi
               case "$state" in
                 0) return 0 ;;
-                2) sleep 10 ;;
+                2)
+                  remaining=$((deadline - SECONDS))
+                  [ "$remaining" -gt 0 ] || break
+                  sleep_for=60
+                  if [ "$remaining" -lt "$sleep_for" ]; then
+                    sleep_for="$remaining"
+                  fi
+                  sleep "$sleep_for"
+                  ;;
                 *) return 1 ;;
               esac
             done
             return 1
           }
 
+          disable_auto_merge
           if ! wait_for_required_checks; then
             disable_auto_merge
             exit 1
           fi
-          if ! assert_live_safe; then
-            disable_auto_merge
-            exit 1
-          fi
-          # Clear any stale native auto-merge request before the exact-head merge.
-          # A prior cancelled guard check can make GitHub report the PR as
-          # unstable and deadlock a new --auto request even after every required
-          # check has passed. A normal exact-head merge still enforces every
-          # branch rule and grants no bypass.
+
           disable_auto_merge
-          if ! assert_live_safe; then
-            disable_auto_merge
-            exit 1
-          fi
+          assert_live_safe
+          completed_guard_is_bound
+          required_checks_state
+          # GitHub re-evaluates this strict up-to-date policy atomically while
+          # accepting the merge, so a concurrent base advance rejects it.
+          strict_base_guard_is_enforced
+
           gh pr merge "$PR_URL" --merge --delete-branch \
             --match-head-commit "$PR_HEAD_SHA"
+
+          merged_pr=""
+          for _ in $(seq 1 12); do
+            candidate="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"
+            if jq -e \
+              --arg author "$PR_AUTHOR" \
+              --arg base "$PR_BASE" \
+              --arg head "$PR_HEAD" \
+              --arg head_repo "$PR_HEAD_REPO" \
+              --arg head_sha "$PR_HEAD_SHA" '
+              .state == "closed" and .merged == true and .draft == false
+              and .user.login == $author and .base.ref == $base
+              and .head.ref == $head
+              and .head.repo.full_name == $head_repo
+              and .head.sha == $head_sha
+              and (.merge_commit_sha | type == "string")
+              and (.merge_commit_sha | test("^[0-9a-f]{40}$"))
+            ' >/dev/null <<<"$candidate"; then
+              merged_pr="$candidate"
+              break
+            fi
+            sleep 5
+          done
+          [ -n "$merged_pr" ]
+          merge_sha="$(jq -r .merge_commit_sha <<<"$merged_pr")"
+          merge_commit="$(gh api "repos/${REPO}/commits/${merge_sha}")"
+          jq -e \
+            --arg base "$PR_BASE_SHA" \
+            --arg head "$PR_HEAD_SHA" \
+            --arg merge "$merge_sha" '
+            .sha == $merge
+            and (.parents | length) == 2
+            and .parents[0].sha == $base
+            and .parents[1].sha == $head
+          ' >/dev/null <<<"$merge_commit"

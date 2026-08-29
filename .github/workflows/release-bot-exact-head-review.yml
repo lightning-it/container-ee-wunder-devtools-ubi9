@@ -756,42 +756,24 @@ jobs:
           expected_neutral_external_id="mlx90-current-revision:v4:${producer_run_id}:${input_sha256}"
           test "${EXPECTED_NEUTRAL_EXTERNAL_ID}" = "${expected_neutral_external_id}"
           neutral_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${NEUTRAL_CHECK_ID}"
-          neutral_published="$(api_patch \
+          api_patch \
             "repos/${REPOSITORY}/check-runs/${NEUTRAL_CHECK_ID}" \
             -f status=completed \
             -f conclusion=success \
             -f "details_url=${neutral_url}" \
             -f "external_id=${expected_neutral_external_id}" \
             -f 'output[title]=Protected Exact-Revision Codex review passed' \
-            -f "output[summary]=${evidence}")"
-          completed_at="$(jq -er '
-            .completed_at
-            | select(type == "string")
-            | select(test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
-            ' <<<"${neutral_published}")"
-          jq -e \
-            --arg completed_at "${completed_at}" \
-            --arg evidence "${evidence}" \
-            --arg external_id "${expected_neutral_external_id}" \
-            --arg head "${EXPECTED_HEAD}" \
-            --arg url "${neutral_url}" \
-            --argjson check_id "${NEUTRAL_CHECK_ID}" '
-              .id == $check_id
-              and .name == "Current revision review"
-              and .app.id == 15368
-              and .app.slug == "github-actions"
-              and .head_sha == $head
-              and .details_url == $url
-              and .external_id == $external_id
-              and .completed_at == $completed_at
-              and .status == "completed"
-              and .conclusion == "success"
-              and .output.summary == $evidence
-            ' <<<"${neutral_published}" >/dev/null
+            -f "output[summary]=${evidence}" >/dev/null
           neutral=''
+          completed_at=''
           for publication_attempt in $(seq 1 5); do
             if neutral="$(gh api \
                 "repos/${REPOSITORY}/check-runs/${NEUTRAL_CHECK_ID}")" && \
+              completed_at="$(jq -er '
+                .completed_at
+                | select(type == "string")
+                | select(test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+                ' <<<"${neutral}")" && \
               jq -e \
                 --arg completed_at "${completed_at}" \
                 --arg evidence "${evidence}" \
@@ -814,11 +796,13 @@ jobs:
               break
             fi
             neutral=''
+            completed_at=''
             if [ "${publication_attempt}" -lt 5 ]; then
               sleep 2
             fi
           done
           test -n "${neutral}"
+          test -n "${completed_at}"
 
       - name: Fail-close an unfinished protected reservation
         if: >-
