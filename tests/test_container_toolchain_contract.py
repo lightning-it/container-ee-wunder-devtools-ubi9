@@ -34,6 +34,8 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn("--exit-code 1", verifier)
         self.assertIn("--read-only", verifier)
         self.assertIn("--cap-drop ALL", verifier)
+        self.assertNotIn("/var/run/docker.sock", verifier)
+        self.assertNotIn("--privileged", verifier)
 
     def test_requirement_comments_cannot_hide_malformed_content(self):
         self.assertIsNone(parse_direct_requirement("  # full-line comment"))
