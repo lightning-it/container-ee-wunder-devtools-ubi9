@@ -25,6 +25,15 @@ ARG MOBY_V2_VERSION=2.0.0-beta.21
 ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
 ARG NODE_VERSION=24.19.0
 ARG WEBSITE_NODE_VERSION=24.18.0
+ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0
+ARG VNU_RELEASE_ID=258370454
+ARG VNU_ASSET_ID=534958489
+ARG VNU_JAR_SHA256=6df33484013072856456a9c1fa32ae3da96c3069041d9b61c026f57b04bd23c3
+ARG VNU_JRE_VERSION=17.0.20_8
+ARG VNU_JRE_AMD64_ASSET_ID=488632381
+ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27
+ARG VNU_JRE_ARM64_ASSET_ID=492545197
+ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2
 ARG GO_X_CRYPTO_VERSION=0.52.0
 ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.56.0
@@ -216,6 +225,56 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     rm -f /tmp/node.tar.xz /tmp/node-website.tar.xz && \
     rm -rf /tmp/pnpm-store /opt/node-toolchain/.npm
 
+# The W3C Nu HTML Checker publishes a rolling release. Bind the downloaded
+# artifact to both the immutable upstream source revision and its exact
+# SHA-256 so a changed rolling asset fails closed until this tuple is reviewed.
+RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
+    [[ "${VNU_SOURCE_COMMIT}" =~ ^[a-f0-9]{40}$ ]] && \
+    mkdir -p /opt/vnu && \
+    curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
+      --output /tmp/vnu-release.json \
+      "https://api.github.com/repos/validator/validator/releases/${VNU_RELEASE_ID}" && \
+    python -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); expected_commit, expected_asset, expected_digest=sys.argv[2:]; assert data["target_commitish"] == expected_commit; asset=next(item for item in data["assets"] if str(item["id"]) == expected_asset); assert asset["name"] == "vnu.jar"; assert asset["digest"] == "sha256:" + expected_digest' \
+      /tmp/vnu-release.json "${VNU_SOURCE_COMMIT}" "${VNU_ASSET_ID}" \
+      "${VNU_JAR_SHA256}" && \
+    curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
+      --header "Accept: application/octet-stream" \
+      --output /opt/vnu/vnu.jar \
+      "https://api.github.com/repos/validator/validator/releases/assets/${VNU_ASSET_ID}" && \
+    printf '%s  %s\n' "${VNU_JAR_SHA256}" /opt/vnu/vnu.jar | \
+      sha256sum --check --status && \
+    chmod 0444 /opt/vnu/vnu.jar && \
+    rm -f /tmp/vnu-release.json && \
+    source /tmp/arch.env && \
+    case "${ARCH}" in \
+      amd64) \
+        VNU_JRE_ASSET_ID="${VNU_JRE_AMD64_ASSET_ID}"; \
+        VNU_JRE_SHA256="${VNU_JRE_AMD64_SHA256}"; \
+        VNU_JRE_ARCH=x64; \
+        ;; \
+      arm64) \
+        VNU_JRE_ASSET_ID="${VNU_JRE_ARM64_ASSET_ID}"; \
+        VNU_JRE_SHA256="${VNU_JRE_ARM64_SHA256}"; \
+        VNU_JRE_ARCH=aarch64; \
+        ;; \
+      *) exit 1 ;; \
+    esac && \
+    curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
+      --header "Accept: application/octet-stream" \
+      --output /tmp/vnu-jre.tar.gz \
+      "https://api.github.com/repos/adoptium/temurin17-binaries/releases/assets/${VNU_JRE_ASSET_ID}" && \
+    printf '%s  %s\n' "${VNU_JRE_SHA256}" /tmp/vnu-jre.tar.gz | \
+      sha256sum --check --status && \
+    mkdir -p /opt/java && \
+    tar -xzf /tmp/vnu-jre.tar.gz --strip-components=1 -C /opt/java && \
+    test "$(/opt/java/bin/java -version 2>&1 | head -n 1)" = \
+      "openjdk version \"${VNU_JRE_VERSION%_*}\" 2026-07-21" && \
+    test -r "/opt/java/release" && \
+    grep -Fq "IMPLEMENTOR=\"Eclipse Adoptium\"" /opt/java/release && \
+    grep -Fq "JAVA_RUNTIME_VERSION=\"${VNU_JRE_VERSION/_/+}\"" /opt/java/release && \
+    grep -Fq "OS_ARCH=\"${VNU_JRE_ARCH}\"" /opt/java/release && \
+    rm -f /tmp/vnu-jre.tar.gz
+
 
 FROM registry.access.redhat.com/ubi9/python-311:9.8-1779945715@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c
 
@@ -286,8 +345,12 @@ COPY --from=tools /out/docker-compose /usr/local/lib/docker/cli-plugins/docker-c
 COPY --from=tools /opt/node /opt/node
 COPY --from=tools /opt/node-website /opt/node-website
 COPY --from=tools /opt/node-toolchain /opt/node-toolchain
+COPY --from=tools /opt/vnu/vnu.jar /opt/vnu/vnu.jar
+COPY --from=tools /opt/java /opt/java
 COPY scripts/devtools-node-selector.sh /usr/local/bin/devtools-node-selector.sh
-ENV PATH=/opt/node/bin:$PATH
+COPY scripts/vnu /usr/local/bin/vnu
+ENV JAVA_HOME=/opt/java \
+    PATH=/opt/java/bin:/opt/node/bin:$PATH
 
 # Python deps: this *is* the right place for pip
 COPY requirements.txt /tmp/requirements.txt
@@ -300,9 +363,18 @@ RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     ruff --version && mypy --version && uv --version && \
     renovate-config-validator --version && \
     markdownlint-cli2 --version && prettier --version && pnpm --version && \
+    java -version && vnu --version && \
     helm version --short && gh --version && \
     copr-cli --version && rpmspec --version && qemu-img --version && \
     virt-customize --version && virt-sysprep --version && guestfish --version
+
+COPY tests/fixtures/vnu /tmp/vnu-fixtures
+RUN vnu --errors-only /tmp/vnu-fixtures/valid.html && \
+    if vnu --errors-only /tmp/vnu-fixtures/invalid.html; then \
+      echo "ERROR: Nu accepted the intentionally invalid fixture." >&2; \
+      exit 1; \
+    fi && \
+    rm -rf /tmp/vnu-fixtures
 
 WORKDIR /workspace
 RUN useradd -m wunder && \

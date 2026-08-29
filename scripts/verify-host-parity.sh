@@ -70,6 +70,7 @@ image="local/lightning-it-devtools:host-parity"
     prettier --version
     pnpm --version
     node --version
+    vnu --version
   '
 finished="$(date +%s)"
 

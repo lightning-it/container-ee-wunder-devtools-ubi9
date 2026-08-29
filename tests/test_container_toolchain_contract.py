@@ -94,6 +94,15 @@ class ContainerToolchainContractTests(unittest.TestCase):
         for argument in (
             "ARG NODE_VERSION=24.19.0",
             "ARG WEBSITE_NODE_VERSION=24.18.0",
+            "ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0",
+            "ARG VNU_RELEASE_ID=258370454",
+            "ARG VNU_ASSET_ID=534958489",
+            "ARG VNU_JAR_SHA256=6df33484013072856456a9c1fa32ae3da96c3069041d9b61c026f57b04bd23c3",
+            "ARG VNU_JRE_VERSION=17.0.20_8",
+            "ARG VNU_JRE_AMD64_ASSET_ID=488632381",
+            "ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27",
+            "ARG VNU_JRE_ARM64_ASSET_ID=492545197",
+            "ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2",
             "ARG GO_VERSION=1.26.7",
             "ARG GO_X_MOD_VERSION=0.40.0",
             "ARG GO_GRPC_VERSION=1.82.1",
@@ -143,7 +152,10 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "node_modules/${npm_tree}/node_modules/${package}",
             dockerfile,
         )
-        self.assertEqual(1, dockerfile.count("ENV PATH=/opt/node/bin:$PATH"))
+        self.assertEqual(
+            1,
+            dockerfile.count("PATH=/opt/java/bin:/opt/node/bin:$PATH"),
+        )
         self.assertIn('export PATH="/opt/node/bin:${PATH}"', dockerfile)
         self.assertIn(
             "COPY --from=tools /opt/node-toolchain /opt/node-toolchain",
@@ -161,6 +173,16 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn(
             'ENTRYPOINT ["/usr/local/bin/devtools-node-selector.sh"]', dockerfile
         )
+        self.assertNotIn("java-17-openjdk-headless", dockerfile)
+        self.assertIn("COPY --from=tools /opt/java /opt/java", dockerfile)
+        self.assertIn(
+            "COPY --from=tools /opt/vnu/vnu.jar /opt/vnu/vnu.jar",
+            dockerfile,
+        )
+        self.assertIn("COPY scripts/vnu /usr/local/bin/vnu", dockerfile)
+        self.assertIn("vnu --errors-only /tmp/vnu-fixtures/valid.html", dockerfile)
+        self.assertIn("Nu accepted the intentionally invalid fixture", dockerfile)
+        self.assertTrue((ROOT / "scripts/vnu").stat().st_mode & 0o111)
         self.assertIn("--frozen-lockfile", dockerfile)
         self.assertIn("--ignore-scripts", dockerfile)
         self.assertIn("--strict-peer-dependencies", dockerfile)
@@ -213,6 +235,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "markdownlint-cli2 --version",
             "prettier --version",
             "pnpm --version",
+            "vnu --version",
         ):
             self.assertIn(command, dockerfile)
 

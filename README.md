@@ -58,6 +58,8 @@ development. It is based on **Red Hat UBI 9** and includes:
 - Node.js, npm, and pnpm for repository-owned, lockfile-pinned validators
 - automatic image-native Node.js `24.18.0` / npm `11.16.0` selection for
   repositories that declare `24.18.0` in `.node-version`
+- the official W3C Nu HTML Checker (`vnu`) for offline HTML, CSS, and SVG
+  conformance validation
 - Terraform CLI
 - TFLint
 - terraform-docs
@@ -96,6 +98,7 @@ Ubuntu, and macOS pipeline-parity work.
   - `actionlint`
   - `uv`
   - `node` / `npm` / `pnpm`
+  - `vnu`
   - `terraform`
   - `tflint`
   - `terraform-docs`
