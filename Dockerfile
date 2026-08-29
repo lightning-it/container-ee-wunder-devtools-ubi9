@@ -325,25 +325,33 @@ RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
     cp build/dist/vnu.jar /opt/vnu/vnu.jar && \
     test "$(/opt/jdk/bin/java -jar /opt/vnu/vnu.jar --version)" = \
       "${VNU_VERSION} (${VNU_SOURCE_COMMIT:0:7})" && \
-    /opt/jdk/bin/jar tf /opt/vnu/vnu.jar | grep -Fq \
-      'META-INF/maven/ch.qos.reload4j/reload4j/pom.properties' && \
-    ! /opt/jdk/bin/jar tf /opt/vnu/vnu.jar | grep -Fq \
-      'META-INF/maven/log4j/log4j/pom.properties' && \
+    /opt/jdk/bin/jar tf /opt/vnu/vnu.jar > /tmp/vnu-entries.txt && \
+    grep -Fxq \
+      'META-INF/maven/ch.qos.reload4j/reload4j/pom.properties' \
+      /tmp/vnu-entries.txt && \
+    ! grep -Fxq \
+      'META-INF/maven/log4j/log4j/pom.properties' \
+      /tmp/vnu-entries.txt && \
     unzip -p /opt/vnu/vnu.jar \
-      'META-INF/maven/org.eclipse.jetty/jetty-security/pom.properties' | \
-      grep -Fq "version=${VNU_JETTY_VERSION}" && \
+      'META-INF/maven/org.eclipse.jetty/jetty-security/pom.properties' \
+      > /tmp/vnu-jetty-security.properties && \
+    grep -Fxq "version=${VNU_JETTY_VERSION}" \
+      /tmp/vnu-jetty-security.properties && \
     chmod 0444 /opt/vnu/vnu.jar && \
     cd / && \
-    rm -rf /tmp/vnu-source /tmp/vnu-source.tar.gz \
+    rm -rf /tmp/vnu-source /tmp/vnu-source.tar.gz /tmp/vnu-entries.txt \
+      /tmp/vnu-jetty-security.properties \
       /tmp/vnu-secure-dependencies.patch && \
     case "${TARGETARCH}" in \
       amd64) \
         VNU_JRE_SHA256="${VNU_JRE_AMD64_SHA256}"; \
         VNU_JRE_ARCH=x64; \
+        VNU_JRE_OS_ARCH=x86_64; \
         ;; \
       arm64) \
         VNU_JRE_SHA256="${VNU_JRE_ARM64_SHA256}"; \
         VNU_JRE_ARCH=aarch64; \
+        VNU_JRE_OS_ARCH=aarch64; \
         ;; \
       *) exit 1 ;; \
     esac && \
@@ -359,7 +367,7 @@ RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
     test -r "/opt/java/release" && \
     grep -Fq "IMPLEMENTOR=\"Eclipse Adoptium\"" /opt/java/release && \
     grep -Fq "JAVA_RUNTIME_VERSION=\"${VNU_JRE_VERSION/_/+}\"" /opt/java/release && \
-    grep -Fq "OS_ARCH=\"${VNU_JRE_ARCH}\"" /opt/java/release && \
+    grep -Fq "OS_ARCH=\"${VNU_JRE_OS_ARCH}\"" /opt/java/release && \
     rm -f /tmp/vnu-jre.tar.gz
 
 
