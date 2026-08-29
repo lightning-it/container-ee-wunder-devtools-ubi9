@@ -253,6 +253,13 @@ Publishing targets: `github-release, quay.io`.
 
 <!-- END LIT_RELEASE_QUALITY_MODEL -->
 
+### Release scanner isolation
+
+Release vulnerability scanning runs read-only with all Linux capabilities
+dropped, `no-new-privileges` enabled, and no container-engine socket mounted.
+Its ephemeral 8 GiB `/tmp` workspace accommodates extraction of the current
+Trivy Java vulnerability database without exposing a host filesystem path.
+
 <!-- BEGIN LIT_COMPATIBILITY_MATRIX -->
 
 ## Compatibility Matrix
