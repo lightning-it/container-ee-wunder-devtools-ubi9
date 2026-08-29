@@ -216,34 +216,81 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     rm -f /tmp/node.tar.xz /tmp/node-website.tar.xz && \
     rm -rf /tmp/pnpm-store /opt/node-toolchain/.npm
 
-# Isolate the validator build so adding its build-only Java/Ant/Maven toolchain
-# does not invalidate or enlarge the normal tools and final runtime stages.
-FROM tools AS vnu-builder
+# Isolate the validator build from the large Devtools toolchain. This stage uses
+# immutable upstream archives for Java, Maven, and Ant instead of installing the
+# full graphical OpenJDK dependency tree from the UBI repositories.
+FROM registry.access.redhat.com/ubi9/python-311:9.8-1779945715@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c AS vnu-builder
 
+ARG TARGETARCH
 ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0
 ARG VNU_SOURCE_SHA256=ca925f02f47529d1cd36ecfce506929d09cf242ae2d5467017f4ae7ef921852d
 ARG VNU_VERSION=26.8.29
 ARG VNU_JETTY_VERSION=12.0.38
 ARG VNU_RELOAD4J_VERSION=1.2.26
+ARG VNU_JDK_VERSION=17.0.20_8
+ARG VNU_JDK_AMD64_SHA256=be7668bc030d578b83d6d5ef9221d6d6729bbbca8cf94a7d52e16ac68b5a5a35
+ARG VNU_JDK_ARM64_SHA256=d143936f473a4cb24e3b0e247d6d0775769d55ec9775c339540e753059a8d77a
+ARG VNU_MAVEN_VERSION=3.9.11
+ARG VNU_MAVEN_SHA512=bcfe4fe305c962ace56ac7b5fc7a08b87d5abd8b7e89027ab251069faebee516b0ded8961445d6d91ec1985dfe30f8153268843c89aa392733d1a3ec956c9978
 ARG VNU_ANT_VERSION=1.10.15
 ARG VNU_ANT_SHA256=4d5bb20cee34afbad17782de61f4f422c5a03e4d2dffc503bcbd0651c3d3c396
 ARG VNU_JRE_VERSION=17.0.20_8
-ARG VNU_JRE_AMD64_ASSET_ID=488632381
 ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27
-ARG VNU_JRE_ARM64_ASSET_ID=492545197
 ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2
 
-RUN dnf -y install --allowerasing \
-      java-17-openjdk-devel maven patch unzip && \
-    dnf clean all && rm -rf /var/cache/dnf /var/cache/yum && \
+USER 0
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN dnf -y install --allowerasing --setopt=install_weak_deps=False \
+      ca-certificates curl gzip patch tar unzip xz && \
+    dnf clean all && rm -rf /var/cache/dnf /var/cache/yum
+
+RUN test -n "${TARGETARCH}" && \
+    case "${TARGETARCH}" in \
+      amd64) \
+        VNU_JDK_SHA256="${VNU_JDK_AMD64_SHA256}"; \
+        VNU_JDK_ARCH=x64; \
+        ;; \
+      arm64) \
+        VNU_JDK_SHA256="${VNU_JDK_ARM64_SHA256}"; \
+        VNU_JDK_ARCH=aarch64; \
+        ;; \
+      *) exit 1 ;; \
+    esac && \
     curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
+      --output /tmp/vnu-jdk.tar.gz \
+      "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-${VNU_JDK_VERSION/_/%2B}/OpenJDK17U-jdk_${VNU_JDK_ARCH}_linux_hotspot_${VNU_JDK_VERSION}.tar.gz" && \
+    printf '%s  %s\n' "${VNU_JDK_SHA256}" /tmp/vnu-jdk.tar.gz | \
+      sha256sum --check --status && \
+    mkdir -p /opt/jdk && \
+    tar -xzf /tmp/vnu-jdk.tar.gz --strip-components=1 -C /opt/jdk && \
+    test "$(/opt/jdk/bin/java -version 2>&1 | head -n 1)" = \
+      "openjdk version \"${VNU_JDK_VERSION%_*}\" 2026-07-21" && \
+    test "$(/opt/jdk/bin/javac -version 2>&1)" = \
+      "javac ${VNU_JDK_VERSION%_*}" && \
+    grep -Fq "IMPLEMENTOR=\"Eclipse Adoptium\"" /opt/jdk/release && \
+    grep -Fq "JAVA_RUNTIME_VERSION=\"${VNU_JDK_VERSION/_/+}\"" /opt/jdk/release && \
+    rm -f /tmp/vnu-jdk.tar.gz
+
+RUN curl --fail --show-error --location --retry 5 --retry-delay 2 \
+      --output /tmp/apache-maven.tar.gz \
+      "https://archive.apache.org/dist/maven/maven-3/${VNU_MAVEN_VERSION}/binaries/apache-maven-${VNU_MAVEN_VERSION}-bin.tar.gz" && \
+    printf '%s  %s\n' "${VNU_MAVEN_SHA512}" /tmp/apache-maven.tar.gz | \
+      sha512sum --check --status && \
+    mkdir -p /opt/maven && \
+    tar -xzf /tmp/apache-maven.tar.gz --strip-components=1 -C /opt/maven && \
+    JAVA_HOME=/opt/jdk /opt/maven/bin/mvn --version | \
+      grep -Fq "Apache Maven ${VNU_MAVEN_VERSION}" && \
+    rm -f /tmp/apache-maven.tar.gz && \
+    curl --fail --show-error --location --retry 5 --retry-delay 2 \
       --output /tmp/apache-ant.tar.xz \
       "https://archive.apache.org/dist/ant/binaries/apache-ant-${VNU_ANT_VERSION}-bin.tar.xz" && \
     printf '%s  %s\n' "${VNU_ANT_SHA256}" /tmp/apache-ant.tar.xz | \
       sha256sum --check --status && \
     mkdir -p /opt/ant && \
     tar -xJf /tmp/apache-ant.tar.xz --strip-components=1 -C /opt/ant && \
-    ant_version="$(/opt/ant/bin/ant -version)" && \
+    ant_version="$(JAVA_HOME=/opt/jdk PATH=/opt/jdk/bin:${PATH} \
+      /opt/ant/bin/ant -version)" && \
     [[ "${ant_version}" == \
       "Apache Ant(TM) version ${VNU_ANT_VERSION} compiled on "* ]] && \
     rm -f /tmp/apache-ant.tar.xz
@@ -271,16 +318,16 @@ RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
     grep -Fq \
       "<property name=\"reload4j-version\" value=\"${VNU_RELOAD4J_VERSION}\" />" \
       build/build.xml && \
-    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk && \
-    export PATH=/opt/ant/bin:${PATH} && \
+    export JAVA_HOME=/opt/jdk && \
+    export PATH=/opt/maven/bin:/opt/ant/bin:${PATH} && \
     python checker.py dldeps && \
     python checker.py --version="${VNU_VERSION} (${VNU_SOURCE_COMMIT:0:7})" build && \
     cp build/dist/vnu.jar /opt/vnu/vnu.jar && \
-    test "$(/usr/lib/jvm/java-17-openjdk/bin/java -jar /opt/vnu/vnu.jar --version)" = \
+    test "$(/opt/jdk/bin/java -jar /opt/vnu/vnu.jar --version)" = \
       "${VNU_VERSION} (${VNU_SOURCE_COMMIT:0:7})" && \
-    jar tf /opt/vnu/vnu.jar | grep -Fq \
+    /opt/jdk/bin/jar tf /opt/vnu/vnu.jar | grep -Fq \
       'META-INF/maven/ch.qos.reload4j/reload4j/pom.properties' && \
-    ! jar tf /opt/vnu/vnu.jar | grep -Fq \
+    ! /opt/jdk/bin/jar tf /opt/vnu/vnu.jar | grep -Fq \
       'META-INF/maven/log4j/log4j/pom.properties' && \
     unzip -p /opt/vnu/vnu.jar \
       'META-INF/maven/org.eclipse.jetty/jetty-security/pom.properties' | \
@@ -289,24 +336,20 @@ RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
     cd / && \
     rm -rf /tmp/vnu-source /tmp/vnu-source.tar.gz \
       /tmp/vnu-secure-dependencies.patch && \
-    source /tmp/arch.env && \
-    case "${ARCH}" in \
+    case "${TARGETARCH}" in \
       amd64) \
-        VNU_JRE_ASSET_ID="${VNU_JRE_AMD64_ASSET_ID}"; \
         VNU_JRE_SHA256="${VNU_JRE_AMD64_SHA256}"; \
         VNU_JRE_ARCH=x64; \
         ;; \
       arm64) \
-        VNU_JRE_ASSET_ID="${VNU_JRE_ARM64_ASSET_ID}"; \
         VNU_JRE_SHA256="${VNU_JRE_ARM64_SHA256}"; \
         VNU_JRE_ARCH=aarch64; \
         ;; \
       *) exit 1 ;; \
     esac && \
     curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
-      --header "Accept: application/octet-stream" \
       --output /tmp/vnu-jre.tar.gz \
-      "https://api.github.com/repos/adoptium/temurin17-binaries/releases/assets/${VNU_JRE_ASSET_ID}" && \
+      "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-${VNU_JRE_VERSION/_/%2B}/OpenJDK17U-jre_${VNU_JRE_ARCH}_linux_hotspot_${VNU_JRE_VERSION}.tar.gz" && \
     printf '%s  %s\n' "${VNU_JRE_SHA256}" /tmp/vnu-jre.tar.gz | \
       sha256sum --check --status && \
     mkdir -p /opt/java && \

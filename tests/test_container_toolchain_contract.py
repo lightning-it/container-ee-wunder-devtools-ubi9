@@ -99,12 +99,15 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ARG VNU_VERSION=26.8.29",
             "ARG VNU_JETTY_VERSION=12.0.38",
             "ARG VNU_RELOAD4J_VERSION=1.2.26",
+            "ARG VNU_JDK_VERSION=17.0.20_8",
+            "ARG VNU_JDK_AMD64_SHA256=be7668bc030d578b83d6d5ef9221d6d6729bbbca8cf94a7d52e16ac68b5a5a35",
+            "ARG VNU_JDK_ARM64_SHA256=d143936f473a4cb24e3b0e247d6d0775769d55ec9775c339540e753059a8d77a",
+            "ARG VNU_MAVEN_VERSION=3.9.11",
+            "ARG VNU_MAVEN_SHA512=bcfe4fe305c962ace56ac7b5fc7a08b87d5abd8b7e89027ab251069faebee516b0ded8961445d6d91ec1985dfe30f8153268843c89aa392733d1a3ec956c9978",
             "ARG VNU_ANT_VERSION=1.10.15",
             "ARG VNU_ANT_SHA256=4d5bb20cee34afbad17782de61f4f422c5a03e4d2dffc503bcbd0651c3d3c396",
             "ARG VNU_JRE_VERSION=17.0.20_8",
-            "ARG VNU_JRE_AMD64_ASSET_ID=488632381",
             "ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27",
-            "ARG VNU_JRE_ARM64_ASSET_ID=492545197",
             "ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2",
             "ARG GO_VERSION=1.26.7",
             "ARG GO_X_MOD_VERSION=0.40.0",
@@ -177,6 +180,14 @@ class ContainerToolchainContractTests(unittest.TestCase):
             'ENTRYPOINT ["/usr/local/bin/devtools-node-selector.sh"]', dockerfile
         )
         self.assertNotIn("java-17-openjdk-headless", dockerfile)
+        self.assertNotIn("java-17-openjdk-devel", dockerfile)
+        self.assertNotIn(" maven patch unzip", dockerfile)
+        self.assertIn(
+            "AS vnu-builder",
+            dockerfile,
+        )
+        self.assertIn("/opt/jdk/bin/javac -version", dockerfile)
+        self.assertIn("/opt/maven/bin/mvn --version", dockerfile)
         self.assertIn("COPY patches/vnu-secure-dependencies.patch", dockerfile)
         self.assertIn("python checker.py dldeps", dockerfile)
         self.assertIn("python checker.py --version=", dockerfile)
