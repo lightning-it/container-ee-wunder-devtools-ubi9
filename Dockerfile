@@ -25,15 +25,6 @@ ARG MOBY_V2_VERSION=2.0.0-beta.21
 ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
 ARG NODE_VERSION=24.19.0
 ARG WEBSITE_NODE_VERSION=24.18.0
-ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0
-ARG VNU_RELEASE_ID=258370454
-ARG VNU_ASSET_ID=534958489
-ARG VNU_JAR_SHA256=6df33484013072856456a9c1fa32ae3da96c3069041d9b61c026f57b04bd23c3
-ARG VNU_JRE_VERSION=17.0.20_8
-ARG VNU_JRE_AMD64_ASSET_ID=488632381
-ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27
-ARG VNU_JRE_ARM64_ASSET_ID=492545197
-ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2
 ARG GO_X_CRYPTO_VERSION=0.52.0
 ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.56.0
@@ -225,26 +216,79 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     rm -f /tmp/node.tar.xz /tmp/node-website.tar.xz && \
     rm -rf /tmp/pnpm-store /opt/node-toolchain/.npm
 
-# The W3C Nu HTML Checker publishes a rolling release. Bind the downloaded
-# artifact to both the immutable upstream source revision and its exact
-# SHA-256 so a changed rolling asset fails closed until this tuple is reviewed.
+# Isolate the validator build so adding its build-only Java/Ant/Maven toolchain
+# does not invalidate or enlarge the normal tools and final runtime stages.
+FROM tools AS vnu-builder
+
+ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0
+ARG VNU_SOURCE_SHA256=ca925f02f47529d1cd36ecfce506929d09cf242ae2d5467017f4ae7ef921852d
+ARG VNU_VERSION=26.8.29
+ARG VNU_JETTY_VERSION=12.0.38
+ARG VNU_RELOAD4J_VERSION=1.2.26
+ARG VNU_ANT_VERSION=1.10.15
+ARG VNU_ANT_SHA256=4d5bb20cee34afbad17782de61f4f422c5a03e4d2dffc503bcbd0651c3d3c396
+ARG VNU_JRE_VERSION=17.0.20_8
+ARG VNU_JRE_AMD64_ASSET_ID=488632381
+ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27
+ARG VNU_JRE_ARM64_ASSET_ID=492545197
+ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2
+
+RUN dnf -y install --allowerasing \
+      java-17-openjdk-devel maven patch unzip && \
+    dnf clean all && rm -rf /var/cache/dnf /var/cache/yum && \
+    curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
+      --output /tmp/apache-ant.tar.xz \
+      "https://archive.apache.org/dist/ant/binaries/apache-ant-${VNU_ANT_VERSION}-bin.tar.xz" && \
+    printf '%s  %s\n' "${VNU_ANT_SHA256}" /tmp/apache-ant.tar.xz | \
+      sha256sum --check --status && \
+    mkdir -p /opt/ant && \
+    tar -xJf /tmp/apache-ant.tar.xz --strip-components=1 -C /opt/ant && \
+    ant_version="$(/opt/ant/bin/ant -version)" && \
+    [[ "${ant_version}" == \
+      "Apache Ant(TM) version ${VNU_ANT_VERSION} compiled on "* ]] && \
+    rm -f /tmp/apache-ant.tar.xz
+
+# Build the W3C Nu HTML Checker from its immutable upstream source. The rolling
+# release fat JAR currently embeds end-of-life Log4j 1.2 and a vulnerable Jetty
+# patch level. The narrow, reviewed patch retains Nu's CLI while moving those
+# dependencies to Reload4j and the fixed Jetty 12.0 line. Every source input is
+# checksum-bound and the final image is still subject to the mandatory scan.
+COPY patches/vnu-secure-dependencies.patch /tmp/vnu-secure-dependencies.patch
 RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
     [[ "${VNU_SOURCE_COMMIT}" =~ ^[a-f0-9]{40}$ ]] && \
-    mkdir -p /opt/vnu && \
     curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
-      --output /tmp/vnu-release.json \
-      "https://api.github.com/repos/validator/validator/releases/${VNU_RELEASE_ID}" && \
-    python -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); expected_commit, expected_asset, expected_digest=sys.argv[2:]; assert data["target_commitish"] == expected_commit; asset=next(item for item in data["assets"] if str(item["id"]) == expected_asset); assert asset["name"] == "vnu.jar"; assert asset["digest"] == "sha256:" + expected_digest' \
-      /tmp/vnu-release.json "${VNU_SOURCE_COMMIT}" "${VNU_ASSET_ID}" \
-      "${VNU_JAR_SHA256}" && \
-    curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
-      --header "Accept: application/octet-stream" \
-      --output /opt/vnu/vnu.jar \
-      "https://api.github.com/repos/validator/validator/releases/assets/${VNU_ASSET_ID}" && \
-    printf '%s  %s\n' "${VNU_JAR_SHA256}" /opt/vnu/vnu.jar | \
+      --output /tmp/vnu-source.tar.gz \
+      "https://api.github.com/repos/validator/validator/tarball/${VNU_SOURCE_COMMIT}" && \
+    printf '%s  %s\n' "${VNU_SOURCE_SHA256}" /tmp/vnu-source.tar.gz | \
       sha256sum --check --status && \
+    mkdir -p /tmp/vnu-source /opt/vnu && \
+    tar -xzf /tmp/vnu-source.tar.gz --strip-components=1 -C /tmp/vnu-source && \
+    cd /tmp/vnu-source && \
+    patch --batch --forward -p1 < /tmp/vnu-secure-dependencies.patch && \
+    grep -Fq \
+      "<property name=\"jetty-version\" value=\"${VNU_JETTY_VERSION}\" />" \
+      build/build.xml && \
+    grep -Fq \
+      "<property name=\"reload4j-version\" value=\"${VNU_RELOAD4J_VERSION}\" />" \
+      build/build.xml && \
+    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk && \
+    export PATH=/opt/ant/bin:${PATH} && \
+    python checker.py dldeps && \
+    python checker.py --version="${VNU_VERSION} (${VNU_SOURCE_COMMIT:0:7})" build && \
+    cp build/dist/vnu.jar /opt/vnu/vnu.jar && \
+    test "$(/usr/lib/jvm/java-17-openjdk/bin/java -jar /opt/vnu/vnu.jar --version)" = \
+      "${VNU_VERSION} (${VNU_SOURCE_COMMIT:0:7})" && \
+    jar tf /opt/vnu/vnu.jar | grep -Fq \
+      'META-INF/maven/ch.qos.reload4j/reload4j/pom.properties' && \
+    ! jar tf /opt/vnu/vnu.jar | grep -Fq \
+      'META-INF/maven/log4j/log4j/pom.properties' && \
+    unzip -p /opt/vnu/vnu.jar \
+      'META-INF/maven/org.eclipse.jetty/jetty-security/pom.properties' | \
+      grep -Fq "version=${VNU_JETTY_VERSION}" && \
     chmod 0444 /opt/vnu/vnu.jar && \
-    rm -f /tmp/vnu-release.json && \
+    cd / && \
+    rm -rf /tmp/vnu-source /tmp/vnu-source.tar.gz \
+      /tmp/vnu-secure-dependencies.patch && \
     source /tmp/arch.env && \
     case "${ARCH}" in \
       amd64) \
@@ -345,8 +389,8 @@ COPY --from=tools /out/docker-compose /usr/local/lib/docker/cli-plugins/docker-c
 COPY --from=tools /opt/node /opt/node
 COPY --from=tools /opt/node-website /opt/node-website
 COPY --from=tools /opt/node-toolchain /opt/node-toolchain
-COPY --from=tools /opt/vnu/vnu.jar /opt/vnu/vnu.jar
-COPY --from=tools /opt/java /opt/java
+COPY --from=vnu-builder /opt/vnu/vnu.jar /opt/vnu/vnu.jar
+COPY --from=vnu-builder /opt/java /opt/java
 COPY scripts/devtools-node-selector.sh /usr/local/bin/devtools-node-selector.sh
 COPY scripts/vnu /usr/local/bin/vnu
 ENV JAVA_HOME=/opt/java \

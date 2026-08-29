@@ -95,9 +95,12 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ARG NODE_VERSION=24.19.0",
             "ARG WEBSITE_NODE_VERSION=24.18.0",
             "ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0",
-            "ARG VNU_RELEASE_ID=258370454",
-            "ARG VNU_ASSET_ID=534958489",
-            "ARG VNU_JAR_SHA256=6df33484013072856456a9c1fa32ae3da96c3069041d9b61c026f57b04bd23c3",
+            "ARG VNU_SOURCE_SHA256=ca925f02f47529d1cd36ecfce506929d09cf242ae2d5467017f4ae7ef921852d",
+            "ARG VNU_VERSION=26.8.29",
+            "ARG VNU_JETTY_VERSION=12.0.38",
+            "ARG VNU_RELOAD4J_VERSION=1.2.26",
+            "ARG VNU_ANT_VERSION=1.10.15",
+            "ARG VNU_ANT_SHA256=4d5bb20cee34afbad17782de61f4f422c5a03e4d2dffc503bcbd0651c3d3c396",
             "ARG VNU_JRE_VERSION=17.0.20_8",
             "ARG VNU_JRE_AMD64_ASSET_ID=488632381",
             "ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27",
@@ -174,9 +177,14 @@ class ContainerToolchainContractTests(unittest.TestCase):
             'ENTRYPOINT ["/usr/local/bin/devtools-node-selector.sh"]', dockerfile
         )
         self.assertNotIn("java-17-openjdk-headless", dockerfile)
-        self.assertIn("COPY --from=tools /opt/java /opt/java", dockerfile)
+        self.assertIn("COPY patches/vnu-secure-dependencies.patch", dockerfile)
+        self.assertIn("python checker.py dldeps", dockerfile)
+        self.assertIn("python checker.py --version=", dockerfile)
+        self.assertNotIn("repos/validator/validator/releases/assets", dockerfile)
+        self.assertNotIn("log4j-${log4j-version}", dockerfile)
+        self.assertIn("COPY --from=vnu-builder /opt/java /opt/java", dockerfile)
         self.assertIn(
-            "COPY --from=tools /opt/vnu/vnu.jar /opt/vnu/vnu.jar",
+            "COPY --from=vnu-builder /opt/vnu/vnu.jar /opt/vnu/vnu.jar",
             dockerfile,
         )
         self.assertIn("COPY scripts/vnu /usr/local/bin/vnu", dockerfile)
