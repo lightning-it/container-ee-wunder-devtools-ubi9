@@ -1148,26 +1148,78 @@ def expected_integration_tree(change: PlannedChange) -> str:
                     "could not refresh the compatibility merge worktree "
                     "index: " + refreshed.stdout.strip()
                 )
+            merge_command = [
+                "git",
+                "-c",
+                f"core.hooksPath={disabled_hooks}",
+                "-c",
+                "merge.autoStash=false",
+                "-c",
+                "user.name=Lightning IT push-ready",
+                "-c",
+                "user.email=push-ready@invalid",
+                "merge",
+                "--no-commit",
+                "--no-ff",
+                "--strategy=ort",
+                change.head_commit,
+            ]
             merged = run(
-                [
-                    "git",
-                    "-c",
-                    f"core.hooksPath={disabled_hooks}",
-                    "-c",
-                    "merge.autoStash=false",
-                    "-c",
-                    "user.name=Lightning IT push-ready",
-                    "-c",
-                    "user.email=push-ready@invalid",
-                    "merge",
-                    "--no-commit",
-                    "--no-ff",
-                    "--strategy=ort",
-                    change.head_commit,
-                ],
+                merge_command,
                 capture=True,
                 cwd=worktree,
             )
+            merge_output_lines = merged.stdout.splitlines()
+            if (
+                merged.returncode
+                and merge_output_lines
+                and merge_output_lines[0].strip() == "fatal: stash failed"
+            ):
+                merge_head = run(
+                    ["git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD"],
+                    capture=True,
+                    cwd=worktree,
+                )
+                status_value = git_output_at(
+                    worktree,
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                    "-z",
+                )
+                current_head = git_output_at(worktree, "rev-parse", "HEAD").strip()
+                if (
+                    merge_head.returncode == 1
+                    and not status_value
+                    and current_head == change.base_tip
+                    and directory_identity(
+                        worktree,
+                        purpose="compatibility merge worktree",
+                    )
+                    == worktree_identity
+                ):
+                    refreshed = run(
+                        [
+                            "git",
+                            "-c",
+                            f"core.hooksPath={disabled_hooks}",
+                            "update-index",
+                            "--really-refresh",
+                        ],
+                        capture=True,
+                        cwd=worktree,
+                    )
+                    if refreshed.returncode:
+                        raise RuntimeError(
+                            "could not refresh the clean compatibility merge "
+                            "worktree after a transient stash race: "
+                            + refreshed.stdout.strip()
+                        )
+                    merged = run(
+                        merge_command,
+                        capture=True,
+                        cwd=worktree,
+                    )
             if merged.returncode:
                 raise RuntimeError(
                     "the reviewed HEAD does not merge cleanly with the "
