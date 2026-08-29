@@ -899,8 +899,9 @@ jobs:
           test "$(jq 'length' <<<"${verifier_jobs}")" -eq 1
           verifier_job_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' \
             <<<"${verifier_jobs}")"
-          first_verifier_completed_at="$(jq -er '.[0].completed_at | \
-            select(type == "string" and length > 0)' <<<"${verifier_jobs}")"
+          first_verifier_completed_at="$(jq -er \
+            '.[0].completed_at | select(type == "string" and length > 0)' \
+            <<<"${verifier_jobs}")"
           test "$(date -u -d "${trigger_occurred_at}" +%s)" -gt \
             "$(date -u -d "${first_verifier_completed_at}" +%s)"
 
