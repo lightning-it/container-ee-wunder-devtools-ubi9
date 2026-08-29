@@ -21,6 +21,23 @@ def parse_direct_requirement(raw_line: str) -> Requirement | None:
 
 
 class ContainerToolchainContractTests(unittest.TestCase):
+    def test_release_scan_retains_isolation_with_java_database_capacity(self):
+        verifier = (
+            ROOT / "scripts/devtools-container-release-verify.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            '--tmpfs "/tmp:rw,noexec,nosuid,nodev,size=8g"',
+            verifier,
+        )
+        self.assertEqual(1, verifier.count("--severity HIGH,CRITICAL"))
+        self.assertIn("--exit-code 1", verifier)
+        self.assertIn("--read-only", verifier)
+        self.assertIn("--cap-drop ALL", verifier)
+        self.assertIn("--security-opt no-new-privileges=true", verifier)
+        self.assertNotIn("/var/run/docker.sock", verifier)
+        self.assertNotIn("--privileged", verifier)
+
     def test_requirement_comments_cannot_hide_malformed_content(self):
         self.assertIsNone(parse_direct_requirement("  # full-line comment"))
         self.assertEqual(
