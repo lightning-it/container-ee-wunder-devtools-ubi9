@@ -214,6 +214,8 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn("Nu accepted the intentionally invalid fixture", dockerfile)
         self.assertTrue((ROOT / "scripts/vnu").stat().st_mode & 0o111)
         vnu_wrapper = (ROOT / "scripts/vnu").read_text(encoding="utf-8")
+        self.assertIn('[ ! -f "$vnu_jar" ] || [ ! -r "$vnu_jar" ]', vnu_wrapper)
+        self.assertIn('[ ! -f "$java_bin" ] || [ ! -x "$java_bin" ]', vnu_wrapper)
         self.assertIn('readonly java_bin="/opt/java/bin/java"', vnu_wrapper)
         self.assertIn('exec "$java_bin" -jar "$vnu_jar" "$@"', vnu_wrapper)
         host_parity = (ROOT / "scripts/verify-host-parity.sh").read_text(
