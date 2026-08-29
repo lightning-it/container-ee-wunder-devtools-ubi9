@@ -97,6 +97,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0",
             "ARG VNU_SOURCE_SHA256=8838c4842d084792221832f52872ffc58208eeee84200c3064a1fb0ea7f87d96",
             "ARG VNU_VERSION=26.8.29",
+            "ARG VNU_JAR_SHA256=013e20d82c99326b08cb59281ca68b4eb1dad007fcacc38d76d7ed0c5c200353",
             "ARG VNU_JETTY_VERSION=12.0.38",
             "ARG VNU_RELOAD4J_VERSION=1.2.26",
             "ARG VNU_JDK_VERSION=17.0.20_8",
@@ -189,10 +190,12 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn("/opt/jdk/bin/javac -version", dockerfile)
         self.assertIn("/opt/maven/bin/mvn --version", dockerfile)
         self.assertIn("COPY patches/vnu-secure-dependencies.patch", dockerfile)
+        self.assertIn("COPY scripts/normalize-vnu-jar.py", dockerfile)
         self.assertIn("https://codeload.github.com/validator/validator/tar.gz/", dockerfile)
         self.assertNotIn("api.github.com/repos/validator/validator", dockerfile)
         self.assertIn("python checker.py dldeps", dockerfile)
         self.assertIn("python checker.py --version=", dockerfile)
+        self.assertIn("python /tmp/normalize-vnu-jar.py /opt/vnu/vnu.jar", dockerfile)
         self.assertIn("VNU_JRE_ARCH=x64;", dockerfile)
         self.assertIn("VNU_JRE_OS_ARCH=x86_64;", dockerfile)
         self.assertIn("VNU_JRE_ARCH=aarch64;", dockerfile)

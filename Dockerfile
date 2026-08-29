@@ -225,6 +225,7 @@ ARG TARGETARCH
 ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0
 ARG VNU_SOURCE_SHA256=8838c4842d084792221832f52872ffc58208eeee84200c3064a1fb0ea7f87d96
 ARG VNU_VERSION=26.8.29
+ARG VNU_JAR_SHA256=013e20d82c99326b08cb59281ca68b4eb1dad007fcacc38d76d7ed0c5c200353
 ARG VNU_JETTY_VERSION=12.0.38
 ARG VNU_RELOAD4J_VERSION=1.2.26
 ARG VNU_JDK_VERSION=17.0.20_8
@@ -300,6 +301,7 @@ RUN curl --fail --show-error --location --retry 5 --retry-delay 2 \
 # dependencies to Reload4j and the fixed Jetty 12.0 line. Every source input is
 # checksum-bound and the final image is still subject to the mandatory scan.
 COPY patches/vnu-secure-dependencies.patch /tmp/vnu-secure-dependencies.patch
+COPY scripts/normalize-vnu-jar.py /tmp/normalize-vnu-jar.py
 RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
     [[ "${VNU_SOURCE_COMMIT}" =~ ^[a-f0-9]{40}$ ]] && \
     curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
@@ -322,6 +324,9 @@ RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
     python checker.py dldeps && \
     python checker.py --version="${VNU_VERSION} (${VNU_SOURCE_COMMIT:0:7})" build && \
     cp build/dist/vnu.jar /opt/vnu/vnu.jar && \
+    python /tmp/normalize-vnu-jar.py /opt/vnu/vnu.jar && \
+    printf '%s  %s\n' "${VNU_JAR_SHA256}" /opt/vnu/vnu.jar | \
+      sha256sum --check --status && \
     test "$(/opt/jdk/bin/java -jar /opt/vnu/vnu.jar --version)" = \
       "${VNU_VERSION} (${VNU_SOURCE_COMMIT:0:7})" && \
     /opt/jdk/bin/jar tf /opt/vnu/vnu.jar > /tmp/vnu-entries.txt && \
@@ -340,7 +345,7 @@ RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
     cd / && \
     rm -rf /tmp/vnu-source /tmp/vnu-source.tar.gz /tmp/vnu-entries.txt \
       /tmp/vnu-jetty-security.properties \
-      /tmp/vnu-secure-dependencies.patch && \
+      /tmp/vnu-secure-dependencies.patch /tmp/normalize-vnu-jar.py && \
     case "${TARGETARCH}" in \
       amd64) \
         VNU_JRE_SHA256="${VNU_JRE_AMD64_SHA256}"; \
