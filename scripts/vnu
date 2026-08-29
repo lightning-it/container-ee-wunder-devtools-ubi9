@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly vnu_jar="/opt/vnu/vnu.jar"
+readonly java_bin="/opt/java/bin/java"
+
+if [ ! -f "$vnu_jar" ] || [ ! -r "$vnu_jar" ]; then
+  echo "ERROR: pinned Nu HTML Checker artifact is unavailable: ${vnu_jar}" >&2
+  exit 1
+fi
+
+if [ ! -f "$java_bin" ] || [ ! -x "$java_bin" ]; then
+  echo "ERROR: pinned Java runtime is unavailable: ${java_bin}" >&2
+  exit 1
+fi
+
+exec "$java_bin" -jar "$vnu_jar" "$@"

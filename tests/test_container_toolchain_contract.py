@@ -94,6 +94,22 @@ class ContainerToolchainContractTests(unittest.TestCase):
         for argument in (
             "ARG NODE_VERSION=24.19.0",
             "ARG WEBSITE_NODE_VERSION=24.18.0",
+            "ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0",
+            "ARG VNU_SOURCE_SHA256=8838c4842d084792221832f52872ffc58208eeee84200c3064a1fb0ea7f87d96",
+            "ARG VNU_VERSION=26.8.29",
+            "ARG VNU_JAR_SHA256=013e20d82c99326b08cb59281ca68b4eb1dad007fcacc38d76d7ed0c5c200353",
+            "ARG VNU_JETTY_VERSION=12.0.38",
+            "ARG VNU_RELOAD4J_VERSION=1.2.26",
+            "ARG VNU_JDK_VERSION=17.0.20_8",
+            "ARG VNU_JDK_AMD64_SHA256=be7668bc030d578b83d6d5ef9221d6d6729bbbca8cf94a7d52e16ac68b5a5a35",
+            "ARG VNU_JDK_ARM64_SHA256=d143936f473a4cb24e3b0e247d6d0775769d55ec9775c339540e753059a8d77a",
+            "ARG VNU_MAVEN_VERSION=3.9.11",
+            "ARG VNU_MAVEN_SHA512=bcfe4fe305c962ace56ac7b5fc7a08b87d5abd8b7e89027ab251069faebee516b0ded8961445d6d91ec1985dfe30f8153268843c89aa392733d1a3ec956c9978",
+            "ARG VNU_ANT_VERSION=1.10.15",
+            "ARG VNU_ANT_SHA256=4d5bb20cee34afbad17782de61f4f422c5a03e4d2dffc503bcbd0651c3d3c396",
+            "ARG VNU_JRE_VERSION=17.0.20_8",
+            "ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27",
+            "ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2",
             "ARG GO_VERSION=1.26.7",
             "ARG GO_X_MOD_VERSION=0.40.0",
             "ARG GO_GRPC_VERSION=1.82.1",
@@ -143,7 +159,10 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "node_modules/${npm_tree}/node_modules/${package}",
             dockerfile,
         )
-        self.assertEqual(1, dockerfile.count("ENV PATH=/opt/node/bin:$PATH"))
+        self.assertEqual(
+            1,
+            dockerfile.count("PATH=/opt/java/bin:/opt/node/bin:$PATH"),
+        )
         self.assertIn('export PATH="/opt/node/bin:${PATH}"', dockerfile)
         self.assertIn(
             "COPY --from=tools /opt/node-toolchain /opt/node-toolchain",
@@ -161,6 +180,49 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn(
             'ENTRYPOINT ["/usr/local/bin/devtools-node-selector.sh"]', dockerfile
         )
+        self.assertNotIn("java-17-openjdk-headless", dockerfile)
+        self.assertNotIn("java-17-openjdk-devel", dockerfile)
+        self.assertNotIn(" maven patch unzip", dockerfile)
+        self.assertIn(
+            "AS vnu-builder",
+            dockerfile,
+        )
+        self.assertIn("/opt/jdk/bin/javac -version", dockerfile)
+        self.assertIn("/opt/maven/bin/mvn --version", dockerfile)
+        self.assertIn("COPY patches/vnu-secure-dependencies.patch", dockerfile)
+        self.assertIn("COPY scripts/normalize-vnu-jar.py", dockerfile)
+        self.assertIn("https://codeload.github.com/validator/validator/tar.gz/", dockerfile)
+        self.assertNotIn("api.github.com/repos/validator/validator", dockerfile)
+        self.assertIn("python checker.py dldeps", dockerfile)
+        self.assertIn("python checker.py --version=", dockerfile)
+        self.assertIn("python /tmp/normalize-vnu-jar.py /opt/vnu/vnu.jar", dockerfile)
+        self.assertIn("VNU_JRE_ARCH=x64;", dockerfile)
+        self.assertIn("VNU_JRE_OS_ARCH=x86_64;", dockerfile)
+        self.assertIn("VNU_JRE_ARCH=aarch64;", dockerfile)
+        self.assertIn("VNU_JRE_OS_ARCH=aarch64;", dockerfile)
+        self.assertIn("/tmp/vnu-entries.txt", dockerfile)
+        self.assertNotIn("jar tf /opt/vnu/vnu.jar | grep", dockerfile)
+        self.assertNotIn("repos/validator/validator/releases/assets", dockerfile)
+        self.assertNotIn("log4j-${log4j-version}", dockerfile)
+        self.assertIn("COPY --from=vnu-builder /opt/java /opt/java", dockerfile)
+        self.assertIn(
+            "COPY --from=vnu-builder /opt/vnu/vnu.jar /opt/vnu/vnu.jar",
+            dockerfile,
+        )
+        self.assertIn("COPY scripts/vnu /usr/local/bin/vnu", dockerfile)
+        self.assertIn("vnu --errors-only /tmp/vnu-fixtures/valid.html", dockerfile)
+        self.assertIn("Nu accepted the intentionally invalid fixture", dockerfile)
+        self.assertTrue((ROOT / "scripts/vnu").stat().st_mode & 0o111)
+        vnu_wrapper = (ROOT / "scripts/vnu").read_text(encoding="utf-8")
+        self.assertIn('[ ! -f "$vnu_jar" ] || [ ! -r "$vnu_jar" ]', vnu_wrapper)
+        self.assertIn('[ ! -f "$java_bin" ] || [ ! -x "$java_bin" ]', vnu_wrapper)
+        self.assertIn('readonly java_bin="/opt/java/bin/java"', vnu_wrapper)
+        self.assertIn('exec "$java_bin" -jar "$vnu_jar" "$@"', vnu_wrapper)
+        host_parity = (ROOT / "scripts/verify-host-parity.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("vnu --errors-only /tmp/vnu-valid.html", host_parity)
+        self.assertIn("Nu accepted the intentionally invalid fixture", host_parity)
         self.assertIn("--frozen-lockfile", dockerfile)
         self.assertIn("--ignore-scripts", dockerfile)
         self.assertIn("--strict-peer-dependencies", dockerfile)
@@ -213,6 +275,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "markdownlint-cli2 --version",
             "prettier --version",
             "pnpm --version",
+            "vnu --version",
         ):
             self.assertIn(command, dockerfile)
 
