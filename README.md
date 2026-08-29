@@ -54,7 +54,10 @@ development. It is based on **Red Hat UBI 9** and includes:
 - yamllint
 - ShellCheck
 - actionlint
-- GitHub Copilot CLI
+- uv for reproducible, hash-locked Python dependency refreshes
+- Node.js, npm, and pnpm for repository-owned, lockfile-pinned validators
+- automatic image-native Node.js `24.18.0` / npm `11.16.0` selection for
+  repositories that declare `24.18.0` in `.node-version`
 - Terraform CLI
 - TFLint
 - terraform-docs
@@ -69,6 +72,9 @@ Use it as a stable execution environment for:
 - `pre-commit` hooks
 - CI pipelines
 - Integration tests (e.g. against local Keycloak containers)
+
+The host supplies only Git, the container engine, and the wrapper. Repository validation
+commands run in this digest-pinned Devtools image and do not depend on host language runtimes.
 
 The repository also provides a digest-pinned
 [Dev Container and host acceptance matrix](docs/host-parity.md) for RHEL,
@@ -88,7 +94,8 @@ Ubuntu, and macOS pipeline-parity work.
   - `yamllint`
   - `shellcheck`
   - `actionlint`
-  - `copilot`
+  - `uv`
+  - `node` / `npm` / `pnpm`
   - `terraform`
   - `tflint`
   - `terraform-docs`
@@ -247,10 +254,10 @@ Publishing targets: `github-release, quay.io`.
 
 ## Compatibility Matrix
 
-| Image Version | Base Image | Runtime | Validation |
-|---|---|---|---|
-| Latest release | ubi9 | Podman / GitHub Actions | See release evidence |
-| Latest release | podman | Podman / GitHub Actions | See release evidence |
+| Image Version  | Base Image    | Runtime                 | Validation           |
+| -------------- | ------------- | ----------------------- | -------------------- |
+| Latest release | ubi9          | Podman / GitHub Actions | See release evidence |
+| Latest release | podman        | Podman / GitHub Actions | See release evidence |
 | Latest release | docker-buildx | Podman / GitHub Actions | See release evidence |
 
 Validation proof for each released version is stored in the corresponding GitHub Release evidence.

@@ -7,9 +7,6 @@
     ":semanticCommitType(chore)",
     ":semanticCommitScope(deps)"
   ],
-  "renovate-config": {
-    "enabled": false
-  },
   "labels": ["dependencies", "renovate"],
   "baseBranchPatterns": ["develop"],
   "timezone": "UTC",
@@ -28,12 +25,23 @@
     },
     {
       "customType": "regex",
-      "description": "Terraform version pin in Dockerfile",
-      "managerFilePatterns": ["/^Dockerfile$/", "/^Containerfile$/"],
-      "matchStrings": ["ARG\\s+TERRAFORM_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "description": "TFLint version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+TFLINT_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
       "datasourceTemplate": "github-releases",
-      "depNameTemplate": "hashicorp/terraform",
-      "versioningTemplate": "hashicorp"
+      "depNameTemplate": "terraform-linters/tflint",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "terraform-docs version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+TF_DOCS_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "terraform-docs/terraform-docs",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
     },
     {
       "customType": "regex",
@@ -65,19 +73,52 @@
     },
     {
       "customType": "regex",
-      "description": "GitHub Copilot CLI version pin in Dockerfile",
+      "description": "Website-selected Node.js version pin in Dockerfile",
       "managerFilePatterns": ["/^Dockerfile$/"],
-      "matchStrings": ["ARG\\s+COPILOT_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
-      "datasourceTemplate": "npm",
-      "depNameTemplate": "@github/copilot"
+      "matchStrings": ["ARG\\s+WEBSITE_NODE_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "node-version",
+      "packageNameTemplate": "node",
+      "depNameTemplate": "node-website-runtime"
     },
     {
       "customType": "regex",
-      "description": "npm version pin in Dockerfile",
+      "description": "GitHub CLI version pin in Dockerfile",
       "managerFilePatterns": ["/^Dockerfile$/"],
-      "matchStrings": ["ARG\\s+NPM_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
-      "datasourceTemplate": "npm",
-      "depNameTemplate": "npm"
+      "matchStrings": ["ARG\\s+GH_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "cli/cli",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "actionlint version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+ACTIONLINT_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "rhysd/actionlint",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Docker Compose version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+COMPOSE_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "docker/compose",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Docker Buildx source version pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+BUILDX_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "docker/buildx",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
     },
     {
       "customType": "regex",
@@ -109,6 +150,16 @@
   ],
   "packageRules": [
     {
+      "description": "Do not update Renovate configuration dependencies",
+      "matchManagers": ["renovate-config"],
+      "enabled": false
+    },
+    {
+      "description": "Keep the website Node runtime synchronized with its repository contract",
+      "matchDepNames": ["node-website-runtime"],
+      "enabled": false
+    },
+    {
       "description": "Automerge safe non-major updates into develop after CI passes",
       "matchUpdateTypes": [
         "minor",
@@ -133,6 +184,36 @@
       "description": "Keep every component of the GitHub Actions toolchain on one version",
       "matchManagers": ["github-actions"],
       "groupName": "github-actions"
+    },
+    {
+      "description": "Do not update shared-assets-owned workflow files downstream",
+      "matchManagers": ["github-actions"],
+      "matchFileNames": [
+        ".github/workflows/codex-copilot-remediation.yml",
+        ".github/workflows/container-build-publish.yml",
+        ".github/workflows/container-build.yml",
+        ".github/workflows/container-ci.yml",
+        ".github/workflows/container-fuzz.yml",
+        ".github/workflows/container-trivy.yml",
+        ".github/workflows/copilot-review-refresh.yml",
+        ".github/workflows/copilot-review.yml",
+        ".github/workflows/current-revision-rerun.yml",
+        ".github/workflows/main-promotion-authorization.yml",
+        ".github/workflows/openssf-scorecard.yml",
+        ".github/workflows/promote-develop-to-main.yml",
+        ".github/workflows/release-bot-exact-head-review.yml",
+        ".github/workflows/renovate-guarded-automerge.yml",
+        ".github/workflows/rpm-srpm-ci.yml",
+        ".github/workflows/security-release-finalize.yml",
+        ".github/workflows/security-release-guard.yml",
+        ".github/workflows/security-release-promote-tags.yml",
+        ".github/workflows/security-release-reconcile.yml",
+        ".github/workflows/security-release-update.yml",
+        ".github/workflows/semantic-release.yml",
+        ".github/workflows/shared-assets-guarded-automerge.yml",
+        ".github/workflows/sync-main-to-develop.yml"
+      ],
+      "enabled": false
     }
   ]
 }

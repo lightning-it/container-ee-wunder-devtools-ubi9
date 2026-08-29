@@ -6,106 +6,140 @@ LABEL org.opencontainers.image.description="Devtools Execution Environment (UBI 
 LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-ee-wunder-devtools-ubi9"
 
 ARG TARGETARCH
-ARG TF_VERSION=1.15.7
-ARG TFLINT_VERSION=0.63.1
+ARG GO_VERSION=1.26.7
+ARG GO_AMD64_SHA256=ffb5f8de10c62550dfddab66b36b57030721e0a44a3218e9e1181d7b59f121ca
+ARG GO_ARM64_SHA256=5a4ec883379d51ee9ce1040d5e87f8d35e20387574dd8c947feb01eabc3c1b37
+ARG TF_VERSION=1.15.9
+ARG TF_SOURCE_COMMIT=87488977e32a400445e0c0b4d95c0713a5eee941
+ARG TF_SOURCE_SHA256=b4036b35e69a57e4a4b83bafba337a5c8e3ab2c0b1812df92528dec0958ed61e
+ARG TFLINT_VERSION=0.64.0
 ARG TF_DOCS_VERSION=0.24.0
 ARG HELM_VERSION=4.2.4
-ARG GH_VERSION=2.96.0
+ARG GH_VERSION=2.98.0
 ARG ACTIONLINT_VERSION=1.7.12
-ARG NODE_VERSION=22.23.2
-ARG NPM_VERSION=12.0.1
-ARG COPILOT_VERSION=1.0.79
+ARG DOCKER_SOURCE_COMMIT=a7dcaa6fdb6ed04aacbfdc76357fdae01605609e
+ARG DOCKER_SOURCE_SHA256=6e5c91d3a5a79db78cf989d07727d00e757aa0da4d135a3ce4b86061b83fb511
+ARG COMPOSE_VERSION=5.5.0
+ARG BUILDX_VERSION=0.36.1
+ARG MOBY_V2_VERSION=2.0.0-beta.21
+ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
+ARG NODE_VERSION=24.19.0
+ARG WEBSITE_NODE_VERSION=24.18.0
+ARG GO_X_CRYPTO_VERSION=0.52.0
+ARG GO_X_MOD_VERSION=0.40.0
+ARG GO_X_NET_VERSION=0.56.0
+ARG GO_X_TEXT_VERSION=0.39.0
+ARG GO_GRPC_VERSION=1.82.1
+ARG ORAS_GO_VERSION=2.6.2
 
 # hadolint ignore=DL3002
 USER 0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 COPY scripts/container-download-verified.sh /usr/local/lib/container-download-verified.sh
+COPY scripts/container-build-go-tool.sh /usr/local/lib/container-build-go-tool.sh
+COPY scripts/container-build-compose.sh /usr/local/lib/container-build-compose.sh
+COPY container-toolchain/package.json container-toolchain/pnpm-lock.yaml container-toolchain/pnpm-workspace.yaml /opt/node-toolchain/
 
 RUN dnf -y update && \
-    dnf -y install --allowerasing ca-certificates curl unzip tar dnf-plugins-core && \
-    curl -fsSL https://download.docker.com/linux/centos/docker-ce.repo -o /etc/yum.repos.d/docker-ce.repo && \
-    dnf -y install docker-ce-cli docker-compose-plugin && \
+    dnf -y install --allowerasing ca-certificates curl tar xz && \
     dnf clean all && rm -rf /var/cache/dnf /var/cache/yum
 
-# Map docker arch naming
+# Install the official patched Go compiler with architecture-specific hashes
+# published by go.dev. Every shipped Go CLI is rebuilt below so Trivy binds
+# its evidence to this compiler and the explicitly replaced fixed modules.
 RUN source /usr/local/lib/container-download-verified.sh && \
     detect_container_arch && \
-    echo "ARCH=${CONTAINER_ARCH} DOCKER_ARCH=${CONTAINER_RPM_ARCH}" > /tmp/arch.env
+    echo "ARCH=${CONTAINER_ARCH}" > /tmp/arch.env && \
+    case "${CONTAINER_ARCH}" in \
+      amd64) GO_SHA256="${GO_AMD64_SHA256}" ;; \
+      arm64) GO_SHA256="${GO_ARM64_SHA256}" ;; \
+      *) exit 1 ;; \
+    esac && \
+    curl -fsSLo /tmp/go.tar.gz \
+      "https://go.dev/dl/go${GO_VERSION}.linux-${CONTAINER_ARCH}.tar.gz" && \
+    printf '%s  %s\n' "${GO_SHA256}" /tmp/go.tar.gz | sha256sum -c - && \
+    tar -C /usr/local -xzf /tmp/go.tar.gz && \
+    rm -f /tmp/go.tar.gz && \
+    /usr/local/go/bin/go version
 
-# Terraform
-RUN source /usr/local/lib/container-download-verified.sh && \
-    source /tmp/arch.env && \
-    download_verified \
-      "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${ARCH}.zip" \
-      /tmp/terraform.zip \
-      "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_SHA256SUMS" \
-      "terraform_${TF_VERSION}_linux_${ARCH}.zip" && \
-    unzip -q /tmp/terraform.zip -d /usr/local/bin && \
-    rm -f /tmp/terraform.zip
+ENV PATH=/usr/local/go/bin:$PATH \
+    GOTOOLCHAIN=local \
+    GOPROXY=https://proxy.golang.org \
+    GOSUMDB=sum.golang.org \
+    CGO_ENABLED=0
 
-# TFLint
-RUN source /usr/local/lib/container-download-verified.sh && \
-    source /tmp/arch.env && \
-    download_verified \
-      "https://github.com/terraform-linters/tflint/releases/download/v${TFLINT_VERSION}/tflint_linux_${ARCH}.zip" \
-      /tmp/tflint.zip \
-      "https://github.com/terraform-linters/tflint/releases/download/v${TFLINT_VERSION}/checksums.txt" \
-      "tflint_linux_${ARCH}.zip" && \
-    unzip -q /tmp/tflint.zip -d /usr/local/bin && \
-    rm -f /tmp/tflint.zip
+RUN mkdir -p /out && \
+    /usr/local/lib/container-build-go-tool.sh \
+      github.com/rhysd/actionlint "v${ACTIONLINT_VERSION}" ./cmd/actionlint actionlint
 
-# terraform-docs
-RUN source /usr/local/lib/container-download-verified.sh && \
-    source /tmp/arch.env && \
-    download_verified \
-      "https://github.com/terraform-docs/terraform-docs/releases/download/v${TF_DOCS_VERSION}/terraform-docs-v${TF_DOCS_VERSION}-linux-${ARCH}.tar.gz" \
-      /tmp/terraform-docs.tar.gz \
-      "https://github.com/terraform-docs/terraform-docs/releases/download/v${TF_DOCS_VERSION}/terraform-docs-v${TF_DOCS_VERSION}.sha256sum" \
-      "terraform-docs-v${TF_DOCS_VERSION}-linux-${ARCH}.tar.gz" && \
-    tar -xzf /tmp/terraform-docs.tar.gz -C /usr/local/bin terraform-docs && \
-    chmod +x /usr/local/bin/terraform-docs && \
-    rm -f /tmp/terraform-docs.tar.gz
+RUN curl -fsSLo /tmp/terraform.tar.gz \
+      "https://github.com/hashicorp/terraform/archive/${TF_SOURCE_COMMIT}.tar.gz" && \
+    printf '%s  %s\n' "${TF_SOURCE_SHA256}" /tmp/terraform.tar.gz | sha256sum -c - && \
+    mkdir -p /tmp/terraform-source && \
+    tar -xzf /tmp/terraform.tar.gz --strip-components=1 -C /tmp/terraform-source && \
+    cd /tmp/terraform-source && \
+    CGO_ENABLED=0 go build \
+      -trimpath -buildvcs=false \
+      -ldflags="-s -w -X github.com/hashicorp/terraform/version.dev=no" \
+      -o /out/terraform . && \
+    test "$(/out/terraform version | head -n 1)" = "Terraform v${TF_VERSION}" && \
+    cd / && \
+    rm -rf /tmp/terraform.tar.gz /tmp/terraform-source
 
-# Helm
-RUN source /usr/local/lib/container-download-verified.sh && \
-    source /tmp/arch.env && \
-    download_verified \
-      "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz" \
-      /tmp/helm.tar.gz \
-      "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz.sha256sum" \
-      "helm-v${HELM_VERSION}-linux-${ARCH}.tar.gz" && \
-    tar -xzf /tmp/helm.tar.gz -C /tmp && \
-    install -m 0755 "/tmp/linux-${ARCH}/helm" /usr/local/bin/helm && \
-    rm -rf /tmp/helm.tar.gz "/tmp/linux-${ARCH}"
+RUN /usr/local/lib/container-build-go-tool.sh \
+      github.com/terraform-linters/tflint "v${TFLINT_VERSION}" . tflint \
+      "golang.org/x/mod@v${GO_X_MOD_VERSION}" \
+      "google.golang.org/grpc@v${GO_GRPC_VERSION}"
 
-# GitHub CLI
-RUN source /usr/local/lib/container-download-verified.sh && \
-    source /tmp/arch.env && \
-    download_verified \
-      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" \
-      /tmp/gh.tar.gz \
-      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_checksums.txt" \
-      "gh_${GH_VERSION}_linux_${ARCH}.tar.gz" && \
-    tar -xzf /tmp/gh.tar.gz -C /tmp && \
-    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh && \
-    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${ARCH}"
+RUN /usr/local/lib/container-build-go-tool.sh \
+      github.com/terraform-docs/terraform-docs "v${TF_DOCS_VERSION}" . terraform-docs \
+      "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
+      "golang.org/x/net@v${GO_X_NET_VERSION}" \
+      "golang.org/x/text@v${GO_X_TEXT_VERSION}" \
+      "google.golang.org/grpc@v${GO_GRPC_VERSION}"
 
-# actionlint
-RUN source /usr/local/lib/container-download-verified.sh && \
-    source /tmp/arch.env && \
-    download_verified \
-      "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${ARCH}.tar.gz" \
-      /tmp/actionlint.tar.gz \
-      "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_checksums.txt" \
-      "actionlint_${ACTIONLINT_VERSION}_linux_${ARCH}.tar.gz" && \
-    tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint && \
-    install -m 0755 /tmp/actionlint /usr/local/bin/actionlint && \
-    rm -f /tmp/actionlint.tar.gz /tmp/actionlint
+RUN /usr/local/lib/container-build-go-tool.sh \
+      helm.sh/helm/v4 "v${HELM_VERSION}" ./cmd/helm helm \
+      "oras.land/oras-go/v2@v${ORAS_GO_VERSION}"
 
-# Node.js LTS and GitHub Copilot CLI. Node release checksums and npm's
-# package-integrity verification cover both supported target architectures.
-# Copilot's lifecycle script is required to install its bundled native binary.
+RUN /usr/local/lib/container-build-go-tool.sh \
+      github.com/cli/cli/v2 "v${GH_VERSION}" ./cmd/gh gh \
+      "golang.org/x/mod@v${GO_X_MOD_VERSION}"
+
+RUN curl -fsSLo /tmp/docker-cli.tar.gz \
+      "https://github.com/docker/cli/archive/${DOCKER_SOURCE_COMMIT}.tar.gz" && \
+    printf '%s  %s\n' "${DOCKER_SOURCE_SHA256}" /tmp/docker-cli.tar.gz | sha256sum -c - && \
+    mkdir -p /tmp/docker-cli-source && \
+    tar -xzf /tmp/docker-cli.tar.gz --strip-components=1 -C /tmp/docker-cli-source && \
+    cd /tmp/docker-cli-source && \
+    docker_source_version="$(tr -d '\r\n' < VERSION)" && \
+    [[ "$docker_source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] && \
+    cp vendor.mod go.mod && \
+    cp vendor.sum go.sum && \
+    CGO_ENABLED=0 go build \
+      -mod=vendor -trimpath -buildvcs=false \
+      -ldflags="-s -w \
+        -X github.com/docker/cli/cli/version.Version=${docker_source_version} \
+        -X github.com/docker/cli/cli/version.GitCommit=${DOCKER_SOURCE_COMMIT}" \
+      -o /out/docker ./cmd/docker && \
+    docker_version="$(/out/docker --version)" && \
+    [[ "$docker_version" == "Docker version ${docker_source_version},"* ]] && \
+    cd / && \
+    rm -rf /tmp/docker-cli.tar.gz /tmp/docker-cli-source
+
+RUN /usr/local/lib/container-build-compose.sh \
+      "${COMPOSE_VERSION}" \
+      "${BUILDX_VERSION}" \
+      "${MOBY_V2_VERSION}" \
+      "${MOBY_NAMESGENERATOR_SHA256}" \
+      "${GO_X_MOD_VERSION}"
+
+# Node.js LTS plus deterministic repository validators. The independently
+# selected website runtime remains bundled so repositories declaring its exact
+# .node-version never need a host or worktree-local bootstrap. Node release
+# checksums and the committed pnpm lock cover both target architectures.
+# The image deliberately contains no local AI client or AI credentials.
 RUN source /usr/local/lib/container-download-verified.sh && \
     source /tmp/arch.env && \
     case "${ARCH}" in amd64) NODE_ARCH=x64 ;; arm64) NODE_ARCH=arm64 ;; *) exit 1 ;; esac && \
@@ -116,23 +150,71 @@ RUN source /usr/local/lib/container-download-verified.sh && \
       "node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
     mkdir -p /opt/node && \
     tar -xJf /tmp/node.tar.xz --strip-components=1 -C /opt/node && \
-    /opt/node/bin/npm install --global --prefix /opt/node "npm@${NPM_VERSION}" && \
-    /opt/node/bin/npm install --global --prefix /opt/node --ignore-scripts=false "@github/copilot@${COPILOT_VERSION}" && \
+    download_verified \
+      "https://nodejs.org/download/release/v${WEBSITE_NODE_VERSION}/node-v${WEBSITE_NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
+      /tmp/node-website.tar.xz \
+      "https://nodejs.org/download/release/v${WEBSITE_NODE_VERSION}/SHASUMS256.txt" \
+      "node-v${WEBSITE_NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
+    mkdir -p /opt/node-website && \
+    tar -xJf /tmp/node-website.tar.xz --strip-components=1 -C /opt/node-website && \
+    export PATH="/opt/node/bin:${PATH}" && \
+    cd /opt/node-toolchain && \
+    pnpm_version="$(/opt/node/bin/node -p \
+      "require('/opt/node-toolchain/package.json').dependencies.pnpm")" && \
+    [[ "$pnpm_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
+    /opt/node/bin/corepack "pnpm@${pnpm_version}" install \
+      --frozen-lockfile --ignore-scripts --strict-peer-dependencies \
+      --store-dir /tmp/pnpm-store && \
+    for npm_tree in npm npm-website; do \
+      for package in brace-expansion ip-address tar; do \
+        version="$(/opt/node/bin/node -p \
+          'require(process.argv[1]).version' \
+          "/opt/node-toolchain/node_modules/${package}/package.json")" && \
+        rm -rf "/opt/node-toolchain/node_modules/${npm_tree}/node_modules/${package}" && \
+        cp -aL "/opt/node-toolchain/node_modules/${package}" \
+          "/opt/node-toolchain/node_modules/${npm_tree}/node_modules/${package}" && \
+        test "$(/opt/node/bin/node -p \
+          'require(process.argv[1]).version' \
+          "/opt/node-toolchain/node_modules/${npm_tree}/node_modules/${package}/package.json")" \
+          = "${version}"; \
+      done; \
+    done && \
+    for package in pacote undici; do \
+      version="$(/opt/node/bin/node -p \
+        'require(process.argv[1]).version' \
+        "/opt/node-toolchain/node_modules/${package}/package.json")" && \
+      rm -rf "/opt/node-toolchain/node_modules/npm-website/node_modules/${package}" && \
+      cp -aL "/opt/node-toolchain/node_modules/${package}" \
+        "/opt/node-toolchain/node_modules/npm-website/node_modules/${package}" && \
+      test "$(/opt/node/bin/node -p \
+        'require(process.argv[1]).version' \
+        "/opt/node-toolchain/node_modules/npm-website/node_modules/${package}/package.json")" \
+        = "${version}"; \
+    done && \
+    rm -rf /opt/node/lib/node_modules/npm && \
+    rm -f /opt/node/bin/npm /opt/node/bin/npx /opt/node/bin/pnpm && \
+    rm -rf /opt/node-website/lib/node_modules/npm && \
+    rm -f /opt/node-website/bin/npm /opt/node-website/bin/npx && \
+    chmod 0755 /opt/node-toolchain/node_modules/pnpm/bin/pnpm.cjs && \
+    ln -s /opt/node-toolchain/node_modules/npm/bin/npm-cli.js /opt/node/bin/npm && \
+    ln -s /opt/node-toolchain/node_modules/npm/bin/npx-cli.js /opt/node/bin/npx && \
+    ln -s /opt/node-toolchain/node_modules/pnpm/bin/pnpm.cjs /opt/node/bin/pnpm && \
+    ln -s /opt/node-toolchain/node_modules/renovate/dist/renovate.js /opt/node/bin/renovate && \
+    ln -s /opt/node-toolchain/node_modules/renovate/dist/config-validator.js /opt/node/bin/renovate-config-validator && \
+    ln -s /opt/node-toolchain/node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs /opt/node/bin/markdownlint-cli2 && \
+    ln -s /opt/node-toolchain/node_modules/prettier/bin/prettier.cjs /opt/node/bin/prettier && \
+    ln -s /opt/node-toolchain/node_modules/npm-website/bin/npm-cli.js /opt/node-website/bin/npm && \
+    ln -s /opt/node-toolchain/node_modules/npm-website/bin/npx-cli.js /opt/node-website/bin/npx && \
     /opt/node/bin/node --version && \
-    /opt/node/bin/copilot --version && \
-    rm -f /tmp/node.tar.xz && \
-    /opt/node/bin/npm cache clean --force
-
-# Docker CLI + Compose plugin (from docker-ce packages)
-RUN install -m 0755 /usr/bin/docker /usr/local/bin/docker && \
-    mkdir -p /usr/local/lib/docker/cli-plugins && \
-    if [ -x /usr/libexec/docker/cli-plugins/docker-compose ]; then \
-      install -m 0755 /usr/libexec/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose; \
-    elif [ -x /usr/lib/docker/cli-plugins/docker-compose ]; then \
-      install -m 0755 /usr/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose; \
-    else \
-      echo "docker-compose plugin not found" >&2; exit 1; \
-    fi
+    /opt/node/bin/npm --version && \
+    /opt/node/bin/pnpm --version && \
+    /opt/node/bin/renovate-config-validator --version && \
+    /opt/node/bin/markdownlint-cli2 --version && \
+    /opt/node/bin/prettier --version && \
+    test "$(/opt/node-website/bin/node --version)" = "v${WEBSITE_NODE_VERSION}" && \
+    test "$(PATH=/opt/node-website/bin:${PATH} /opt/node-website/bin/npm --version)" = "11.16.0" && \
+    rm -f /tmp/node.tar.xz /tmp/node-website.tar.xz && \
+    rm -rf /tmp/pnpm-store /opt/node-toolchain/.npm
 
 
 FROM registry.access.redhat.com/ubi9/python-311:9.8-1779945715@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c
@@ -184,19 +266,28 @@ RUN dnf -y update && \
       --enablerepo="centos-stream-${CENTOS_STREAM_VERSION}-appstream" \
       --enablerepo="centos-stream-${CENTOS_STREAM_VERSION}-crb" \
       qemu-img guestfs-tools libguestfs && \
+    old_node_rpms=() && \
+    for package in nodejs nodejs-docs nodejs-full-i18n nodejs-libs npm; do \
+      if rpm -q "$package" >/dev/null 2>&1; then old_node_rpms+=("$package"); fi; \
+    done && \
+    if [ "${#old_node_rpms[@]}" -gt 0 ]; then dnf -y remove "${old_node_rpms[@]}"; fi && \
     rm -f /etc/yum.repos.d/centos-stream-vm-image-tools.repo && \
     dnf clean all && rm -rf /var/cache/dnf /var/cache/yum
 
 # Copy toolchain from builder (no curl/unzip in final image)
-COPY --from=tools /usr/local/bin/terraform /usr/local/bin/terraform
-COPY --from=tools /usr/local/bin/tflint /usr/local/bin/tflint
-COPY --from=tools /usr/local/bin/terraform-docs /usr/local/bin/terraform-docs
-COPY --from=tools /usr/local/bin/helm /usr/local/bin/helm
-COPY --from=tools /usr/local/bin/gh /usr/local/bin/gh
-COPY --from=tools /usr/local/bin/actionlint /usr/local/bin/actionlint
-COPY --from=tools /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=tools /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+COPY --from=tools /out/terraform /usr/local/bin/terraform
+COPY --from=tools /out/tflint /usr/local/bin/tflint
+COPY --from=tools /out/terraform-docs /usr/local/bin/terraform-docs
+COPY --from=tools /out/helm /usr/local/bin/helm
+COPY --from=tools /out/gh /usr/local/bin/gh
+COPY --from=tools /out/actionlint /usr/local/bin/actionlint
+COPY --from=tools /out/docker /usr/local/bin/docker
+COPY --from=tools /out/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 COPY --from=tools /opt/node /opt/node
+COPY --from=tools /opt/node-website /opt/node-website
+COPY --from=tools /opt/node-toolchain /opt/node-toolchain
+COPY scripts/devtools-node-selector.sh /usr/local/bin/devtools-node-selector.sh
+ENV PATH=/opt/node/bin:$PATH
 
 # Python deps: this *is* the right place for pip
 COPY requirements.txt /tmp/requirements.txt
@@ -205,7 +296,11 @@ RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
     rm -f /tmp/requirements.txt /tmp/requirements.lock && \
     ansible --version && ansible-galaxy --version && antsibull-changelog --version && \
-    shellcheck --version && actionlint --version && helm version --short && gh --version && \
+    shellcheck --version && actionlint --version && pre-commit --version && \
+    ruff --version && mypy --version && uv --version && \
+    renovate-config-validator --version && \
+    markdownlint-cli2 --version && prettier --version && pnpm --version && \
+    helm version --short && gh --version && \
     copr-cli --version && rpmspec --version && qemu-img --version && \
     virt-customize --version && virt-sysprep --version && guestfish --version
 
@@ -216,9 +311,9 @@ RUN useradd -m wunder && \
     chmod 1777 /tmp/ansible /tmp/ansible/tmp
 
 ENV HOME=/home/wunder \
-    PATH=/opt/node/bin:$PATH \
     ANSIBLE_LOCAL_TEMP=/tmp/ansible/tmp \
     ANSIBLE_REMOTE_TEMP=/tmp/ansible/tmp
 
 USER wunder
+ENTRYPOINT ["/usr/local/bin/devtools-node-selector.sh"]
 CMD ["/bin/bash"]

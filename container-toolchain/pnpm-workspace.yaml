@@ -1,0 +1,18 @@
+packages: []
+
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
+trustLockfile: false
+blockExoticSubdeps: true
+ignoreScripts: true
+strictPeerDependencies: true
+verifyStoreIntegrity: true
+strictStorePkgContentCheck: true
+overrides:
+  brace-expansion: 5.0.9
+  ip-address: 10.5.0
+  "markdownlint-cli2>js-yaml": 5.3.0
+  pacote: 21.5.1
+  tar: 7.5.22
+  undici: 6.27.0

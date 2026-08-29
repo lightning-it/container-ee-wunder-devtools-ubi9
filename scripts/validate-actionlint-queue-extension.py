@@ -4,7 +4,7 @@
 GitHub introduced ``concurrency.queue: max`` on 2026-05-07.  The pinned
 actionlint release predates that schema addition, so its one stale diagnostic is
 ignored only after this validator has fail-closed on the exact supported shape
-and the exact MLX-90 workflow locations.
+and the exact allowlisted workflow locations.
 
 Official contract:
 https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
@@ -43,6 +43,12 @@ EXPECTED = {
         "security-release-promote-tags.yml",
         ("concurrency",),
     ): "mlx90-promote-tags-${{ inputs.container_release_tag }}",
+}
+COLLECTION_SYNC_EXPECTED = {
+    (
+        "sync-ansible-collections.yml",
+        ("concurrency",),
+    ): "sync-ansible-collections-${{ github.ref }}",
 }
 
 
@@ -115,7 +121,9 @@ def validate(workflows_dir: Path, *, allow_mlx90_queue: bool = False) -> None:
                 queue_locations.add((workflow.name, path[:-1]))
 
     mlx90 = allow_mlx90_queue and "security-release-finalize.yml" in documents
-    expected = EXPECTED if mlx90 else {}
+    expected = dict(EXPECTED) if mlx90 else {}
+    if "sync-ansible-collections.yml" in documents:
+        expected.update(COLLECTION_SYNC_EXPECTED)
     if queue_locations != set(expected):
         raise ValueError(
             f"unexpected GitHub queue locations: actual={sorted(queue_locations)!r} "

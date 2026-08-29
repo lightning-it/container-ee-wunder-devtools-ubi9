@@ -76,8 +76,7 @@ A good PR:
 - Git
 - Docker or Podman (Buildx recommended if using Docker)
 - Python 3.10+ (for push-ready orchestration and optional pre-commit checks)
-- Codex CLI access and GitHub Copilot CLI entitlement for the required local
-  dual-agent review
+- No local AI entitlement is required; Push-Ready must not invoke external AI
 - `pre-commit` (optional fast feedback)
 
 ### Renovate scope for certified RH collections
@@ -117,11 +116,12 @@ python3 scripts/lit-push-ready.py push-ready
 The exact profile runs the same complete container CI contract that the
 required GitHub Actions job invokes. `review` supports iteration over
 uncommitted work; the evidence-producing `push-ready` command requires a clean
-committed `HEAD` and adds isolated Copilot CLI and Codex reviews.
+committed `HEAD` and does not invoke Codex, Copilot, or another external AI
+service.
 
 `pre-commit run --all-files` remains useful for fast feedback when installed,
 but it is optional and never authorizes a push or substitutes for push-ready
-evidence. The current-head GitHub Copilot review and required GitHub Actions
+evidence. The protected current-revision review and required GitHub Actions
 checks remain authoritative for merge. The full container parity profile is
 intentionally not a pre-commit hook: ordinary commits have staged changes,
 while the evidence-producing profile must validate a clean committed tree.
@@ -129,8 +129,8 @@ while the evidence-producing profile must validate a clean committed tree.
 The first migration of `.lit/push-ready.json`, the push-ready runner, or the
 canonical profile cannot treat its own unmerged policy as a trust root. The
 runner intentionally refuses push evidence for that bootstrap diff. Run the
-new profile and the separate dual-agent `review` command on the exact commit,
-then use the protected required-CI and current-head Copilot gates for that one
+new profile and the separate AI-free `review` command on the exact commit,
+then use the protected required-CI and current-revision gates for that one
 migration PR. It does not count toward correction-free first-push evidence.
 
 ## Container Build & Test

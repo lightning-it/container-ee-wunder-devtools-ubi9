@@ -25,34 +25,23 @@ require_digest_pinned_image() {
   fi
 }
 
-github_repository_env="${GITHUB_REPOSITORY:-}"
-repo_name="${github_repository_env##*/}"
-if [ -z "$repo_name" ] || [ "$repo_name" = "$github_repository_env" ]; then
-  repo_name="$(basename "${WUNDER_DEVTOOLS_HOST_WORKSPACE:-$PWD}")"
-fi
-
-github_repository="${github_repository_env:-lightning-it/${repo_name}}"
-github_sha="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo local)}"
-short_sha="${github_sha:0:12}"
-created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-image="local/${repo_name}:ci"
 target_arch="$(detect_targetarch)"
 case "$target_arch" in
   amd64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7"
     renovate_default="docker.io/renovate/renovate:43.288.0@sha256:bcde7a061ab42d1ae6d4500769d80727e5694bb889dbcbf1005e9f4e741ab76d"
-    trivy_default="docker.io/aquasec/trivy:0.73.0@sha256:4bbf3824d974b70f27631005e2e6194d4d8fbd6e72c4a9e04cf521e25c5cb07f"
+    trivy_default="docker.io/aquasec/trivy:0.74.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9"
     hadolint_image="docker.io/hadolint/hadolint:v2.15.1@sha256:fdf19d026b54834f88c62774fdf2a61ff3b586a42632e5070674d41a796bfdf3"
     docker_cli_image="docker.io/library/docker:29-cli@sha256:e650b7a58d7f56be91d4f7be799196380a3bbc1bcbc41f1f4dff1b36ac309e1e"
-    node_image="docker.io/library/node:24-bookworm@sha256:f6d02cf1353049cf3658e6ce9ec03c6877a6479495f122062d195e2279d01055"
+    node_image="docker.io/library/node:24-bookworm@sha256:107ceb6ad85808049dccef12414bf17b08eceb299eaf755c0339dc5fc8958d6b"
     ;;
   arm64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:33ffa3f1ad576165ea9c26f726884defdc411fb1fcb9ccc6a117b2f554ba1723"
     renovate_default="docker.io/renovate/renovate:43.288.0@sha256:63067f15fdb44df7a55a1e65e34df93c8c8dab930677d0a46de8086c6d5b0703"
-    trivy_default="docker.io/aquasec/trivy:0.73.0@sha256:3c135a0270fe7f19a677eabb3f7eca95c96ae78b52b81697de736670fc6e66c8"
+    trivy_default="docker.io/aquasec/trivy:0.74.0@sha256:55ad20f8a239a3e95427e60b8aaea38788550c18a3f1772976bebf732e6ae166"
     hadolint_image="docker.io/hadolint/hadolint:v2.15.1@sha256:84179f01a1034d34ea470f1808f055f0a02195ba0e0038d097f8384ae878383f"
     docker_cli_image="docker.io/library/docker:29-cli@sha256:d7ee65bd10b7f794c6bba9ce66cf0ec83f4cb9a606f68b2a804b11ceb00d60cb"
-    node_image="docker.io/library/node:24-bookworm@sha256:7e4b2953088599075c288871d109e23bc7a33384b96ca443a7cfb7b5c318b099"
+    node_image="docker.io/library/node:24-bookworm@sha256:b75abb8396290a89c61cfafa80a153b5d660d89c786919cb6745fb0ccc3bb171"
     ;;
 esac
 actionlint_image="${ACTIONLINT_IMAGE:-$actionlint_default}"
@@ -131,6 +120,54 @@ if any(ord(character) < 32 or ord(character) == 127 for character in value):
 print(value, end="")
 PY
 }
+
+github_repository_env="${GITHUB_REPOSITORY:-}"
+metadata_repository=""
+if [ -f .lit/repository.yml ]; then
+  if ! metadata_repository="$(repository_metadata_value repository)"; then
+    echo "ERROR: unable to read repository identity from .lit/repository.yml." >&2
+    exit 1
+  fi
+fi
+if [ -n "$metadata_repository" ] \
+  && [[ ! "$metadata_repository" =~ ^[A-Za-z0-9._-]+$ ]]
+then
+  echo "ERROR: repository in .lit/repository.yml is not a valid repository name." >&2
+  exit 1
+fi
+
+if [ -n "$github_repository_env" ]; then
+  if [[ ! "$github_repository_env" =~ ^([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9._-]+)$ ]]; then
+    echo "ERROR: GITHUB_REPOSITORY is not a valid owner/repository identity." >&2
+    exit 1
+  fi
+  github_owner="${BASH_REMATCH[1]}"
+  repo_name="${BASH_REMATCH[2]}"
+  if [[ "$github_owner" == *--* || "$github_owner" == *- ]]; then
+    echo "ERROR: GITHUB_REPOSITORY is not a valid owner/repository identity." >&2
+    exit 1
+  fi
+  if [ -n "$metadata_repository" ] && [ "$repo_name" != "$metadata_repository" ]; then
+    echo "ERROR: GITHUB_REPOSITORY does not match .lit/repository.yml." >&2
+    exit 1
+  fi
+  github_repository="$github_repository_env"
+elif [ -n "$metadata_repository" ]; then
+  repo_name="$metadata_repository"
+  github_repository="lightning-it/${metadata_repository}"
+else
+  repo_name="$(basename "${WUNDER_DEVTOOLS_HOST_WORKSPACE:-$PWD}")"
+  if [[ ! "$repo_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "ERROR: workspace basename is not a valid repository name." >&2
+    exit 1
+  fi
+  github_repository="lightning-it/${repo_name}"
+fi
+
+github_sha="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo local)}"
+short_sha="${github_sha:0:12}"
+created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+image="local/${repo_name}:ci"
 
 validate_container_input() {
   local kind="$1"
@@ -359,6 +396,8 @@ run_container_build() {
     "${nested_socket_args[@]}" \
     "$docker_cli_image" \
     docker buildx build --load \
+    --pull \
+    --no-cache \
     --build-arg COLLECTION_PROFILE=public \
     --build-arg "TARGETARCH=${target_arch}" \
     --label "org.opencontainers.image.source=https://github.com/${github_repository}" \
@@ -409,10 +448,12 @@ run_contract_tests() {
       then
         python3 -m unittest discover -s tests -p 'test_*.py'
       fi
-      # Copilot extracts and maps a signed native runtime from its cache.
+      # These probes execute only validators already installed in the image.
+      # They never start Copilot or another local AI client, download a runtime,
+      # or map a cached executable; the writable validator cache stays noexec.
       docker run --rm "${validation_container_args[@]}" \
-        --tmpfs "/copilot-cache:rw,exec,nosuid,nodev,size=256m" \
-        -e XDG_CACHE_HOME=/copilot-cache \
+        --tmpfs "/validator-cache:rw,noexec,nosuid,nodev,size=256m" \
+        -e XDG_CACHE_HOME=/validator-cache \
         "$image" bash -lc '
         set -euo pipefail
         export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/.cache}"
@@ -423,6 +464,13 @@ run_contract_tests() {
         helm version --short
         ansible-lint --version
         pre-commit --version
+        ruff --version
+        mypy --version
+        uv --version
+        renovate-config-validator --version
+        markdownlint-cli2 --version
+        prettier --version
+        pnpm --version
         gh --version
         docker --version
         antsibull-changelog --version
@@ -490,22 +538,7 @@ run_vulnerability_scan() {
       --scanners vuln \
       --ignore-unfixed \
       ${trivy_ignore_args[@]+"${trivy_ignore_args[@]}"} \
-      --severity HIGH \
-      --exit-code 0 \
-      "$image"
-
-  docker run --rm \
-    "${engine_container_args[@]}" \
-    --mount "type=volume,destination=/var/cache/trivy" \
-    --env TMPDIR=/var/cache/trivy \
-    "${readonly_workspace_args[@]}" \
-    "${nested_socket_args[@]}" \
-    "$trivy_image" image \
-      --cache-dir /var/cache/trivy \
-      --scanners vuln \
-      --ignore-unfixed \
-      ${trivy_ignore_args[@]+"${trivy_ignore_args[@]}"} \
-      --severity CRITICAL \
+      --severity HIGH,CRITICAL \
       --exit-code 1 \
       "$image"
 }

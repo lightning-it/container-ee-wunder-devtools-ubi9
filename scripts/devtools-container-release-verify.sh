@@ -43,10 +43,10 @@ workflow_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/con
 workflow_identity_regexp="^https://github\\.com/${GITHUB_REPOSITORY}/\\.github/workflows/container-build-publish\\.yml@refs/tags/${RELEASE_TAG}$"
 case "$(detect_targetarch)" in
   amd64)
-    trivy_default="docker.io/aquasec/trivy:0.73.0@sha256:4bbf3824d974b70f27631005e2e6194d4d8fbd6e72c4a9e04cf521e25c5cb07f"
+    trivy_default="docker.io/aquasec/trivy:0.74.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9"
     ;;
   arm64)
-    trivy_default="docker.io/aquasec/trivy:0.73.0@sha256:3c135a0270fe7f19a677eabb3f7eca95c96ae78b52b81697de736670fc6e66c8"
+    trivy_default="docker.io/aquasec/trivy:0.74.0@sha256:55ad20f8a239a3e95427e60b8aaea38788550c18a3f1772976bebf732e6ae166"
     ;;
 esac
 trivy_image="${TRIVY_IMAGE:-$trivy_default}"
@@ -86,7 +86,7 @@ verify_tag_digest "$VERSION"
 verify_tag_digest "sha-${SHORT_SHA}"
 verify_tag_digest "latest"
 
-echo "Scanning ${IMAGE_NAME}:${RELEASE_TAG} for HIGH findings (report only)..."
+echo "Scanning ${IMAGE_NAME}:${RELEASE_TAG} for HIGH and CRITICAL findings (release gate)..."
 docker run --rm \
   "${trivy_container_args[@]}" \
   "${trivy_workspace_args[@]}" \
@@ -95,20 +95,7 @@ docker run --rm \
   --scanners vuln \
   --ignore-unfixed \
   "${trivy_ignore_args[@]}" \
-  --severity HIGH \
-  --exit-code 0 \
-  "${IMAGE_NAME}:${RELEASE_TAG}"
-
-echo "Scanning ${IMAGE_NAME}:${RELEASE_TAG} for CRITICAL findings (release gate)..."
-docker run --rm \
-  "${trivy_container_args[@]}" \
-  "${trivy_workspace_args[@]}" \
-  "$trivy_image" image \
-  --cache-dir /tmp/trivy-cache \
-  --scanners vuln \
-  --ignore-unfixed \
-  "${trivy_ignore_args[@]}" \
-  --severity CRITICAL \
+  --severity HIGH,CRITICAL \
   --exit-code 1 \
   "${IMAGE_NAME}:${RELEASE_TAG}"
 
@@ -148,7 +135,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "- Signed reference: \`${image_ref}\`"
     echo "- Signing identity: \`${workflow_identity}\`"
     echo "- Tags verified: \`${RELEASE_TAG}\`, \`${VERSION}\`, \`sha-${SHORT_SHA}\`, \`latest\`"
-    echo "- Vulnerability gate: CRITICAL findings fail; HIGH findings are report-only"
+    echo "- Vulnerability gate: HIGH and CRITICAL findings fail"
     echo
   } >> "$GITHUB_STEP_SUMMARY"
 fi
