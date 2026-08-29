@@ -95,7 +95,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ARG NODE_VERSION=24.19.0",
             "ARG WEBSITE_NODE_VERSION=24.18.0",
             "ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0",
-            "ARG VNU_SOURCE_SHA256=ca925f02f47529d1cd36ecfce506929d09cf242ae2d5467017f4ae7ef921852d",
+            "ARG VNU_SOURCE_SHA256=8838c4842d084792221832f52872ffc58208eeee84200c3064a1fb0ea7f87d96",
             "ARG VNU_VERSION=26.8.29",
             "ARG VNU_JETTY_VERSION=12.0.38",
             "ARG VNU_RELOAD4J_VERSION=1.2.26",
@@ -189,6 +189,8 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn("/opt/jdk/bin/javac -version", dockerfile)
         self.assertIn("/opt/maven/bin/mvn --version", dockerfile)
         self.assertIn("COPY patches/vnu-secure-dependencies.patch", dockerfile)
+        self.assertIn("https://codeload.github.com/validator/validator/tar.gz/", dockerfile)
+        self.assertNotIn("api.github.com/repos/validator/validator", dockerfile)
         self.assertIn("python checker.py dldeps", dockerfile)
         self.assertIn("python checker.py --version=", dockerfile)
         self.assertIn("VNU_JRE_ARCH=x64;", dockerfile)
@@ -208,6 +210,14 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn("vnu --errors-only /tmp/vnu-fixtures/valid.html", dockerfile)
         self.assertIn("Nu accepted the intentionally invalid fixture", dockerfile)
         self.assertTrue((ROOT / "scripts/vnu").stat().st_mode & 0o111)
+        vnu_wrapper = (ROOT / "scripts/vnu").read_text(encoding="utf-8")
+        self.assertIn('readonly java_bin="/opt/java/bin/java"', vnu_wrapper)
+        self.assertIn('exec "$java_bin" -jar "$vnu_jar" "$@"', vnu_wrapper)
+        host_parity = (ROOT / "scripts/verify-host-parity.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("vnu --errors-only /tmp/vnu-valid.html", host_parity)
+        self.assertIn("Nu accepted the intentionally invalid fixture", host_parity)
         self.assertIn("--frozen-lockfile", dockerfile)
         self.assertIn("--ignore-scripts", dockerfile)
         self.assertIn("--strict-peer-dependencies", dockerfile)

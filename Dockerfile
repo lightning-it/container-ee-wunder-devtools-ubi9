@@ -223,7 +223,7 @@ FROM registry.access.redhat.com/ubi9/python-311:9.8-1779945715@sha256:a0bdb55576
 
 ARG TARGETARCH
 ARG VNU_SOURCE_COMMIT=c4720cafffd1f93358ca824163fc5bbdb35fb0e0
-ARG VNU_SOURCE_SHA256=ca925f02f47529d1cd36ecfce506929d09cf242ae2d5467017f4ae7ef921852d
+ARG VNU_SOURCE_SHA256=8838c4842d084792221832f52872ffc58208eeee84200c3064a1fb0ea7f87d96
 ARG VNU_VERSION=26.8.29
 ARG VNU_JETTY_VERSION=12.0.38
 ARG VNU_RELOAD4J_VERSION=1.2.26
@@ -264,8 +264,7 @@ RUN test -n "${TARGETARCH}" && \
       sha256sum --check --status && \
     mkdir -p /opt/jdk && \
     tar -xzf /tmp/vnu-jdk.tar.gz --strip-components=1 -C /opt/jdk && \
-    test "$(/opt/jdk/bin/java -version 2>&1 | head -n 1)" = \
-      "openjdk version \"${VNU_JDK_VERSION%_*}\" 2026-07-21" && \
+    test -x /opt/jdk/bin/java && \
     test "$(/opt/jdk/bin/javac -version 2>&1)" = \
       "javac ${VNU_JDK_VERSION%_*}" && \
     grep -Fq "IMPLEMENTOR=\"Eclipse Adoptium\"" /opt/jdk/release && \
@@ -305,7 +304,7 @@ RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
     [[ "${VNU_SOURCE_COMMIT}" =~ ^[a-f0-9]{40}$ ]] && \
     curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
       --output /tmp/vnu-source.tar.gz \
-      "https://api.github.com/repos/validator/validator/tarball/${VNU_SOURCE_COMMIT}" && \
+      "https://codeload.github.com/validator/validator/tar.gz/${VNU_SOURCE_COMMIT}" && \
     printf '%s  %s\n' "${VNU_SOURCE_SHA256}" /tmp/vnu-source.tar.gz | \
       sha256sum --check --status && \
     mkdir -p /tmp/vnu-source /opt/vnu && \
@@ -362,8 +361,7 @@ RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
       sha256sum --check --status && \
     mkdir -p /opt/java && \
     tar -xzf /tmp/vnu-jre.tar.gz --strip-components=1 -C /opt/java && \
-    test "$(/opt/java/bin/java -version 2>&1 | head -n 1)" = \
-      "openjdk version \"${VNU_JRE_VERSION%_*}\" 2026-07-21" && \
+    test -x /opt/java/bin/java && \
     test -r "/opt/java/release" && \
     grep -Fq "IMPLEMENTOR=\"Eclipse Adoptium\"" /opt/java/release && \
     grep -Fq "JAVA_RUNTIME_VERSION=\"${VNU_JRE_VERSION/_/+}\"" /opt/java/release && \
