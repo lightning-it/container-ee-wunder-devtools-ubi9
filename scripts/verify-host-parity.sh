@@ -70,6 +70,20 @@ image="local/lightning-it-devtools:host-parity"
     prettier --version
     pnpm --version
     node --version
+    vnu --version
+    printf "%s\n" \
+      "<!doctype html><html lang=en><head><meta charset=utf-8><title>Valid</title></head><body><main><h1>Valid</h1></main></body></html>" \
+      > /tmp/vnu-valid.html
+    printf "%s\n" \
+      "<!doctype html><html><head><title>Invalid</title></head><body><main><img src=test.png></main></body></html>" \
+      > /tmp/vnu-invalid.html
+    vnu --errors-only /tmp/vnu-valid.html
+    if vnu --errors-only /tmp/vnu-invalid.html > /tmp/vnu-invalid.log 2>&1; then
+      echo "ERROR: Nu accepted the intentionally invalid fixture." >&2
+      exit 1
+    fi
+    grep -Fq "Element “img” is missing required attribute “alt”" \
+      /tmp/vnu-invalid.log
   '
 finished="$(date +%s)"
 
