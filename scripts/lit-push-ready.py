@@ -1223,28 +1223,41 @@ def expected_integration_tree(change: PlannedChange) -> str:
                         "--exclude-standard",
                         "-z",
                     )
-                    pre_refresh_clean = (
+                    pre_rewrite_clean = (
                         staged_drift.returncode == 0
                         and tracked_drift.returncode == 0
                         and not untracked_drift
                     )
-                    if pre_refresh_clean:
-                        refreshed = run(
+                    if pre_rewrite_clean:
+                        # A newly checked-out linked-worktree index can remain
+                        # racily clean for the filesystem's one-second Git
+                        # timestamp window.  A normal refresh can leave the
+                        # index file untouched and make the single recovery
+                        # merge fail identically.
+                        # Wait past the window only after all three drift
+                        # proofs pass, then force a Git 2.34-compatible rewrite
+                        # in index format version 2.  This preserves every
+                        # index entry while moving the index timestamp beyond
+                        # the racy-clean window.  Re-prove status before the
+                        # one permitted retry.
+                        time.sleep(1.1)
+                        rewritten = run(
                             [
                                 "git",
                                 "-c",
                                 f"core.hooksPath={disabled_hooks}",
                                 "update-index",
-                                "--really-refresh",
+                                "--index-version",
+                                "2",
                             ],
                             capture=True,
                             cwd=worktree,
                         )
-                        if refreshed.returncode:
+                        if rewritten.returncode:
                             raise RuntimeError(
-                                "could not refresh the compatibility merge "
-                                "worktree after a transient stash race: "
-                                + refreshed.stdout.strip()
+                                "could not rewrite the compatibility merge "
+                                "worktree index after a transient stash race: "
+                                + rewritten.stdout.strip()
                             )
                         status_value = git_output_at(
                             worktree,
