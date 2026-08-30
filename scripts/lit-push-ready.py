@@ -75,6 +75,10 @@ SECRET_PATH_MARKER = "secrets"
 SAFE_TERRAFORM_SECRET_MODULE_PATTERN = re.compile(
     r"[a-z0-9][a-z0-9_]*_secrets\.tf"
 )
+SAFE_PUBLIC_SECRET_ROUTE_PATTERN = re.compile(
+    r"(?:en/)?[a-z0-9]+(?:-[a-z0-9]+)*-secrets-"
+    r"[a-z0-9]+(?:-[a-z0-9]+)*\.html"
+)
 SECRET_CONTENT_PATTERNS = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(
@@ -200,7 +204,7 @@ class PlannedChange(NamedTuple):
 
 
 def is_secret_like_path(path: str) -> bool:
-    """Reject secret markers except in Terraform source-module filenames."""
+    """Reject secret markers except narrow reviewed source-file patterns."""
     lowered = path.lower()
     if any(fragment in lowered for fragment in SECRET_PATH_FRAGMENTS):
         return True
@@ -211,6 +215,11 @@ def is_secret_like_path(path: str) -> bool:
         if (
             index == len(components) - 1
             and SAFE_TERRAFORM_SECRET_MODULE_PATTERN.fullmatch(component)
+        ):
+            continue
+        if (
+            index == len(components) - 1
+            and SAFE_PUBLIC_SECRET_ROUTE_PATTERN.fullmatch(lowered)
         ):
             continue
         return True
