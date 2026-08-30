@@ -58,9 +58,6 @@ trivy_container_args=(
   --security-opt no-new-privileges=true
   --security-opt label=disable
   --pids-limit 256
-  # The Java vulnerability database is extracted into /tmp. Keep enough
-  # isolated workspace for the current database while retaining noexec and
-  # avoiding host filesystem or container socket access.
   --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=8g"
 )
 trivy_ignore_args=()
