@@ -156,10 +156,8 @@
   or funds it. Personal tokens and personal provider keys never enter Actions.
 - Every exact same-repository PR authored by
   `lightning-it-release-automation[bot]` uses only the ADR-defined, protected
-  MLX-90 §7.2 Exact-Revision Codex review, except for the narrowly proven
-  ancestry-only `main`→`develop` backmerge described below. No other
-  deterministic release exemption and no GitHub Copilot fallback is permitted.
-  The review binds the live base,
+  MLX-90 §7.2 Exact-Revision Codex review. No deterministic release exemption
+  and no GitHub Copilot fallback is permitted. The review binds the live base,
   head, unique merge base, integration tree, and SHA-256 of the complete binary
   Git-object diff. It MUST run from the protected base copy of
   `.github/workflows/release-bot-exact-head-review.yml`, receive no checkout,
@@ -168,22 +166,11 @@
   review`. The built-in `:read-only` permission profile technically denies
   writes and command network access. This path never applies to human,
   community, or other automation authors.
-- An exact same-repository ancestry backmerge authored by
-  `lightning-it-release-automation[bot]` is deterministic and AI-free only when
-  its protected-base controller proves the live `develop` parent first, the
-  live `main` parent second, the exact `backmerge/*-main` branch and governed
-  title, and exactly one changed regular file at `.lit/main-ancestry.json` whose
-  strict content binds both parents and the repository. The protected
-  controller emits the neutral `Current revision review` evidence with kind
-  `ancestry-backmerge`; neither Codex nor Copilot may be requested or invoked.
-  Any identity, branch, parent, file-set, content, base-protection, or live-tip
-  mismatch fails closed.
 - A deterministic ancestry-backmerge retry MUST exhaustively read the open and
   closed pull-request history for its exact repository-owned branch, base and
   head before it creates a pull request. Any closed exact match, unexpected
   response shape, or ambiguous inventory fails before PR creation and before
-  protected auto-merge. It MUST never dispatch AI. One already-open exact match
-  may be identity- and
+  review dispatch. One already-open exact match may be identity- and
   revision-validated, but the controller MUST exit without redispatching AI or
   re-enabling a failed workflow path. Recovery after terminal evidence uses a
   fresh revision through the normal correction, promotion and backmerge chain;
