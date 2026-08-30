@@ -169,8 +169,15 @@ jobs:
             <<<"${pr}")"
           [[ "${PR_BASE_REF}" =~ ^(develop|main)$ ]]
           if [ "${PR_AUTHOR}" = 'lightning-it-release-automation[bot]' ]; then
-            echo "Release-App PRs use only the protected Exact-Revision Codex path."
-            exit 0
+            if [ "${REPOSITORY}" = 'lightning-it/.github' ] \
+              || [ "${PR_BASE_REF}" != develop ] \
+              || [ "${PR_HEAD_REPOSITORY}" != "${REPOSITORY}" ] \
+              || [[ "${PR_HEAD_REF}" != backmerge/*-main ]] \
+              || [[ "$(jq -r .title <<<"${pr}")" \
+                != "chore(governance): record main ancestry before "* ]]; then
+              echo "Release-App PRs use only the protected Exact-Revision Codex path."
+              exit 0
+            fi
           fi
           labels_sha256_from_pr() {
             local labels_json pr_json="$1"
@@ -482,9 +489,13 @@ jobs:
                           test("^mlx90-current-revision:managed-sync:v6:" + $pr
                             + ":[1-9][0-9]*:" + $base + ":" + $head + "$")))
                       or
-                      (($repository == "lightning-it/.github"
-                        and $author == "lightning-it-shared-assets-sync[bot]"
+                      (((($repository == "lightning-it/.github"
+                          and $author == "lightning-it-shared-assets-sync[bot]")
+                         or ($repository != "lightning-it/.github"
+                          and $author == "lightning-it-release-automation[bot]"))
                         and $base_ref == "develop")
+                        and $summary.review_path
+                          == "deterministic evidence-bound ancestry exemption"
                         and ($check.external_id |
                           test("^mlx90-current-revision:ancestry-backmerge:v6:"
                             + $pr + ":[1-9][0-9]*:" + $base + ":" + $head + "$")))

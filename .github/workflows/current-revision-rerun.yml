@@ -531,7 +531,7 @@ jobs:
             echo "The exact detached producer did not complete successfully in time." >&2
             return 1
           }
-          if [ "${external_kind}" = copilot ]; then
+          if [ "${evidence_version}" != v4 ]; then
             test "${producer_id}" = "${GITHUB_RUN_ID}"
             jq -e '
               .run_attempt == 1
@@ -556,8 +556,9 @@ jobs:
                   | select(.status == "in_progress" and .conclusion == null)] | length) == 1
               ' <<<"${producer_jobs_pages}" >/dev/null
           else
-            # The Exact-Revision producer dispatches this detached verifier and
-            # then exits after observing that this job was materialized. Wait
+            # Only the v4 Exact-Revision producer dispatches this detached
+            # verifier, then exits after observing that this job was
+            # materialized. Wait
             # here, without mutating or redispatching anything, until that exact
             # producer reaches its terminal successful state. This ordering is
             # the synchronization boundary that prevents the verifier from
@@ -585,14 +586,18 @@ jobs:
                 and .conclusion == "success"
               ' <<<"${producer}" >/dev/null
           else
-            if [ "${external_kind}" != copilot ]; then
-              jq -e '
-                .status == "completed" and .conclusion == "success"
-              ' <<<"${producer}" >/dev/null
-            fi
             if [ "${external_kind}" = ancestry-backmerge ]; then
-              test "${REPOSITORY}" = 'lightning-it/.github'
-              test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+              if [ "${evidence_version}" = v6 ]; then
+                if [ "${REPOSITORY}" = 'lightning-it/.github' ]; then
+                  test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+                else
+                  test "${author}" = 'lightning-it-release-automation[bot]'
+                fi
+              else
+                test "${REPOSITORY}" = 'lightning-it/.github'
+                test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+              fi
+              test "${base_ref}" = develop
               test "$(jq -r .review_path <<<"${neutral_summary}")" = \
                 'deterministic evidence-bound ancestry exemption'
             elif [ "${external_kind}" = managed-sync ]; then
@@ -676,7 +681,7 @@ jobs:
           fi
 
           reservations=''
-          for reservation_attempt in $(seq 1 40); do
+          for reservation_attempt in $(seq 1 60); do
             reservations_pages="$(gh api --paginate --slurp \
               "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20current-revision%20verifier&filter=all&per_page=100")"
             same_head_reservations="$(jq -c \
@@ -722,7 +727,7 @@ jobs:
               echo "Protected verifier evidence is malformed, unsupported, or version-ambiguous." >&2
               exit 1
             fi
-            if [ "${reservation_attempt}" -eq 40 ]; then
+            if [ "${reservation_attempt}" -eq 60 ]; then
               echo "Protected verifier evidence did not materialize in time." >&2
               exit 1
             fi

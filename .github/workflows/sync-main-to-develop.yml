@@ -410,43 +410,6 @@ jobs:
             echo "expected_head=$(jq -r .headRefOid <<<"${pr_details}")"
           } >>"${GITHUB_OUTPUT}"
 
-      - name: Mint protected review dispatch token
-        if: >-
-          steps.exact-review-target.outputs.pr_number != '' &&
-          github.repository != 'lightning-it/.github'
-        id: review-dispatch-app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-actions: write
-          permission-contents: read
-
-      - name: Dispatch protected Exact-Revision review
-        if: >-
-          steps.exact-review-target.outputs.pr_number != '' &&
-          github.repository != 'lightning-it/.github'
-        env:
-          GH_TOKEN: ${{ steps.review-dispatch-app.outputs.token }}
-          REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.exact-review-target.outputs.pr_number }}
-          BASE_REF: ${{ steps.exact-review-target.outputs.base_ref }}
-          EXPECTED_BASE: ${{ steps.exact-review-target.outputs.expected_base }}
-          EXPECTED_HEAD: ${{ steps.exact-review-target.outputs.expected_head }}
-        run: |
-          set -euo pipefail
-          [[ "${EXPECTED_BASE}" =~ ^[0-9a-f]{40}$ ]]
-          [[ "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ ]]
-          gh workflow run release-bot-exact-head-review.yml \
-            --repo "${REPOSITORY}" \
-            --ref "${BASE_REF}" \
-            -f "pr_number=${PR_NUMBER}" \
-            -f "base_ref=${BASE_REF}" \
-            -f "expected_base=${EXPECTED_BASE}" \
-            -f "expected_head=${EXPECTED_HEAD}"
-
       - name: Enable protected ancestry auto-merge
         if: steps.exact-review-target.outputs.pr_number != ''
         env:

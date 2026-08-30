@@ -1,8 +1,9 @@
 # Managed by lightning-it/shared-assets-lit.
 # Do not edit downstream copies directly.
 # Protected per-repository MLX-90/REP-60 current-revision controller.
-# Release-App review belongs only to the sibling protected controller at
-# .github/workflows/release-bot-exact-head-review.yml.
+# Release-App AI review belongs only to the sibling protected controller at
+# .github/workflows/release-bot-exact-head-review.yml. The sole exception is a
+# deterministic, AI-free evidence-bound ancestry backmerge exemption.
 # yamllint disable rule:truthy rule:line-length
 ---
 name: Current revision review gate
@@ -40,9 +41,10 @@ concurrency:
   cancel-in-progress: false
 
 # Release-App pull requests use only the sibling protected MLX-90 §7.2
-# Exact-Revision Codex check, without an exemption in this controller. This
-# workflow retains the final-head GitHub Copilot path for applicable human PRs
-# plus the separately identified Shared-Assets-App automation exemptions.
+# Exact-Revision Codex check, except for the exact ancestry-only backmerge whose
+# two protected parents and sole evidence file are verified here without AI.
+# This workflow retains the final-head GitHub Copilot path for applicable human
+# PRs plus the separately identified Shared-Assets-App automation exemptions.
 # The one main trust-root handoff is authorized only by the immutable job ledger
 # of the organization Required Workflow. Candidate metadata never authorizes an
 # exemption by itself, and a missing or ambiguous protected ledger fails closed.
@@ -208,6 +210,68 @@ jobs:
             fi
             sleep 3
           done
+
+  classify-release-app-ancestry-backmerge:
+    name: Classify protected Release-App ancestry backmerge
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login == 'lightning-it-release-automation[bot]' &&
+      github.event.pull_request.base.ref == 'develop'
+    permissions:
+      pull-requests: read
+    outputs:
+      active: ${{ steps.ancestry.outputs.active }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify live Release-App ancestry-backmerge identity
+        id: ancestry
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+          EVENT_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVENT_TITLE: ${{ github.event.pull_request.title }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo 'active=false' >>"${GITHUB_OUTPUT}"
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${EVENT_BASE}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EVENT_HEAD}" =~ ^[0-9a-f]{40}$ ]]
+          pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg base "${EVENT_BASE}" \
+            --arg head "${EVENT_HEAD}" \
+            --arg head_ref "${EVENT_HEAD_REF}" \
+            --arg repository "${REPOSITORY}" \
+            --arg title "${EVENT_TITLE}" \
+            --argjson number "${PR_NUMBER}" '
+              .number == $number
+              and .state == "open"
+              and .draft == false
+              and .user.login == "lightning-it-release-automation[bot]"
+              and .base.ref == "develop"
+              and .base.sha == $base
+              and .base.repo.full_name == $repository
+              and .head.ref == $head_ref
+              and .head.sha == $head
+              and .head.repo.full_name == $repository
+              and .title == $title
+            ' <<<"${pr}" >/dev/null
+          if [ "${REPOSITORY}" != 'lightning-it/.github' ] \
+            && jq -e --arg repository "${REPOSITORY}" '
+              .base.ref == "develop"
+              and .head.repo.full_name == $repository
+              and (.head.ref | test("^backmerge/.+-main$"))
+              and (.title |
+                startswith("chore(governance): record main ancestry before "))
+            ' <<<"${pr}" >/dev/null; then
+            echo 'active=true' >>"${GITHUB_OUTPUT}"
+          fi
 
   request-current-revision-review:
     name: Request Copilot review for current revision
@@ -393,15 +457,22 @@ jobs:
 
   verify-current-revision-policy:
     name: Verify current revision policy
-    needs: classify-main-trust-root-handoff
+    needs:
+      - classify-main-trust-root-handoff
+      - classify-release-app-ancestry-backmerge
     if: >-
       always() &&
       (needs.classify-main-trust-root-handoff.result == 'success' ||
         needs.classify-main-trust-root-handoff.result == 'skipped') &&
+      (needs.classify-release-app-ancestry-backmerge.result == 'success' ||
+        needs.classify-release-app-ancestry-backmerge.result == 'skipped') &&
       needs.classify-main-trust-root-handoff.outputs.active != 'true' &&
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' &&
+      (
+        github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' ||
+        needs.classify-release-app-ancestry-backmerge.outputs.active == 'true'
+      ) &&
       (github.event.action == 'edited' ||
         github.event.action == 'labeled' ||
         github.event.action == 'unlabeled' ||
@@ -812,8 +883,10 @@ jobs:
               <<<"${live_pr}" >/dev/null; then
             trusted=true
             trusted_kind=repository-quality
-          elif [ "${REPOSITORY}" = "lightning-it/.github" ] \
-            && [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ] \
+          elif { { [ "${REPOSITORY}" = "lightning-it/.github" ] \
+                && [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ]; } \
+              || { [ "${REPOSITORY}" != "lightning-it/.github" ] \
+                && [ "${PR_AUTHOR}" = "lightning-it-release-automation[bot]" ]; }; } \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == backmerge/*-main ]] \
             && [ "${PR_BASE}" = "develop" ] \
@@ -1426,6 +1499,18 @@ jobs:
             ' <<<"${live_pr}")" || return 1
             printf '%s' "${labels_json}" | sha256sum | cut -d ' ' -f 1
           }
+          validate_bound_metadata_revision() {
+            local observed_last_edited_at=''
+            # read_metadata_revision already retries only unavailable or
+            # malformed GraphQL responses. A successful semantic mismatch can
+            # represent a real PR edit, so it must fail closed immediately;
+            # retrying could later accept an older replica value.
+            observed_last_edited_at="$(read_metadata_revision)" || return 1
+            if [ "${observed_last_edited_at}" != "${BOUND_LAST_EDITED_AT}" ]; then
+              echo "The bound pull-request metadata revision changed during publication." >&2
+              return 1
+            fi
+          }
           validate_bound_review() {
             local attempt reviews
             [[ "${BOUND_REVIEW_ID}" =~ ^[A-Za-z0-9_+/=-]+$ ]] || return 1
@@ -1460,7 +1545,7 @@ jobs:
           [[ "${EVENT_HEAD_REPOSITORY}" == */* ]]
           [[ "${BOUND_LAST_EDITED_AT}" == null \
             || "${BOUND_LAST_EDITED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
-          test "$(read_metadata_revision)" = "${BOUND_LAST_EDITED_AT}"
+          validate_bound_metadata_revision
           test "$(read_labels_sha256)" = "${BOUND_LABELS_SHA256}"
           [[ "${EVENT_BASE_REF}" =~ ^(develop|main)$ ]]
           test "${DEFAULT_BRANCH}" = develop
@@ -1542,8 +1627,11 @@ jobs:
             external_kind="managed-sync"
             result_title="Current revision managed distribution exemption passed"
           elif [ "${TRUSTED_KIND}" = ancestry-backmerge ]; then
-            test "${REPOSITORY}" = "lightning-it/.github"
-            test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+            if [ "${REPOSITORY}" = "lightning-it/.github" ]; then
+              test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+            else
+              test "${author}" = 'lightning-it-release-automation[bot]'
+            fi
             test "${TRUSTED_KIND}" = ancestry-backmerge
             test "${base_ref}" = develop
             default_head="$(gh api "repos/${REPOSITORY}/branches/${DEFAULT_BRANCH}" --jq .commit.sha)"
@@ -1758,26 +1846,37 @@ jobs:
             "mlx90-current-revision:${external_kind}:v6:${PR_NUMBER}:${GITHUB_RUN_ID}:${EVENT_BASE}:${EVENT_HEAD}" \
             "${result_title}")"
           [[ "${published_check_id}" =~ ^[1-9][0-9]*$ ]]
-          final_last_edited_at=''
-          final_labels_sha256=''
+          final_metadata_valid=true
+          final_labels_valid=true
           final_review_valid=true
+          if ! validate_bound_metadata_revision; then
+            final_metadata_valid=false
+          fi
+          final_labels_sha256=''
+          if ! final_labels_sha256="$(read_labels_sha256)" \
+            || [ "${final_labels_sha256}" != "${BOUND_LABELS_SHA256}" ]; then
+            final_labels_valid=false
+          fi
           if [ "${external_kind}" = copilot ] && ! validate_bound_review; then
             final_review_valid=false
           fi
-          if ! final_last_edited_at="$(read_metadata_revision)" \
-            || [ "${final_last_edited_at}" != "${BOUND_LAST_EDITED_AT}" ] \
-            || ! final_labels_sha256="$(read_labels_sha256)" \
-            || [ "${final_labels_sha256}" != "${BOUND_LABELS_SHA256}" ] \
+          if [ "${final_metadata_valid}" != true ] \
+            || [ "${final_labels_valid}" != true ] \
             || [ "${final_review_valid}" != true ]; then
             failure_evidence="$(jq -cn \
               --arg base "${EVENT_BASE}" \
               --arg head "${EVENT_HEAD}" \
-              --arg reason "pull-request metadata, labels, or review state changed during result publication" \
+              --argjson labels_valid "${final_labels_valid}" \
+              --argjson metadata_valid "${final_metadata_valid}" \
+              --argjson review_valid "${final_review_valid}" \
+              --arg reason "bound pull-request state did not remain valid during result publication" \
               --argjson pr_number "${PR_NUMBER}" \
               --argjson run_id "${GITHUB_RUN_ID}" \
               --arg run_url "${run_url}" \
               '{schema:4,base_sha:$base,head_sha:$head,pull_request_number:$pr_number,
-                producer_run_id:$run_id,reason:$reason,run_url:$run_url}')"
+                producer_run_id:$run_id,reason:$reason,run_url:$run_url,
+                metadata_valid:$metadata_valid,labels_valid:$labels_valid,
+                review_valid:$review_valid}')"
             completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             invalidated="$(api_patch \
               "repos/${REPOSITORY}/check-runs/${published_check_id}" \
@@ -1785,8 +1884,8 @@ jobs:
               -f conclusion=failure \
               -f "completed_at=${completed_at}" \
               -f "details_url=${run_url}" \
-              -f "external_id=mlx90-current-revision:metadata-race:v1:${PR_NUMBER}:${GITHUB_RUN_ID}:${EVENT_BASE}:${EVENT_HEAD}" \
-              -f 'output[title]=Current revision metadata changed during publication' \
+              -f "external_id=mlx90-current-revision:binding-change:v1:${PR_NUMBER}:${GITHUB_RUN_ID}:${EVENT_BASE}:${EVENT_HEAD}" \
+              -f 'output[title]=Current revision binding changed during publication' \
               -f "output[summary]=${failure_evidence}")"
             jq -e \
               --arg evidence "${failure_evidence}" \
@@ -1801,14 +1900,19 @@ jobs:
                 and .conclusion == "failure"
                 and .output.summary == $evidence
               ' <<<"${invalidated}" >/dev/null
-            echo "Pull-request metadata, labels, or review state changed during result publication." >&2
+            echo "Bound pull-request state did not remain valid during result publication: metadata_valid=${final_metadata_valid}, labels_valid=${final_labels_valid}, review_valid=${final_review_valid}." >&2
             exit 1
           fi
 
   request-protected-verifier-reevaluation:
     name: Request protected verifier re-evaluation
     needs: verify-current-revision-policy
-    if: needs.verify-current-revision-policy.result == 'success'
+    # `verify-current-revision-policy` deliberately tolerates an inapplicable,
+    # skipped Release-App classifier. Keep that skip from being reintroduced
+    # through GitHub's implicit `success()` predicate on this downstream job.
+    if: >-
+      always() &&
+      needs.verify-current-revision-policy.result == 'success'
     permissions:
       actions: write
       checks: read
