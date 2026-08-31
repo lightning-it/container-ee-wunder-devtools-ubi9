@@ -113,6 +113,7 @@
 
 ## Push-ready validation
 
+<!-- LIT REP-60 evidence lifecycle: start -->
 ### REP-60 evidence lifecycle (mandatory)
 
 - Every pull request into `develop` retains its exact-final-head native GitHub
@@ -128,6 +129,7 @@
 - Agents, workflows, and repository-local rules MUST NOT duplicate that durable
   evidence per `develop` pull request or invoke local AI to create evidence.
   Repository-local rules may only make this lifecycle stricter.
+<!-- LIT REP-60 evidence lifecycle: end -->
 
 - Before push, run `python3 scripts/lit-push-ready.py push-ready`.
 - The only deterministic push-ready and required-CI entrypoint is
