@@ -121,6 +121,17 @@ print(value, end="")
 PY
 }
 
+require_docker_repository_component() {
+  local candidate="$1"
+
+  # Docker distribution repository components are lowercase alphanumerics
+  # separated by one dot, one/two underscores, or one/more hyphens.
+  if [[ ! "$candidate" =~ ^[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$ ]]; then
+    echo "ERROR: repository name is not a valid Docker repository component." >&2
+    exit 1
+  fi
+}
+
 github_repository_env="${GITHUB_REPOSITORY:-}"
 metadata_repository=""
 if [ -f .lit/repository.yml ]; then
@@ -167,6 +178,7 @@ fi
 github_sha="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo local)}"
 short_sha="${github_sha:0:12}"
 created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+require_docker_repository_component "$repo_name"
 image="local/${repo_name}:ci"
 
 validate_container_input() {
@@ -570,7 +582,7 @@ run_semantic_release_dry_run() {
     --security-opt no-new-privileges=true \
     --security-opt label=disable \
     --pids-limit 256 \
-    --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=256m" \
+    --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=1g" \
     --tmpfs "/root:rw,nosuid,nodev,size=1g" \
     "${readonly_workspace_args[@]}" \
     "${nested_git_args[@]}" \
@@ -628,16 +640,22 @@ JS
         sleep 0.1
       done
       github_api_url="http://127.0.0.1:$(cat /tmp/github-api-port)"
+      npm_install_log=/root/npm-ci.log
+      if ! npm ci --ignore-scripts --no-audit --no-fund \
+        >"$npm_install_log" 2>&1
+      then
+        cat "$npm_install_log"
+        exit 1
+      fi
+      cat "$npm_install_log"
+      if grep -Fq "TAR_ENTRY_ERROR" "$npm_install_log"; then
+        echo "ERROR: npm reported an incomplete dependency extraction." >&2
+        exit 1
+      fi
       GITHUB_ACTION=true \
       GITHUB_API_URL="$github_api_url" \
       GH_TOKEN=local-api-stub-placeholder \
-      npx --yes \
-      --package semantic-release@25 \
-      --package @semantic-release/commit-analyzer@13 \
-      --package @semantic-release/github@12 \
-      --package @semantic-release/release-notes-generator@14 \
-      --package conventional-changelog-conventionalcommits@9 \
-      --call="semantic_release_path=\$(command -v semantic-release); node \"\$(readlink -f \"\$semantic_release_path\")\" --dry-run --no-ci"'
+      node node_modules/semantic-release/bin/semantic-release.js --dry-run --no-ci'
 }
 
 run_ci() {
