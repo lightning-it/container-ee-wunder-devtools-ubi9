@@ -36,7 +36,8 @@ def download_artifact(artifact: CollectionArtifact, destination: Path) -> None:
                     and int(declared_length) != artifact.size
                 ):
                     raise RuntimeError(
-                        f"Unexpected Content-Length for {artifact.name}: {declared_length}"
+                        f"Unexpected Content-Length for {artifact.name}: "
+                        f"received={declared_length}, expected={artifact.size}"
                     )
                 with destination.open("xb") as output:
                     os.chmod(destination, 0o600)
@@ -57,8 +58,12 @@ def download_artifact(artifact: CollectionArtifact, destination: Path) -> None:
                 raise RuntimeError(
                     f"Artifact size mismatch for {artifact.name}: {received} != {artifact.size}"
                 )
-            if digest.hexdigest() != artifact.sha256:
-                raise RuntimeError(f"Artifact SHA-256 mismatch for {artifact.name}")
+            computed_sha256 = digest.hexdigest()
+            if computed_sha256 != artifact.sha256:
+                raise RuntimeError(
+                    f"Artifact SHA-256 mismatch for {artifact.name}: "
+                    f"computed={computed_sha256}, expected={artifact.sha256}"
+                )
             return
         except (OSError, RuntimeError, urllib.error.URLError, ValueError) as error:
             last_error = error

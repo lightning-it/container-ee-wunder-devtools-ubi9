@@ -142,7 +142,10 @@ def load_installed(collections_root: Path) -> dict[str, str]:
                 not isinstance(version, str)
                 or VERSION_PATTERN.fullmatch(version) is None
             ):
-                fail(f"Installed collection has an invalid version: {name}")
+                fail(
+                    f"Installed collection has an invalid version at {manifest_path}: "
+                    f"{version!r}"
+                )
             if name in installed:
                 fail(f"Duplicate installed collection: {name}")
             installed[name] = version

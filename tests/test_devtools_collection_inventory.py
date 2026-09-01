@@ -196,6 +196,18 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "must be a real directory"):
                 inventory.load_installed(collections_root)
 
+    def test_invalid_installed_version_identifies_manifest_and_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            collections_root = Path(temporary) / "collections"
+            collections_root.mkdir()
+            self.write_manifest(collections_root, "example.one", "not-a-version")
+            manifest = collections_root / "example" / "one" / "MANIFEST.json"
+            with self.assertRaisesRegex(
+                RuntimeError,
+                rf"invalid version at {manifest}: 'not-a-version'",
+            ):
+                inventory.load_installed(collections_root)
+
     def test_verified_download_accepts_exact_bytes(self) -> None:
         payload = b"bound collection artifact"
         artifact = inventory.CollectionArtifact(
@@ -232,7 +244,39 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
                     "urlopen",
                     side_effect=lambda *_args, **_kwargs: FakeResponse(payload),
                 ) as urlopen,
-                self.assertRaisesRegex(RuntimeError, "Unable to download verified"),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    rf"computed={hashlib.sha256(payload).hexdigest()}, expected={'0' * 64}",
+                ),
+            ):
+                installer.download_artifact(artifact, destination)
+            self.assertEqual(installer.DOWNLOAD_ATTEMPTS, urlopen.call_count)
+            self.assertFalse(destination.exists())
+
+    def test_verified_download_reports_declared_and_expected_size(self) -> None:
+        payload = b"bound collection artifact"
+        artifact = inventory.CollectionArtifact(
+            "example.one",
+            "1.2.3",
+            inventory.expected_artifact_url("example.one", "1.2.3"),
+            hashlib.sha256(payload).hexdigest(),
+            len(payload),
+        )
+        declared_length = len(payload) + 1
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "artifact.tar.gz"
+            with (
+                mock.patch.object(
+                    installer.urllib.request,
+                    "urlopen",
+                    side_effect=lambda *_args, **_kwargs: FakeResponse(
+                        payload, declared_length=declared_length
+                    ),
+                ) as urlopen,
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    rf"received={declared_length}, expected={len(payload)}",
+                ),
             ):
                 installer.download_artifact(artifact, destination)
             self.assertEqual(installer.DOWNLOAD_ATTEMPTS, urlopen.call_count)
