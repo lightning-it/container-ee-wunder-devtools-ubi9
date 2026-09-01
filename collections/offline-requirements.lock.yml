@@ -1,0 +1,74 @@
+---
+# Manually reviewed atomic version/URL/SHA-256/size tuples. The filename is
+# intentionally outside Renovate's version-only Galaxy manager.
+collections:
+  - name: amazon.aws
+    version: "10.3.2"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/amazon-aws-10.3.2.tar.gz"
+    sha256: "9c6ded292d7e79560f50a0b0ae9b03f184a7942d2be2ecfb3720e1108b7f2311"
+    size: 1300275
+  - name: ansible.posix
+    version: "2.2.2"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/ansible-posix-2.2.2.tar.gz"
+    sha256: "00a58c5d804c9adc99c3c3dc1b9f2246f4bb5f7337941440e0956f0e31c3b82b"
+    size: 166545
+  - name: community.aws
+    version: "10.1.1"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-aws-10.1.1.tar.gz"
+    sha256: "64cc4c5f4041f9c2f2b741bcde9864231c2366b2dfa38a057d54e37dcbab1b5b"
+    size: 807257
+  - name: community.crypto
+    version: "3.3.0"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-crypto-3.3.0.tar.gz"
+    sha256: "b17e3fe14fb934a38213204d8fe70c52fd63aabf6ea8ffd56e8fbaef70b69f18"
+    size: 596994
+  - name: community.docker
+    version: "5.2.2"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-docker-5.2.2.tar.gz"
+    sha256: "96f30eea08f719918bb223a3777271bf82ef72076eef204a4986dfcea94ce3f7"
+    size: 595920
+  - name: community.general
+    version: "11.4.9"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-general-11.4.9.tar.gz"
+    sha256: "18db0bed0d0d12165fc18b6a6430035fdda4b6ceaadada4d60a4d71e5bbe92eb"
+    size: 2713911
+  - name: community.hashi_vault
+    version: "7.1.0"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-hashi_vault-7.1.0.tar.gz"
+    sha256: "090e1b52f2889887baa3792abc4284f700200ae0359f534a14d0a34951db8e57"
+    size: 267852
+  - name: community.hrobot
+    version: "2.7.2"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-hrobot-2.7.2.tar.gz"
+    sha256: "6cc374ebede982027b9f6533100a2f624d3f3b7c961781cb54a5c3803f30063d"
+    size: 134752
+  - name: community.library_inventory_filtering_v1
+    version: "1.1.5"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-library_inventory_filtering_v1-1.1.5.tar.gz"
+    sha256: "cbb9e86c5b1720df21e940cedcd2f3e1226c38262623e090a883712610733851"
+    size: 36002
+  - name: community.vmware
+    version: "5.10.0"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-vmware-5.10.0.tar.gz"
+    sha256: "80910a58c552973d23ec3ecbdeaad181bcce140ffe244db658079bf695a22c0f"
+    size: 658480
+  - name: hetzner.hcloud
+    version: "6.10.0"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/hetzner-hcloud-6.10.0.tar.gz"
+    sha256: "f91f6f4761cce1cdea052a5e64e22beabb04dcc8f213729d0bc1c2835ab12ebd"
+    size: 268821
+  - name: lit.foundational
+    version: "1.32.0"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/lit-foundational-1.32.0.tar.gz"
+    sha256: "755e7aac974e833c0f60a0f30e06e75e4dcc24c2b029063cdd7215ff3841dcba"
+    size: 236720
+  - name: lit.rhel
+    version: "1.17.1"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/lit-rhel-1.17.1.tar.gz"
+    sha256: "160b87d8345f652f1ece44f7ac08e3af65a7c0b933d7517d5c9e1f44a9d09eac"
+    size: 159738
+  - name: vmware.vmware
+    version: "2.9.0"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/vmware-vmware-2.9.0.tar.gz"
+    sha256: "6761d3e69bcf828745edebe442566095bb45deb4e5b8a130c3197421a6e45a98"
+    size: 375678

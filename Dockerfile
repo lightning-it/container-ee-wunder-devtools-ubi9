@@ -453,9 +453,18 @@ ENV JAVA_HOME=/opt/java \
 # Python deps: this *is* the right place for pip
 COPY requirements.txt /tmp/requirements.txt
 COPY requirements.lock /tmp/requirements.lock
+COPY collections/offline-requirements.lock.yml /usr/local/share/wunder-devtools/collections.lock.yml
+COPY scripts/devtools_collection_inventory.py /usr/local/bin/devtools_collection_inventory.py
+COPY scripts/install_devtools_collections.py /usr/local/bin/install_devtools_collections.py
 RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
     rm -f /tmp/requirements.txt /tmp/requirements.lock && \
+    python /usr/local/bin/install_devtools_collections.py \
+      --lock /usr/local/share/wunder-devtools/collections.lock.yml \
+      --collections-path /usr/share/ansible/collections && \
+    python /usr/local/bin/devtools_collection_inventory.py \
+      --lock /usr/local/share/wunder-devtools/collections.lock.yml \
+      --collections-root /usr/share/ansible/collections/ansible_collections && \
     ansible --version && ansible-galaxy --version && antsibull-changelog --version && \
     shellcheck --version && actionlint --version && pre-commit --version && \
     ruff --version && mypy --version && uv --version && \
