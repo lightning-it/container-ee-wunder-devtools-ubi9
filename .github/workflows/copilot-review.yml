@@ -58,14 +58,11 @@ jobs:
       actions: read
       contents: read
       pull-requests: read
-    outputs:
-      active: ${{ steps.handoff.outputs.active }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
       - name: Verify protected Required-Workflow handoff provenance
-        id: handoff
         env:
           EVENT_BASE: ${{ github.event.pull_request.base.sha }}
           EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
@@ -75,7 +72,6 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          echo 'active=false' >>"${GITHUB_OUTPUT}"
           [[ "${REPOSITORY}" =~ ^lightning-it/[A-Za-z0-9_.-]+$ ]]
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
           [[ "${EVENT_BASE}" =~ ^[0-9a-f]{40}$ ]]
@@ -194,7 +190,6 @@ jobs:
               if [ "${step_count}" -eq 1 ] \
                 && [ "$(jq -r '.[0].status' <<<"${classification_steps}")" = completed ] \
                 && [ "$(jq -r '.[0].conclusion' <<<"${classification_steps}")" = success ]; then
-                echo 'active=true' >>"${GITHUB_OUTPUT}"
                 exit 0
               fi
               if [ "$(jq -r '.[0].status' <<<"${required_jobs}")" = completed ]; then
@@ -216,7 +211,6 @@ jobs:
       always() &&
       (needs.classify-main-trust-root-handoff.result == 'success' ||
         needs.classify-main-trust-root-handoff.result == 'skipped') &&
-      needs.classify-main-trust-root-handoff.outputs.active != 'true' &&
       github.event_name == 'pull_request_target' &&
       (github.event.action == 'opened' ||
         github.event.action == 'ready_for_review') &&
@@ -398,7 +392,6 @@ jobs:
       always() &&
       (needs.classify-main-trust-root-handoff.result == 'success' ||
         needs.classify-main-trust-root-handoff.result == 'skipped') &&
-      needs.classify-main-trust-root-handoff.outputs.active != 'true' &&
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' &&

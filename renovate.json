@@ -181,6 +181,12 @@
       "dependencyDashboardApproval": true
     },
     {
+      "description": "Keep the conventional-commits preset compatible with writer 8",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["conventional-changelog-conventionalcommits"],
+      "allowedVersions": "/^9\\./"
+    },
+    {
       "description": "Keep every component of the GitHub Actions toolchain on one version",
       "matchManagers": ["github-actions"],
       "groupName": "github-actions"
