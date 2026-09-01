@@ -158,6 +158,21 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
         renovate = (ROOT / "renovate.json").read_text(encoding="utf-8")
         self.assertNotIn("offline-requirements.lock.yml", renovate)
 
+    def test_patched_go_crypto_is_forced_into_vulnerable_binaries(self) -> None:
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("ARG GO_X_CRYPTO_VERSION=0.55.0", dockerfile)
+        self.assertIn(
+            'github.com/terraform-docs/terraform-docs "v${TF_DOCS_VERSION}" '
+            ". terraform-docs \\\n"
+            '      "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}"',
+            dockerfile,
+        )
+        self.assertIn(
+            'helm.sh/helm/v4 "v${HELM_VERSION}" ./cmd/helm helm \\\n'
+            '      "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}"',
+            dockerfile,
+        )
+
     def test_exact_inventory_passes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

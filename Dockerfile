@@ -25,7 +25,7 @@ ARG MOBY_V2_VERSION=2.0.0-beta.21
 ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
 ARG NODE_VERSION=24.19.0
 ARG WEBSITE_NODE_VERSION=24.18.0
-ARG GO_X_CRYPTO_VERSION=0.52.0
+ARG GO_X_CRYPTO_VERSION=0.55.0
 ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.56.0
 ARG GO_X_TEXT_VERSION=0.39.0
@@ -101,6 +101,7 @@ RUN /usr/local/lib/container-build-go-tool.sh \
 
 RUN /usr/local/lib/container-build-go-tool.sh \
       helm.sh/helm/v4 "v${HELM_VERSION}" ./cmd/helm helm \
+      "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
       "oras.land/oras-go/v2@v${ORAS_GO_VERSION}"
 
 RUN /usr/local/lib/container-build-go-tool.sh \
