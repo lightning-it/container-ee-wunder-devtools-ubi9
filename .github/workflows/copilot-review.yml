@@ -53,16 +53,23 @@ jobs:
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login == 'litroc'
+      github.event.pull_request.user.login == 'litroc' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.title ==
+        'fix(rep60): bootstrap protected main review trust root'
     permissions:
       actions: read
       contents: read
       pull-requests: read
+    outputs:
+      repository-producers-authorized: >-
+        ${{ steps.handoff.outputs.repository-producers-authorized }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
       - name: Verify protected Required-Workflow handoff provenance
+        id: handoff
         env:
           EVENT_BASE: ${{ github.event.pull_request.base.sha }}
           EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
@@ -72,6 +79,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          echo 'repository-producers-authorized=false' >>"${GITHUB_OUTPUT}"
           [[ "${REPOSITORY}" =~ ^lightning-it/[A-Za-z0-9_.-]+$ ]]
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
           [[ "${EVENT_BASE}" =~ ^[0-9a-f]{40}$ ]]
@@ -92,15 +100,13 @@ jobs:
               and .head.ref == $head_ref
               and .head.repo.full_name == $repository
             ' <<<"${pr}" >/dev/null
-          if ! jq -e '
+          jq -e '
               .user.login == "litroc"
               and .user.type == "User"
               and .base.ref == "main"
               and .title
                 == "fix(rep60): bootstrap protected main review trust root"
-            ' <<<"${pr}" >/dev/null; then
-            exit 0
-          fi
+            ' <<<"${pr}" >/dev/null
 
           required_workflow_path='.github/workflows/supplementary-current-revision-required.yml'
           required_workflow_url_prefix="${GITHUB_API_URL}/repos/${REPOSITORY}/actions/required_workflows/"
@@ -190,6 +196,9 @@ jobs:
               if [ "${step_count}" -eq 1 ] \
                 && [ "$(jq -r '.[0].status' <<<"${classification_steps}")" = completed ] \
                 && [ "$(jq -r '.[0].conclusion' <<<"${classification_steps}")" = success ]; then
+                # This protected step delegates review production to the
+                # repository jobs; it is not itself a completed review.
+                echo 'repository-producers-authorized=true' >>"${GITHUB_OUTPUT}"
                 exit 0
               fi
               if [ "$(jq -r '.[0].status' <<<"${required_jobs}")" = completed ]; then
@@ -209,8 +218,9 @@ jobs:
     needs: classify-main-trust-root-handoff
     if: >-
       always() &&
-      (needs.classify-main-trust-root-handoff.result == 'success' ||
-        needs.classify-main-trust-root-handoff.result == 'skipped') &&
+      (needs.classify-main-trust-root-handoff.result == 'skipped' ||
+        (needs.classify-main-trust-root-handoff.result == 'success' &&
+          needs.classify-main-trust-root-handoff.outputs.repository-producers-authorized == 'true')) &&
       github.event_name == 'pull_request_target' &&
       (github.event.action == 'opened' ||
         github.event.action == 'ready_for_review') &&
@@ -390,8 +400,9 @@ jobs:
     needs: classify-main-trust-root-handoff
     if: >-
       always() &&
-      (needs.classify-main-trust-root-handoff.result == 'success' ||
-        needs.classify-main-trust-root-handoff.result == 'skipped') &&
+      (needs.classify-main-trust-root-handoff.result == 'skipped' ||
+        (needs.classify-main-trust-root-handoff.result == 'success' &&
+          needs.classify-main-trust-root-handoff.outputs.repository-producers-authorized == 'true')) &&
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' &&
