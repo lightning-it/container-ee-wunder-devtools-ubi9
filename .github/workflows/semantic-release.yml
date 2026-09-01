@@ -50,6 +50,10 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7
         with:
           node-version: "24"
+          cache: npm
+
+      - name: Install locked release toolchain
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Mint release automation App token
         id: release-app
@@ -89,13 +93,7 @@ jobs:
           trap 'git config --local --unset-all http.https://github.com/.extraheader || true' EXIT
           git config --local http.https://github.com/.extraheader \
             "AUTHORIZATION: basic ${auth_header}"
-          npx --yes \
-            --package semantic-release@25 \
-            --package @semantic-release/commit-analyzer@13 \
-            --package @semantic-release/github@12 \
-            --package @semantic-release/release-notes-generator@14 \
-            --package conventional-changelog-conventionalcommits@9 \
-            semantic-release
+          node node_modules/semantic-release/bin/semantic-release.js
 
   release_dry_run:
     name: Semantic Release (dry run)
