@@ -758,6 +758,12 @@ jobs:
             fi
             sleep 3
           done
+          # An organization Required Workflow is reported in the target
+          # repository's run inventory with its protected source path in
+          # `.path`; that source file intentionally does not exist in the
+          # target repository tree. Bind the non-local path to the target's
+          # `actions/required_workflows` API URL below so a repository-local
+          # workflow with the same path cannot satisfy this proof.
           jq -e \
             --arg api_url "${GITHUB_API_URL}" \
               --arg base_ref "${base_ref}" \
