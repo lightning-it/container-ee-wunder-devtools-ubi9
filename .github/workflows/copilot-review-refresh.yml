@@ -485,6 +485,8 @@ jobs:
                       (($repository == "lightning-it/.github"
                         and $author == "lightning-it-shared-assets-sync[bot]"
                         and $base_ref == "develop")
+                        and $summary.review_path
+                          == "deterministic evidence-bound ancestry exemption"
                         and ($check.external_id |
                           test("^mlx90-current-revision:ancestry-backmerge:v6:"
                             + $pr + ":[1-9][0-9]*:" + $base + ":" + $head + "$")))

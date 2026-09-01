@@ -75,6 +75,10 @@ SECRET_PATH_MARKER = "secrets"
 SAFE_TERRAFORM_SECRET_MODULE_PATTERN = re.compile(
     r"[a-z0-9][a-z0-9_]*_secrets\.tf"
 )
+SAFE_PUBLIC_SECRET_ROUTE_PATTERN = re.compile(
+    r"(?:en/)?[a-z0-9]+(?:-[a-z0-9]+)*-secrets-"
+    r"[a-z0-9]+(?:-[a-z0-9]+)*\.html"
+)
 SECRET_CONTENT_PATTERNS = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(
@@ -114,7 +118,7 @@ AUTHORITATIVE_BASE_REFS = {
     "refs/remotes/origin/main": "main",
 }
 INTEGRATION_DIRECTORY_PREFIX = ".lit-integration-"
-COPILOT_DEVTOOL_IMAGE = "quay.io/l-it/ee-wunder-devtools-ubi9:v1.14.0@sha256:fca70c475088edd75d1635b11adb4aad9de65995eec455f6fb4e409b969afc60"
+COPILOT_DEVTOOL_IMAGE = "quay.io/l-it/ee-wunder-devtools-ubi9:v1.15.1@sha256:42b8d871f4b1bb1ecf305fc692906b7b7f5ae466e2c8787fdef9d62a32ce774c"
 CHECK_PROFILE = {
     "name": "repository-quality-profile",
     "command": ["scripts/lit-ci-profile.sh", "repository-quality"],
@@ -200,7 +204,7 @@ class PlannedChange(NamedTuple):
 
 
 def is_secret_like_path(path: str) -> bool:
-    """Reject secret markers except in Terraform source-module filenames."""
+    """Reject secret markers except narrow reviewed source-file patterns."""
     lowered = path.lower()
     if any(fragment in lowered for fragment in SECRET_PATH_FRAGMENTS):
         return True
@@ -211,6 +215,11 @@ def is_secret_like_path(path: str) -> bool:
         if (
             index == len(components) - 1
             and SAFE_TERRAFORM_SECRET_MODULE_PATTERN.fullmatch(component)
+        ):
+            continue
+        if (
+            index == len(components) - 1
+            and SAFE_PUBLIC_SECRET_ROUTE_PATTERN.fullmatch(lowered)
         ):
             continue
         return True
@@ -1223,28 +1232,41 @@ def expected_integration_tree(change: PlannedChange) -> str:
                         "--exclude-standard",
                         "-z",
                     )
-                    pre_refresh_clean = (
+                    pre_rewrite_clean = (
                         staged_drift.returncode == 0
                         and tracked_drift.returncode == 0
                         and not untracked_drift
                     )
-                    if pre_refresh_clean:
-                        refreshed = run(
+                    if pre_rewrite_clean:
+                        # A newly checked-out linked-worktree index can remain
+                        # racily clean for the filesystem's one-second Git
+                        # timestamp window.  A normal refresh can leave the
+                        # index file untouched and make the single recovery
+                        # merge fail identically.
+                        # Wait past the window only after all three drift
+                        # proofs pass, then force a Git 2.34-compatible rewrite
+                        # in index format version 2.  This preserves every
+                        # index entry while moving the index timestamp beyond
+                        # the racy-clean window.  Re-prove status before the
+                        # one permitted retry.
+                        time.sleep(1.1)
+                        rewritten = run(
                             [
                                 "git",
                                 "-c",
                                 f"core.hooksPath={disabled_hooks}",
                                 "update-index",
-                                "--really-refresh",
+                                "--index-version",
+                                "2",
                             ],
                             capture=True,
                             cwd=worktree,
                         )
-                        if refreshed.returncode:
+                        if rewritten.returncode:
                             raise RuntimeError(
-                                "could not refresh the compatibility merge "
-                                "worktree after a transient stash race: "
-                                + refreshed.stdout.strip()
+                                "could not rewrite the compatibility merge "
+                                "worktree index after a transient stash race: "
+                                + rewritten.stdout.strip()
                             )
                         status_value = git_output_at(
                             worktree,

@@ -25,7 +25,7 @@ ARG MOBY_V2_VERSION=2.0.0-beta.21
 ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
 ARG NODE_VERSION=24.19.0
 ARG WEBSITE_NODE_VERSION=24.18.0
-ARG GO_X_CRYPTO_VERSION=0.52.0
+ARG GO_X_CRYPTO_VERSION=0.55.0
 ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.56.0
 ARG GO_X_TEXT_VERSION=0.39.0
@@ -101,6 +101,7 @@ RUN /usr/local/lib/container-build-go-tool.sh \
 
 RUN /usr/local/lib/container-build-go-tool.sh \
       helm.sh/helm/v4 "v${HELM_VERSION}" ./cmd/helm helm \
+      "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
       "oras.land/oras-go/v2@v${ORAS_GO_VERSION}"
 
 RUN /usr/local/lib/container-build-go-tool.sh \
@@ -453,9 +454,18 @@ ENV JAVA_HOME=/opt/java \
 # Python deps: this *is* the right place for pip
 COPY requirements.txt /tmp/requirements.txt
 COPY requirements.lock /tmp/requirements.lock
+COPY collections/offline-requirements.lock.yml /usr/local/share/wunder-devtools/collections.lock.yml
+COPY scripts/devtools_collection_inventory.py /usr/local/bin/devtools_collection_inventory.py
+COPY scripts/install_devtools_collections.py /usr/local/bin/install_devtools_collections.py
 RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
     rm -f /tmp/requirements.txt /tmp/requirements.lock && \
+    python /usr/local/bin/install_devtools_collections.py \
+      --lock /usr/local/share/wunder-devtools/collections.lock.yml \
+      --collections-path /usr/share/ansible/collections && \
+    python /usr/local/bin/devtools_collection_inventory.py \
+      --lock /usr/local/share/wunder-devtools/collections.lock.yml \
+      --collections-root /usr/share/ansible/collections/ansible_collections && \
     ansible --version && ansible-galaxy --version && antsibull-changelog --version && \
     shellcheck --version && actionlint --version && pre-commit --version && \
     ruff --version && mypy --version && uv --version && \

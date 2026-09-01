@@ -54,7 +54,6 @@ jobs:
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_BASE: ${{ github.event.pull_request.base.ref }}
-          PR_DRAFT: ${{ github.event.pull_request.draft }}
           PR_HEAD: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
@@ -75,10 +74,8 @@ jobs:
           repository_quality_prefix="chore/sync-repository-quality-${repo_name}-"
           shared_assets_prefix="chore/sync-shared-assets-lit-${repo_name}-"
 
-          if [ "$PR_DRAFT" != "false" ]; then
-            trusted=false
-          fi
-
+          # Draft/Ready is mutable, and concurrent PR events can arrive out of
+          # order. The live PR read below is the only authoritative state.
           if ! [[ "$SYNC_APP_ID" =~ ^[1-9][0-9]*$ ]]; then
             trusted=false
           fi

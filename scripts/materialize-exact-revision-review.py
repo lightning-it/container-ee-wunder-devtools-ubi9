@@ -646,6 +646,9 @@ def git_output(
 
 def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[str, Any]:
     validate_inputs(arguments)
+    runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
+    if not runner_temp.is_dir():
+        fail("RUNNER_TEMP must identify an existing directory.")
     if output_directory.exists():
         fail(f"Review workspace already exists: {output_directory}")
     try:
@@ -653,9 +656,6 @@ def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[s
     except OSError as error:
         fail(f"Unable to create the exact-revision review workspace: {error}")
 
-    runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
-    if not runner_temp.is_dir():
-        fail("RUNNER_TEMP must identify an existing directory.")
     with tempfile.TemporaryDirectory(prefix="exact-revision-materializer.", dir=runner_temp) as temporary:
         temporary_root = Path(temporary)
         home = temporary_root / "home"
