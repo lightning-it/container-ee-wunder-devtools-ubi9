@@ -57,6 +57,7 @@ jobs:
     env:
       BASE_REF: ${{ inputs.base_ref }}
       DISPATCH_REF: ${{ github.ref }}
+      DISPATCH_BASE_SHA: ${{ github.sha }}
       EXPECTED_BASE: ${{ inputs.expected_base }}
       EXPECTED_HEAD: ${{ inputs.expected_head }}
       PR_NUMBER: ${{ inputs.pr_number }}
@@ -71,8 +72,11 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${DISPATCH_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${TRUSTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${DISPATCH_BASE_SHA}" = "${EXPECTED_BASE}"
           test "${TRUSTED_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
+          test "${TRUSTED_WORKFLOW_SHA}" = "${DISPATCH_BASE_SHA}"
           install -d -m 0700 trusted-controller
           gh api \
             "repos/${REPOSITORY}/contents/scripts/materialize-exact-revision-review.py?ref=${TRUSTED_WORKFLOW_SHA}" \
