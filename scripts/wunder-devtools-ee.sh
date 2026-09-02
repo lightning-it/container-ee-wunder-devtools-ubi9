@@ -62,6 +62,14 @@ fail_closed() {
   exit 1
 }
 
+LINKED_WORKTREE_GIT_POINTER=""
+cleanup_linked_worktree_git_pointer() {
+  if [ -n "$LINKED_WORKTREE_GIT_POINTER" ]; then
+    rm -f -- "$LINKED_WORKTREE_GIT_POINTER"
+  fi
+}
+trap cleanup_linked_worktree_git_pointer EXIT
+
 sanitize_docker_host_env() {
   local host_sock
   if [[ "${DOCKER_HOST:-}" == unix://* ]]; then
@@ -160,7 +168,7 @@ DOCKER_ARGS+=(-e "WUNDER_DEVTOOLS_HOST_WORKSPACE=${WORKSPACE_REAL}")
 configure_linked_worktree_git_mounts() {
   local git_file="${WORKSPACE_REAL}/.git"
   local gitdir_raw gitdir_host common_raw common_host reported_gitdir reported_common
-  local gitdir_relative common_mount compatibility_common_mount
+  local gitdir_relative common_mount git_pointer_mount pointer_root
   local line_count
 
   [ -f "$git_file" ] || return 0
@@ -235,18 +243,34 @@ configure_linked_worktree_git_mounts() {
       ;;
   esac
   common_mount="${common_host}:/run/wunder-git/common:ro"
-  # Some security-sensitive repository tools deliberately discard GIT_DIR,
-  # GIT_COMMON_DIR, and GIT_WORK_TREE before invoking Git. Keep the validated
-  # linked-worktree .git pointer usable for those reads by exposing the same
-  # read-only common directory at its canonical absolute path as well.
-  compatibility_common_mount="${common_host}:${common_host}:ro"
+  # Some repository tools deliberately discard GIT_DIR, GIT_COMMON_DIR, and
+  # GIT_WORK_TREE before invoking Git. Overlay the worktree's host-absolute
+  # .git pointer with a minimal container-local pointer instead of mounting the
+  # common directory at an arbitrary host path in the read-only rootfs.
+  pointer_root="${TMPDIR:-/tmp}"
+  case "$pointer_root" in
+    /*) ;;
+    *) fail_closed "TMPDIR must be an absolute host path" ;;
+  esac
+  case "$pointer_root" in
+    *:*|*,*) fail_closed "TMPDIR contains an unsafe mount delimiter" ;;
+  esac
+  LINKED_WORKTREE_GIT_POINTER="$(mktemp "${pointer_root%/}/wunder-devtools-git-pointer.XXXXXX")" \
+    || fail_closed "cannot create linked-worktree Git pointer"
+  if [ ! -f "$LINKED_WORKTREE_GIT_POINTER" ] || [ -L "$LINKED_WORKTREE_GIT_POINTER" ]; then
+    fail_closed "linked-worktree Git pointer is not a regular file"
+  fi
+  printf 'gitdir: /run/wunder-git/common/%s\n' "$gitdir_relative" \
+    >"$LINKED_WORKTREE_GIT_POINTER"
+  chmod 0444 "$LINKED_WORKTREE_GIT_POINTER"
+  git_pointer_mount="${LINKED_WORKTREE_GIT_POINTER}:/workspace/.git:ro"
   if [ "$CONTAINER_BIN" = "podman" ] && [ "$(uname -s)" = "Linux" ]; then
     common_mount="${common_mount},z"
-    compatibility_common_mount="${compatibility_common_mount},z"
+    git_pointer_mount="${git_pointer_mount},z"
   fi
   DOCKER_ARGS+=(
     -v "$common_mount"
-    -v "$compatibility_common_mount"
+    -v "$git_pointer_mount"
     -e "GIT_DIR=/run/wunder-git/common/${gitdir_relative}"
     -e GIT_COMMON_DIR=/run/wunder-git/common
     -e GIT_WORK_TREE=/workspace

@@ -62,8 +62,8 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      repository-producers-authorized: >-
-        ${{ steps.handoff.outputs.repository-producers-authorized }}
+      repository_producers_authorized: >-
+        ${{ steps.handoff.outputs.repository_producers_authorized }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -79,7 +79,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          echo 'repository-producers-authorized=false' >>"${GITHUB_OUTPUT}"
+          echo 'repository_producers_authorized=false' >>"${GITHUB_OUTPUT}"
           [[ "${REPOSITORY}" =~ ^lightning-it/[A-Za-z0-9_.-]+$ ]]
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
           [[ "${EVENT_BASE}" =~ ^[0-9a-f]{40}$ ]]
@@ -198,7 +198,7 @@ jobs:
                 && [ "$(jq -r '.[0].conclusion' <<<"${classification_steps}")" = success ]; then
                 # This protected step delegates review production to the
                 # repository jobs; it is not itself a completed review.
-                echo 'repository-producers-authorized=true' >>"${GITHUB_OUTPUT}"
+                echo 'repository_producers_authorized=true' >>"${GITHUB_OUTPUT}"
                 exit 0
               fi
               if [ "$(jq -r '.[0].status' <<<"${required_jobs}")" = completed ]; then
@@ -220,7 +220,7 @@ jobs:
       always() &&
       (needs.classify-main-trust-root-handoff.result == 'skipped' ||
         (needs.classify-main-trust-root-handoff.result == 'success' &&
-          needs.classify-main-trust-root-handoff.outputs.repository-producers-authorized == 'true')) &&
+          needs.classify-main-trust-root-handoff.outputs.repository_producers_authorized == 'true')) &&
       github.event_name == 'pull_request_target' &&
       (github.event.action == 'opened' ||
         github.event.action == 'ready_for_review') &&
@@ -402,7 +402,7 @@ jobs:
       always() &&
       (needs.classify-main-trust-root-handoff.result == 'skipped' ||
         (needs.classify-main-trust-root-handoff.result == 'success' &&
-          needs.classify-main-trust-root-handoff.outputs.repository-producers-authorized == 'true')) &&
+          needs.classify-main-trust-root-handoff.outputs.repository_producers_authorized == 'true')) &&
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' &&
