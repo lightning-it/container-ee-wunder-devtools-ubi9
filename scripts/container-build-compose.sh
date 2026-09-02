@@ -10,8 +10,8 @@ report_error() {
 }
 trap 'report_error "$LINENO"' ERR
 
-if [ "$#" -ne 5 ]; then
-  echo "usage: $0 <compose-version> <buildx-version> <moby-v2-version> <namesgenerator-sha256> <x-mod-version>" >&2
+if [ "$#" -ne 6 ]; then
+  echo "usage: $0 <compose-version> <buildx-version> <moby-v2-version> <namesgenerator-sha256> <x-mod-version> <grpc-version>" >&2
   exit 2
 fi
 
@@ -20,12 +20,14 @@ buildx_version="$2"
 moby_v2_version="$3"
 namesgenerator_sha256="$4"
 x_mod_version="$5"
+grpc_version="$6"
 
 for coordinate in \
   "$compose_version" \
   "$buildx_version" \
   "$moby_v2_version" \
-  "$x_mod_version"
+  "$x_mod_version" \
+  "$grpc_version"
 do
   if [[ ! "$coordinate" =~ ^[0-9A-Za-z._+-]+$ ]]; then
     echo "ERROR: invalid Compose build coordinate: ${coordinate}" >&2
@@ -96,6 +98,8 @@ cd "$compose_build_dir"
 go mod edit "-replace=github.com/docker/buildx=${buildx_build_dir}"
 go mod edit \
   "-replace=golang.org/x/mod=golang.org/x/mod@v${x_mod_version}"
+go mod edit \
+  "-replace=google.golang.org/grpc=google.golang.org/grpc@v${grpc_version}"
 go mod tidy
 if go list -m all | grep -Eq '^github.com/docker/docker([[:space:]]|$)'; then
   echo "ERROR: deprecated github.com/docker/docker remains in Compose module graph" >&2
@@ -113,6 +117,17 @@ if go version -m /out/docker-compose \
   | grep -Eq $'\tdep\tgithub.com/docker/docker\t'
 then
   echo "ERROR: deprecated github.com/docker/docker linked into Compose" >&2
+  exit 1
+fi
+effective_grpc_version="$(
+  go version -m /out/docker-compose | awk -v module='google.golang.org/grpc' '
+    $1 == "dep" && $2 == module { version = $3 }
+    $1 == "=>" && $2 == module { version = $3 }
+    END { print version }
+  '
+)"
+if [ "$effective_grpc_version" != "v${grpc_version}" ]; then
+  echo "ERROR: docker-compose does not link google.golang.org/grpc v${grpc_version}" >&2
   exit 1
 fi
 
