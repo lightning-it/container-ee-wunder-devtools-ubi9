@@ -72,12 +72,16 @@ trap cleanup_linked_worktree_git_pointer EXIT
 
 sanitize_docker_host_env() {
   local host_sock
-  if [[ "${DOCKER_HOST:-}" == unix://* ]]; then
-    host_sock="${DOCKER_HOST#unix://}"
-    if [ ! -S "$host_sock" ]; then
-      unset DOCKER_HOST
-    fi
-  fi
+  case "${DOCKER_HOST:-}" in
+    "") ;;
+    unix://*)
+      host_sock="${DOCKER_HOST#unix://}"
+      if [ ! -S "$host_sock" ]; then
+        unset DOCKER_HOST
+      fi
+      ;;
+    *) fail_closed "DOCKER_HOST must reference a local unix:// socket" ;;
+  esac
 }
 
 docker_usable() {
@@ -91,7 +95,13 @@ podman_usable() {
   podman info >/dev/null 2>&1
 }
 
+sanitize_docker_host_env
+
+EXPLICIT_CONTAINER_ENGINE=0
 CONTAINER_BIN="${WUNDER_CONTAINER_ENGINE:-}"
+if [ -n "$CONTAINER_BIN" ]; then
+  EXPLICIT_CONTAINER_ENGINE=1
+fi
 if [ -z "$CONTAINER_BIN" ]; then
   if docker_usable; then
     CONTAINER_BIN="docker"
@@ -287,11 +297,25 @@ fi
 SOURCE_ROOT_CONTAINER="${WUNDER_DEVTOOLS_SOURCE_ROOT_CONTAINER:-/sources}"
 mounted_source_root=0
 if [ "$SOURCE_ROOT_POLICY" = enabled ] && [ -d "$SOURCE_ROOT_HOST" ]; then
+  case "$SOURCE_ROOT_CONTAINER" in
+    /*) ;;
+    *) fail_closed "source-root container path must be absolute" ;;
+  esac
+  case "$SOURCE_ROOT_CONTAINER" in
+    *:*)
+      fail_closed "source-root container path contains an unsafe mount delimiter"
+      ;;
+  esac
   shopt -s nullglob
   for collection_dir in "$SOURCE_ROOT_HOST"/ansible-collection-*; do
     [ -d "$collection_dir" ] || continue
     collection_real="$(cd "$collection_dir" && pwd -P)"
     [ "$collection_real" = "$WORKSPACE_REAL" ] && continue
+    case "$collection_real" in
+      *:*)
+        fail_closed "resolved collection source path contains an unsafe mount delimiter"
+        ;;
+    esac
     collection_base="$(basename "$collection_real")"
     collection_mount="${collection_real}:${SOURCE_ROOT_CONTAINER}/${collection_base}:ro"
     if [ "$CONTAINER_BIN" = "podman" ] && [ "$(uname -s)" = "Linux" ]; then
@@ -337,18 +361,30 @@ if [ "$RUN_AS_HOST_UID_POLICY" = "1" ]; then
 fi
 
 if [ -n "$DOCKER_SOCKET" ]; then
-  DOCKER_SOCKET_REAL="$DOCKER_SOCKET"
-  if command -v python3 >/dev/null 2>&1; then
-    DOCKER_SOCKET_REAL="$(
-      python3 - "$DOCKER_SOCKET" <<'PY'
-import os
-import sys
-print(os.path.realpath(sys.argv[1]))
-PY
-    )"
+  case "$DOCKER_SOCKET" in
+    /*) ;;
+    *) fail_closed "Docker-compatible socket path must be absolute" ;;
+  esac
+  if ! command -v realpath >/dev/null 2>&1; then
+    fail_closed "realpath is required to validate the Docker-compatible socket path"
+  fi
+  if ! DOCKER_SOCKET_REAL="$(realpath "$DOCKER_SOCKET" 2>/dev/null)"; then
+    fail_closed "unable to resolve Docker-compatible socket path"
   fi
 
-  DOCKER_ARGS+=(-v "$DOCKER_SOCKET_REAL":/var/run/docker.sock)
+  if [ -z "$DOCKER_SOCKET_REAL" ]; then
+    fail_closed "resolved Docker-compatible socket path is empty"
+  fi
+  case "$DOCKER_SOCKET_REAL" in
+    *:*)
+      fail_closed "resolved Docker-compatible socket path contains an unsafe mount delimiter"
+      ;;
+  esac
+  if [ ! -S "$DOCKER_SOCKET_REAL" ]; then
+    fail_closed "resolved Docker-compatible socket path is not a socket"
+  fi
+
+  DOCKER_ARGS+=(-v "${DOCKER_SOCKET_REAL}:/var/run/docker.sock")
   DOCKER_ARGS+=(-e DOCKER_HOST=unix:///var/run/docker.sock)
   DOCKER_ARGS+=(-e "WUNDER_DEVTOOLS_DOCKER_SOCKET_HOST=${DOCKER_SOCKET_REAL}")
 
@@ -400,6 +436,12 @@ if [ "$CONTAINER_BIN" = "docker" ]; then
       DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
       export DOCKER_HOST
     fi
+  fi
+fi
+
+if [ "$EXPLICIT_CONTAINER_ENGINE" = "1" ] && [ "$CONTAINER_BIN" = "docker" ]; then
+  if ! docker_usable; then
+    fail_closed "selected docker engine is not usable"
   fi
 fi
 
