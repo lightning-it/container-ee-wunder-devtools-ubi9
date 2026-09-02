@@ -173,6 +173,56 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
             dockerfile,
         )
 
+    def test_patched_grpc_is_forced_into_every_affected_binary(self) -> None:
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        compose_builder = (ROOT / "scripts/container-build-compose.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("ARG GO_GRPC_VERSION=1.83.1", dockerfile)
+        self.assertEqual(
+            2,
+            dockerfile.count(
+                'go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"'
+            ),
+        )
+        self.assertIn(
+            'github.com/cli/cli/v2 "v${GH_VERSION}" ./cmd/gh gh \\\n'
+            '      "golang.org/x/mod@v${GO_X_MOD_VERSION}" \\\n'
+            '      "google.golang.org/grpc@v${GO_GRPC_VERSION}"',
+            dockerfile,
+        )
+        self.assertIn(
+            'cp vendor.sum go.sum && \\\n'
+            '    GOFLAGS=-mod=mod go get '
+            '"google.golang.org/grpc@v${GO_GRPC_VERSION}"',
+            dockerfile,
+        )
+        self.assertIn("CGO_ENABLED=0 GOFLAGS=-mod=mod go build", dockerfile)
+        self.assertIn(
+            "for binary in terraform tflint terraform-docs gh docker "
+            "docker-compose",
+            dockerfile,
+        )
+        self.assertNotIn("-mod=vendor", dockerfile)
+        self.assertIn("<grpc-version>", compose_builder)
+        self.assertIn("invalid container build coordinate", compose_builder)
+        self.assertNotIn("invalid Compose build coordinate", compose_builder)
+        self.assertIn(
+            '"-replace=google.golang.org/grpc='
+            'google.golang.org/grpc@v${grpc_version}"',
+            compose_builder,
+        )
+        self.assertIn(
+            'effective_grpc_version="$(\n'
+            "  go version -m /out/docker-compose",
+            compose_builder,
+        )
+        self.assertIn(
+            '"${effective_grpc_version:-<missing>}" "$grpc_version"',
+            compose_builder,
+        )
+
     def test_exact_inventory_passes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
