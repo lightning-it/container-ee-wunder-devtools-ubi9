@@ -348,7 +348,19 @@ PY
     )"
   fi
 
-  DOCKER_ARGS+=(-v "$DOCKER_SOCKET_REAL":/var/run/docker.sock)
+  if [ -z "$DOCKER_SOCKET_REAL" ]; then
+    fail_closed "resolved Docker-compatible socket path is empty"
+  fi
+  case "$DOCKER_SOCKET_REAL" in
+    *:*)
+      fail_closed "resolved Docker-compatible socket path contains an unsafe mount delimiter"
+      ;;
+  esac
+  if [ ! -S "$DOCKER_SOCKET_REAL" ]; then
+    fail_closed "resolved Docker-compatible socket path is not a socket"
+  fi
+
+  DOCKER_ARGS+=(-v "${DOCKER_SOCKET_REAL}:/var/run/docker.sock")
   DOCKER_ARGS+=(-e DOCKER_HOST=unix:///var/run/docker.sock)
   DOCKER_ARGS+=(-e "WUNDER_DEVTOOLS_DOCKER_SOCKET_HOST=${DOCKER_SOCKET_REAL}")
 
