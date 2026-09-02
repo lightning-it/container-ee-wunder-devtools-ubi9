@@ -129,7 +129,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2",
             "ARG GO_VERSION=1.26.7",
             "ARG GO_X_MOD_VERSION=0.40.0",
-            "ARG GO_GRPC_VERSION=1.82.1",
+            "ARG GO_GRPC_VERSION=1.83.1",
             "ARG TF_SOURCE_COMMIT=87488977e32a400445e0c0b4d95c0713a5eee941",
             "ARG TF_SOURCE_SHA256=b4036b35e69a57e4a4b83bafba337a5c8e3ab2c0b1812df92528dec0958ed61e",
             "ARG DOCKER_SOURCE_COMMIT=a7dcaa6fdb6ed04aacbfdc76357fdae01605609e",

@@ -242,7 +242,7 @@ jobs:
 
           read -r owner name <<<"${REPOSITORY//\// }"
           # shellcheck disable=SC2016 # GraphQL variables are intentionally literal.
-          query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){nodes{author{login} body pullRequestReview{commit{oid}}}}}}}}}'
+          query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{author{login} body pullRequestReview{commit{oid}}}}}}}}}'
           threads='[]'
           after=''
           while true; do
@@ -254,6 +254,11 @@ jobs:
             after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"${page}")"
             test -n "${after}"
           done
+          if ! jq -e 'all(.[]; .comments.pageInfo.hasNextPage == false)' \
+            <<<"${threads}" >/dev/null; then
+            echo "A review thread exceeds the bounded 100-comment inspection limit." >&2
+            exit 1
+          fi
           count="$(jq --arg login "${COPILOT_LOGIN}" --arg sha "${head_sha}" '[.[] | select(.isResolved == false) | select(any(.comments.nodes[]; .author.login == $login and .pullRequestReview.commit.oid == $sha))] | length' <<<"${threads}")"
           if [ "${count}" -gt 0 ]; then actionable=true; fi
           finding_hash="$(jq -cS --arg login "${COPILOT_LOGIN}" --arg sha "${head_sha}" '[.[] | select(.isResolved == false) | [.comments.nodes[] | select(.author.login == $login and .pullRequestReview.commit.oid == $sha) | .body]]' <<<"${threads}" | sha256sum | cut -d' ' -f1)"

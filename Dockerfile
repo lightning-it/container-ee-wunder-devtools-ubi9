@@ -29,7 +29,7 @@ ARG GO_X_CRYPTO_VERSION=0.55.0
 ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.56.0
 ARG GO_X_TEXT_VERSION=0.39.0
-ARG GO_GRPC_VERSION=1.82.1
+ARG GO_GRPC_VERSION=1.83.1
 ARG ORAS_GO_VERSION=2.6.2
 
 # hadolint ignore=DL3002
@@ -79,6 +79,9 @@ RUN curl -fsSLo /tmp/terraform.tar.gz \
     mkdir -p /tmp/terraform-source && \
     tar -xzf /tmp/terraform.tar.gz --strip-components=1 -C /tmp/terraform-source && \
     cd /tmp/terraform-source && \
+    go get "google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
+    test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = \
+      "v${GO_GRPC_VERSION}" && \
     CGO_ENABLED=0 go build \
       -trimpath -buildvcs=false \
       -ldflags="-s -w -X github.com/hashicorp/terraform/version.dev=no" \
@@ -106,7 +109,8 @@ RUN /usr/local/lib/container-build-go-tool.sh \
 
 RUN /usr/local/lib/container-build-go-tool.sh \
       github.com/cli/cli/v2 "v${GH_VERSION}" ./cmd/gh gh \
-      "golang.org/x/mod@v${GO_X_MOD_VERSION}"
+      "golang.org/x/mod@v${GO_X_MOD_VERSION}" \
+      "google.golang.org/grpc@v${GO_GRPC_VERSION}"
 
 RUN curl -fsSLo /tmp/docker-cli.tar.gz \
       "https://github.com/docker/cli/archive/${DOCKER_SOURCE_COMMIT}.tar.gz" && \
@@ -118,8 +122,11 @@ RUN curl -fsSLo /tmp/docker-cli.tar.gz \
     [[ "$docker_source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] && \
     cp vendor.mod go.mod && \
     cp vendor.sum go.sum && \
-    CGO_ENABLED=0 go build \
-      -mod=vendor -trimpath -buildvcs=false \
+    GOFLAGS=-mod=mod go get "google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
+    test "$(GOFLAGS=-mod=mod go list -m -f '{{.Version}}' google.golang.org/grpc)" = \
+      "v${GO_GRPC_VERSION}" && \
+    CGO_ENABLED=0 GOFLAGS=-mod=mod go build \
+      -trimpath -buildvcs=false \
       -ldflags="-s -w \
         -X github.com/docker/cli/cli/version.Version=${docker_source_version} \
         -X github.com/docker/cli/cli/version.GitCommit=${DOCKER_SOURCE_COMMIT}" \
@@ -134,7 +141,25 @@ RUN /usr/local/lib/container-build-compose.sh \
       "${BUILDX_VERSION}" \
       "${MOBY_V2_VERSION}" \
       "${MOBY_NAMESGENERATOR_SHA256}" \
-      "${GO_X_MOD_VERSION}"
+      "${GO_X_MOD_VERSION}" \
+      "${GO_GRPC_VERSION}"
+
+RUN set -euo pipefail; \
+    for binary in terraform tflint terraform-docs gh docker docker-compose; do \
+      effective_version="$( \
+        go version -m "/out/${binary}" | \
+          awk -v module='google.golang.org/grpc' ' \
+            $1 == "dep" && $2 == module { version = $3 } \
+            $1 == "=>" && $2 == module { version = $3 } \
+            END { print version } \
+          ' \
+      )"; \
+      if [ "${effective_version}" != "v${GO_GRPC_VERSION}" ]; then \
+        printf 'ERROR: %s links google.golang.org/grpc %s, expected v%s\n' \
+          "${binary}" "${effective_version:-<missing>}" "${GO_GRPC_VERSION}" >&2; \
+        exit 1; \
+      fi; \
+    done
 
 # Node.js LTS plus deterministic repository validators. The independently
 # selected website runtime remains bundled so repositories declaring its exact

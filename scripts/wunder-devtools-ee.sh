@@ -62,14 +62,26 @@ fail_closed() {
   exit 1
 }
 
+LINKED_WORKTREE_GIT_POINTER=""
+cleanup_linked_worktree_git_pointer() {
+  if [ -n "$LINKED_WORKTREE_GIT_POINTER" ]; then
+    rm -f -- "$LINKED_WORKTREE_GIT_POINTER"
+  fi
+}
+trap cleanup_linked_worktree_git_pointer EXIT
+
 sanitize_docker_host_env() {
   local host_sock
-  if [[ "${DOCKER_HOST:-}" == unix://* ]]; then
-    host_sock="${DOCKER_HOST#unix://}"
-    if [ ! -S "$host_sock" ]; then
-      unset DOCKER_HOST
-    fi
-  fi
+  case "${DOCKER_HOST:-}" in
+    "") ;;
+    unix://*)
+      host_sock="${DOCKER_HOST#unix://}"
+      if [ ! -S "$host_sock" ]; then
+        unset DOCKER_HOST
+      fi
+      ;;
+    *) fail_closed "DOCKER_HOST must reference a local unix:// socket" ;;
+  esac
 }
 
 docker_usable() {
@@ -83,7 +95,13 @@ podman_usable() {
   podman info >/dev/null 2>&1
 }
 
+sanitize_docker_host_env
+
+EXPLICIT_CONTAINER_ENGINE=0
 CONTAINER_BIN="${WUNDER_CONTAINER_ENGINE:-}"
+if [ -n "$CONTAINER_BIN" ]; then
+  EXPLICIT_CONTAINER_ENGINE=1
+fi
 if [ -z "$CONTAINER_BIN" ]; then
   if docker_usable; then
     CONTAINER_BIN="docker"
@@ -129,12 +147,15 @@ fi
 DOCKER_ARGS=(
   -w /workspace
   -e HOME="${CONTAINER_HOME}"
+  # Keep language-runtime build products off the generic noexec /tmp mount.
+  # CONTAINER_HOME is a fresh executable tmpfs for every invocation.
+  -e TMPDIR="${CONTAINER_HOME}"
   --read-only
   --network "$NETWORK_MODE"
   --cap-drop ALL
   --security-opt no-new-privileges=true
   --pids-limit 1024
-  --tmpfs "/tmp:rw,nosuid,nodev,size=2g"
+  --tmpfs "/tmp:rw,nosuid,nodev,noexec,size=2g"
   --tmpfs "$RUN_TMPFS_MOUNT"
   --tmpfs "$HOME_TMPFS_MOUNT"
 )
@@ -160,7 +181,7 @@ DOCKER_ARGS+=(-e "WUNDER_DEVTOOLS_HOST_WORKSPACE=${WORKSPACE_REAL}")
 configure_linked_worktree_git_mounts() {
   local git_file="${WORKSPACE_REAL}/.git"
   local gitdir_raw gitdir_host common_raw common_host reported_gitdir reported_common
-  local gitdir_relative common_mount compatibility_common_mount
+  local gitdir_relative common_mount git_pointer_mount pointer_root
   local line_count
 
   [ -f "$git_file" ] || return 0
@@ -235,18 +256,34 @@ configure_linked_worktree_git_mounts() {
       ;;
   esac
   common_mount="${common_host}:/run/wunder-git/common:ro"
-  # Some security-sensitive repository tools deliberately discard GIT_DIR,
-  # GIT_COMMON_DIR, and GIT_WORK_TREE before invoking Git. Keep the validated
-  # linked-worktree .git pointer usable for those reads by exposing the same
-  # read-only common directory at its canonical absolute path as well.
-  compatibility_common_mount="${common_host}:${common_host}:ro"
+  # Some repository tools deliberately discard GIT_DIR, GIT_COMMON_DIR, and
+  # GIT_WORK_TREE before invoking Git. Overlay the worktree's host-absolute
+  # .git pointer with a minimal container-local pointer instead of mounting the
+  # common directory at an arbitrary host path in the read-only rootfs.
+  pointer_root="${TMPDIR:-/tmp}"
+  case "$pointer_root" in
+    /*) ;;
+    *) fail_closed "TMPDIR must be an absolute host path" ;;
+  esac
+  case "$pointer_root" in
+    *:*|*,*) fail_closed "TMPDIR contains an unsafe mount delimiter" ;;
+  esac
+  LINKED_WORKTREE_GIT_POINTER="$(mktemp "${pointer_root%/}/wunder-devtools-git-pointer.XXXXXX")" \
+    || fail_closed "cannot create linked-worktree Git pointer"
+  if [ ! -f "$LINKED_WORKTREE_GIT_POINTER" ] || [ -L "$LINKED_WORKTREE_GIT_POINTER" ]; then
+    fail_closed "linked-worktree Git pointer is not a regular file"
+  fi
+  printf 'gitdir: /run/wunder-git/common/%s\n' "$gitdir_relative" \
+    >"$LINKED_WORKTREE_GIT_POINTER"
+  chmod 0444 "$LINKED_WORKTREE_GIT_POINTER"
+  git_pointer_mount="${LINKED_WORKTREE_GIT_POINTER}:/workspace/.git:ro"
   if [ "$CONTAINER_BIN" = "podman" ] && [ "$(uname -s)" = "Linux" ]; then
     common_mount="${common_mount},z"
-    compatibility_common_mount="${compatibility_common_mount},z"
+    git_pointer_mount="${git_pointer_mount},z"
   fi
   DOCKER_ARGS+=(
     -v "$common_mount"
-    -v "$compatibility_common_mount"
+    -v "$git_pointer_mount"
     -e "GIT_DIR=/run/wunder-git/common/${gitdir_relative}"
     -e GIT_COMMON_DIR=/run/wunder-git/common
     -e GIT_WORK_TREE=/workspace
@@ -263,11 +300,25 @@ fi
 SOURCE_ROOT_CONTAINER="${WUNDER_DEVTOOLS_SOURCE_ROOT_CONTAINER:-/sources}"
 mounted_source_root=0
 if [ "$SOURCE_ROOT_POLICY" = enabled ] && [ -d "$SOURCE_ROOT_HOST" ]; then
+  case "$SOURCE_ROOT_CONTAINER" in
+    /*) ;;
+    *) fail_closed "source-root container path must be absolute" ;;
+  esac
+  case "$SOURCE_ROOT_CONTAINER" in
+    *:*)
+      fail_closed "source-root container path contains an unsafe mount delimiter"
+      ;;
+  esac
   shopt -s nullglob
   for collection_dir in "$SOURCE_ROOT_HOST"/ansible-collection-*; do
     [ -d "$collection_dir" ] || continue
     collection_real="$(cd "$collection_dir" && pwd -P)"
     [ "$collection_real" = "$WORKSPACE_REAL" ] && continue
+    case "$collection_real" in
+      *:*)
+        fail_closed "resolved collection source path contains an unsafe mount delimiter"
+        ;;
+    esac
     collection_base="$(basename "$collection_real")"
     collection_mount="${collection_real}:${SOURCE_ROOT_CONTAINER}/${collection_base}:ro"
     if [ "$CONTAINER_BIN" = "podman" ] && [ "$(uname -s)" = "Linux" ]; then
@@ -313,18 +364,30 @@ if [ "$RUN_AS_HOST_UID_POLICY" = "1" ]; then
 fi
 
 if [ -n "$DOCKER_SOCKET" ]; then
-  DOCKER_SOCKET_REAL="$DOCKER_SOCKET"
-  if command -v python3 >/dev/null 2>&1; then
-    DOCKER_SOCKET_REAL="$(
-      python3 - "$DOCKER_SOCKET" <<'PY'
-import os
-import sys
-print(os.path.realpath(sys.argv[1]))
-PY
-    )"
+  case "$DOCKER_SOCKET" in
+    /*) ;;
+    *) fail_closed "Docker-compatible socket path must be absolute" ;;
+  esac
+  if ! command -v realpath >/dev/null 2>&1; then
+    fail_closed "realpath is required to validate the Docker-compatible socket path"
+  fi
+  if ! DOCKER_SOCKET_REAL="$(realpath "$DOCKER_SOCKET" 2>/dev/null)"; then
+    fail_closed "unable to resolve Docker-compatible socket path"
   fi
 
-  DOCKER_ARGS+=(-v "$DOCKER_SOCKET_REAL":/var/run/docker.sock)
+  if [ -z "$DOCKER_SOCKET_REAL" ]; then
+    fail_closed "resolved Docker-compatible socket path is empty"
+  fi
+  case "$DOCKER_SOCKET_REAL" in
+    *:*)
+      fail_closed "resolved Docker-compatible socket path contains an unsafe mount delimiter"
+      ;;
+  esac
+  if [ ! -S "$DOCKER_SOCKET_REAL" ]; then
+    fail_closed "resolved Docker-compatible socket path is not a socket"
+  fi
+
+  DOCKER_ARGS+=(-v "${DOCKER_SOCKET_REAL}:/var/run/docker.sock")
   DOCKER_ARGS+=(-e DOCKER_HOST=unix:///var/run/docker.sock)
   DOCKER_ARGS+=(-e "WUNDER_DEVTOOLS_DOCKER_SOCKET_HOST=${DOCKER_SOCKET_REAL}")
 
@@ -376,6 +439,12 @@ if [ "$CONTAINER_BIN" = "docker" ]; then
       DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
       export DOCKER_HOST
     fi
+  fi
+fi
+
+if [ "$EXPLICIT_CONTAINER_ENGINE" = "1" ] && [ "$CONTAINER_BIN" = "docker" ]; then
+  if ! docker_usable; then
+    fail_closed "selected docker engine is not usable"
   fi
 fi
 
