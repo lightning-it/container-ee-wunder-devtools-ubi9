@@ -30,7 +30,7 @@ for coordinate in \
   "$grpc_version"
 do
   if [[ ! "$coordinate" =~ ^[0-9A-Za-z._+-]+$ ]]; then
-    echo "ERROR: invalid Compose build coordinate: ${coordinate}" >&2
+    echo "ERROR: invalid container build coordinate: ${coordinate}" >&2
     exit 2
   fi
 done

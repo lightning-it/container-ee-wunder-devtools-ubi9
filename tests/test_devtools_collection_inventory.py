@@ -206,6 +206,8 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
         )
         self.assertNotIn("-mod=vendor", dockerfile)
         self.assertIn("<grpc-version>", compose_builder)
+        self.assertIn("invalid container build coordinate", compose_builder)
+        self.assertNotIn("invalid Compose build coordinate", compose_builder)
         self.assertIn(
             '"-replace=google.golang.org/grpc='
             'google.golang.org/grpc@v${grpc_version}"',
