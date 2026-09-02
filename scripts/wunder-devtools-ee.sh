@@ -142,7 +142,7 @@ DOCKER_ARGS=(
   --cap-drop ALL
   --security-opt no-new-privileges=true
   --pids-limit 1024
-  --tmpfs "/tmp:rw,nosuid,nodev,size=2g"
+  --tmpfs "/tmp:rw,nosuid,nodev,noexec,size=2g"
   --tmpfs "$RUN_TMPFS_MOUNT"
   --tmpfs "$HOME_TMPFS_MOUNT"
 )

@@ -33,7 +33,7 @@ policy files, protected workflows, required checks, and release evidence.
 
 ## Scorecard
 
-Enabled through `.github/workflows/openssf-scorecard.yml` with scheduled, manual, and `branch_protection_rule` triggers. The workflow executes a digest-pinned Scorecard container, retains SARIF as an artifact of the GitHub Actions workflow run, and uploads SARIF to GitHub code scanning where the repository supports it. Repository-run results are not published to the OpenSSF API because its workflow verifier does not currently accept the immutable container invocation.
+Enabled through `.github/workflows/openssf-scorecard.yml` with scheduled, manual, and `branch_protection_rule` triggers. The workflow pins the `ossf/scorecard-action` source to an exact Git commit, while that action's metadata currently selects its Scorecard runtime image by version tag rather than registry digest. It retains SARIF as an artifact of the GitHub Actions workflow run and uploads SARIF to GitHub code scanning where the repository supports it. This control therefore does not claim a digest-pinned runtime image. Repository-run results are not published to the OpenSSF API: `publish_results` is forced to `false`, and the workflow does not request OIDC.
 
 The Scorecard badge is included in `README.md` only for public repositories where the workflow is synced. It can reflect OpenSSF's independent scan rather than a repository-published result.
 
