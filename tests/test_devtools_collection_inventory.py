@@ -218,6 +218,10 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
             "  go version -m /out/docker-compose",
             compose_builder,
         )
+        self.assertIn(
+            '"${effective_grpc_version:-<missing>}" "$grpc_version"',
+            compose_builder,
+        )
 
     def test_exact_inventory_passes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

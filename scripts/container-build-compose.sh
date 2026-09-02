@@ -127,7 +127,8 @@ effective_grpc_version="$(
   '
 )"
 if [ "$effective_grpc_version" != "v${grpc_version}" ]; then
-  echo "ERROR: docker-compose does not link google.golang.org/grpc v${grpc_version}" >&2
+  printf 'ERROR: docker-compose links google.golang.org/grpc %s, expected v%s\n' \
+    "${effective_grpc_version:-<missing>}" "$grpc_version" >&2
   exit 1
 fi
 
