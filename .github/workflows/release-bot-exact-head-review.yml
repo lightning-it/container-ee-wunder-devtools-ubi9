@@ -57,12 +57,13 @@ jobs:
     env:
       BASE_REF: ${{ inputs.base_ref }}
       DISPATCH_REF: ${{ github.ref }}
+      DISPATCH_BASE_SHA: ${{ github.sha }}
       EXPECTED_BASE: ${{ inputs.expected_base }}
       EXPECTED_HEAD: ${{ inputs.expected_head }}
       PR_NUMBER: ${{ inputs.pr_number }}
       REPOSITORY: ${{ github.repository }}
       TRIGGER: app_dispatch
-      TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      EXECUTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
 
     steps:
       - name: Load protected materializer, prompt, and schema
@@ -71,11 +72,14 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-          [[ "${TRUSTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
-          test "${TRUSTED_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
+          [[ "${DISPATCH_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXECUTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${DISPATCH_BASE_SHA}" = "${EXPECTED_BASE}"
+          test "${EXECUTED_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
+          test "${EXECUTED_WORKFLOW_SHA}" = "${DISPATCH_BASE_SHA}"
           install -d -m 0700 trusted-controller
           gh api \
-            "repos/${REPOSITORY}/contents/scripts/materialize-exact-revision-review.py?ref=${TRUSTED_WORKFLOW_SHA}" \
+            "repos/${REPOSITORY}/contents/scripts/materialize-exact-revision-review.py?ref=${EXECUTED_WORKFLOW_SHA}" \
             --jq .content | base64 --decode >trusted-controller/materialize.py
           chmod 0500 trusted-controller/materialize.py
           python3 trusted-controller/materialize.py materialize \
@@ -84,18 +88,18 @@ jobs:
             --base-ref "${BASE_REF}" \
             --expected-base "${EXPECTED_BASE}" \
             --expected-head "${EXPECTED_HEAD}" \
-            --trusted-workflow-sha "${TRUSTED_WORKFLOW_SHA}" \
+            --trusted-workflow-sha "${EXECUTED_WORKFLOW_SHA}" \
             --trigger "${TRIGGER}" \
             --dispatch-ref "${DISPATCH_REF}" \
             --review-directory exact-revision-review >/dev/null
           gh api \
-            "repos/${REPOSITORY}/contents/.github/codex/prompts/review-exact-head.md?ref=${TRUSTED_WORKFLOW_SHA}" \
+            "repos/${REPOSITORY}/contents/.github/codex/prompts/review-exact-head.md?ref=${EXECUTED_WORKFLOW_SHA}" \
             --jq .content | base64 --decode >exact-revision-review/review-prompt.md
           gh api \
-            "repos/${REPOSITORY}/contents/.github/codex/schemas/exact-head-review.schema.json?ref=${TRUSTED_WORKFLOW_SHA}" \
+            "repos/${REPOSITORY}/contents/.github/codex/schemas/exact-head-review.schema.json?ref=${EXECUTED_WORKFLOW_SHA}" \
             --jq .content | base64 --decode >exact-revision-review/review-schema.json
           gh api \
-            "repos/${REPOSITORY}/contents/.github/workflows/release-bot-exact-head-review.yml?ref=${TRUSTED_WORKFLOW_SHA}" \
+            "repos/${REPOSITORY}/contents/.github/workflows/release-bot-exact-head-review.yml?ref=${EXECUTED_WORKFLOW_SHA}" \
             --jq .content | base64 --decode >trusted-controller/workflow.yml
           test -s exact-revision-review/review-prompt.md
           jq -e '.type == "object"' exact-revision-review/review-schema.json >/dev/null
@@ -105,7 +109,7 @@ jobs:
             --base-ref "${BASE_REF}" \
             --expected-base "${EXPECTED_BASE}" \
             --expected-head "${EXPECTED_HEAD}" \
-            --trusted-workflow-sha "${TRUSTED_WORKFLOW_SHA}" \
+            --trusted-workflow-sha "${EXECUTED_WORKFLOW_SHA}" \
             --trigger "${TRIGGER}" \
             --dispatch-ref "${DISPATCH_REF}" \
             --review-directory exact-revision-review \
@@ -639,7 +643,7 @@ jobs:
             --base-ref "${BASE_REF}" \
             --expected-base "${EXPECTED_BASE}" \
             --expected-head "${EXPECTED_HEAD}" \
-            --trusted-workflow-sha "${TRUSTED_WORKFLOW_SHA}" \
+            --trusted-workflow-sha "${EXECUTED_WORKFLOW_SHA}" \
             --trigger "${TRIGGER}" \
             --dispatch-ref "${DISPATCH_REF}" \
             --review-directory exact-revision-review \
@@ -685,7 +689,7 @@ jobs:
             --arg integration_tree "${integration_tree_sha}" \
             --arg diff_sha256 "${diff_sha256}" \
             --arg input_sha256 "${input_sha256}" \
-            --arg workflow_sha "${TRUSTED_WORKFLOW_SHA}" \
+            --arg workflow_sha "${EXECUTED_WORKFLOW_SHA}" \
             --argjson pr_number "${PR_NUMBER}" \
             --argjson run_id "${producer_run_id}" \
             --arg run_url "${producer_run_url}" \
