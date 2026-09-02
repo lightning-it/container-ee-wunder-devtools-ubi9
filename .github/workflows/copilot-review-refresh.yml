@@ -4,14 +4,10 @@
 ---
 name: Refresh Copilot review gate
 run-name: >-
-  REP-60 review refresh PR #${{ github.event.pull_request.number || inputs.pr_number }}
-  review ${{ github.event.review.id || github.event.comment.pull_request_review_id || inputs.review_id }}
+  REP-60 protected review refresh PR #${{ inputs.pr_number }}
+  review ${{ inputs.review_id }}
 
 on:
-  pull_request_review:
-    types: [submitted, edited, dismissed]
-  pull_request_review_comment:
-    types: [created, edited, deleted]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -39,43 +35,16 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: >-
-    copilot-review-refresh-${{ github.event.pull_request.number || inputs.pr_number }}
-  # Review replies and thread updates can arrive as a burst. Let each tiny
-  # refresher finish so canceled helper checks do not pollute the PR status.
+  group: copilot-review-refresh-${{ github.repository }}-${{ inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
   refresh-canonical-gate:
     name: Refresh canonical Copilot review gate
     if: >-
-      (
-        github.event_name == 'workflow_dispatch' &&
-        github.ref == 'refs/heads/develop' &&
-        github.actor == github.triggering_actor
-      ) ||
-      (
-        (
-          github.event_name == 'pull_request_review' &&
-          (
-            (
-              contains(fromJSON('["Copilot","copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]"]'), github.actor) &&
-              github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
-            ) ||
-            contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.review.author_association)
-          )
-        ) ||
-        (
-          github.event_name == 'pull_request_review_comment' &&
-          (
-            (
-              contains(fromJSON('["Copilot","copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]"]'), github.actor) &&
-              github.event.comment.user.login == 'copilot-pull-request-reviewer[bot]'
-            ) ||
-            contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.comment.author_association)
-          )
-        )
-      )
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/develop' &&
+      github.actor == github.triggering_actor
     permissions:
       actions: write
       checks: write
@@ -112,6 +81,7 @@ jobs:
           EVENT_REVIEW_ID: ${{ github.event.review.id }}
         run: |
           set -euo pipefail
+          test "${GITHUB_REPOSITORY_OWNER}" = lightning-it
           if [ "${EVENT_NAME}" = workflow_dispatch ]; then
             test "${GITHUB_REF}" = refs/heads/develop
             test "${GITHUB_ACTOR}" = "${GITHUB_TRIGGERING_ACTOR}"
@@ -133,8 +103,18 @@ jobs:
             "${REPOSITORY}/.github/workflows/copilot-review-refresh.yml@refs/heads/develop"
           default_branch="$(gh api "repos/${REPOSITORY}" --jq .default_branch)"
           test "${default_branch}" = develop
-          default_head="$(gh api \
-            "repos/${REPOSITORY}/branches/${default_branch}" --jq .commit.sha)"
+          default_state="$(gh api \
+            "repos/${REPOSITORY}/branches/${default_branch}")"
+          default_head="$(jq -er \
+            '.commit.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            <<<"${default_state}")"
+          jq -e \
+            --arg branch "${default_branch}" \
+            --arg head "${default_head}" '
+              .name == $branch
+              and .protected == true
+              and .commit.sha == $head
+            ' <<<"${default_state}" >/dev/null
           controller_ancestry="$(gh api \
             "repos/${REPOSITORY}/compare/${CONTROLLER_SHA}...${default_head}")"
           jq -e \
@@ -236,10 +216,14 @@ jobs:
           has_live_write_permission() {
             local actor="$1"
             local actor_permission
-            [[ "${actor}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]]
-            actor_permission="$(gh api \
-              "repos/${REPOSITORY}/collaborators/${actor}/permission")"
-            jq -e \
+            if ! [[ "${actor}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]]; then
+              return 1
+            fi
+            if ! actor_permission="$(gh api \
+              "repos/${REPOSITORY}/collaborators/${actor}/permission")"; then
+              return 1
+            fi
+            if ! jq -e \
               --arg actor "${actor}" '
                 (.permission | type == "string")
                 and (.role_name | type == "string" and length > 0)
@@ -251,8 +235,57 @@ jobs:
                 and (.permission == "write"
                   or .permission == "maintain"
                   or .permission == "admin")
-              ' <<<"${actor_permission}" >/dev/null
+              ' <<<"${actor_permission}" >/dev/null; then
+              return 1
+            fi
+            return 0
           }
+          verify_check_run_state() {
+            local check_id="$1" expected_name="$2" expected_head="$3"
+            local expected_status="$4" expected_conclusion="$5"
+            local expected_url="$6" expected_title="$7" expected_summary="$8"
+            local expected_external_id="$9" attempt response
+            [[ "${check_id}" =~ ^[1-9][0-9]*$ ]] || return 1
+            for attempt in $(seq 1 5); do
+              if response="$(gh api \
+                  "repos/${REPOSITORY}/check-runs/${check_id}")" \
+                && jq -e \
+                  --arg conclusion "${expected_conclusion}" \
+                  --arg external_id "${expected_external_id}" \
+                  --arg head "${expected_head}" \
+                  --arg name "${expected_name}" \
+                  --arg status "${expected_status}" \
+                  --arg summary "${expected_summary}" \
+                  --arg title "${expected_title}" \
+                  --arg url "${expected_url}" \
+                  --argjson check_id "${check_id}" '
+                    .id == $check_id
+                    and .name == $name
+                    and .app.id == 15368
+                    and .app.slug == "github-actions"
+                    and .head_sha == $head
+                    and .status == $status
+                    and (if $conclusion == "null" then .conclusion == null
+                      else .conclusion == $conclusion end)
+                    and .details_url == $url
+                    and .output.title == $title
+                    and .output.summary == $summary
+                    and ($external_id == "" or .external_id == $external_id)
+                  ' <<<"${response}" >/dev/null; then
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                echo "Check ${check_id} did not converge to the intended persisted state." >&2
+                return 1
+              fi
+              sleep 1
+            done
+          }
+
+          if ! has_live_write_permission "${GITHUB_ACTOR}"; then
+            echo "Dispatch actor lacks current write permission." >&2
+            exit 1
+          fi
 
           neutral_pages="$(gh api --paginate --slurp \
             "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
@@ -530,6 +563,9 @@ jobs:
                 -f "details_url=${check_url}" \
                 -f 'output[title]=Current revision review invalidated' \
                 -f "output[summary]=${evidence}" >/dev/null
+              verify_check_run_state "${check_id}" 'Current revision review' \
+                "${HEAD_SHA}" completed failure "${check_url}" \
+                'Current revision review invalidated' "${evidence}" ''
               neutral_count=0
             fi
 
@@ -563,6 +599,9 @@ jobs:
                 -f "details_url=${check_url}" \
                 -f 'output[title]=Current revision review invalidated' \
                 -f "output[summary]=${evidence}" >/dev/null
+              verify_check_run_state "${check_id}" 'Current revision review' \
+                "${HEAD_SHA}" completed failure "${check_url}" \
+                'Current revision review invalidated' "${evidence}" ''
               echo "Unresolved review-thread comments exceed the verified page; refusing to preserve PASS." >&2
               exit 1
             fi
@@ -582,6 +621,9 @@ jobs:
                 -f "details_url=${check_url}" \
                 -f 'output[title]=Current revision review invalidated' \
                 -f "output[summary]=${evidence}" >/dev/null
+              verify_check_run_state "${check_id}" 'Current revision review' \
+                "${HEAD_SHA}" completed failure "${check_url}" \
+                'Current revision review invalidated' "${evidence}" ''
               echo "Current-head Copilot findings invalidate the neutral PASS." >&2
               exit 1
             fi
@@ -772,6 +814,7 @@ jobs:
                 (contains("unable to review this pull request") | not)
                 and (contains("premium request quota") | not)
                 and (contains("premium requests quota") | not)
+                and (contains("suppressed comments") | not)
                 and (contains("encountered an error") | not))
             ' <<<"${review}" >/dev/null
           if [ "${rerun_reason}" = delayed-review ] \
@@ -982,22 +1025,37 @@ jobs:
             exit_code="$?"
             trap - EXIT
             if [ "${exit_code}" -ne 0 ] && [[ "${authorization_id:-}" =~ ^[1-9][0-9]*$ ]]; then
-              gh api --method PATCH \
+              if ! gh api --method PATCH \
                 "repos/${REPOSITORY}/check-runs/${authorization_id}" \
                 -f status=completed \
                 -f conclusion=failure \
                 -f 'output[title]=Late review rerun rejected' \
-                -f "output[summary]=${authorization_summary}" >/dev/null || true
+                -f "output[summary]=${authorization_summary}" >/dev/null; then
+                echo "Unable to persist rejected late-review authorization." >&2
+              elif ! verify_check_run_state "${authorization_id}" \
+                  'Late review rerun authorization' "${HEAD_SHA}" completed failure \
+                  "${refresh_url}" 'Late review rerun rejected' \
+                  "${authorization_summary}" "${authorization_external_id}"; then
+                echo "Rejected late-review authorization did not persist." >&2
+              fi
             fi
             exit "${exit_code}"
           }
           trap fail_authorization EXIT
+          verify_check_run_state "${authorization_id}" \
+            'Late review rerun authorization' "${HEAD_SHA}" in_progress null \
+            "${refresh_url}" 'Late review rerun pending' \
+            "${authorization_summary}" "${authorization_external_id}"
           gh api --method PATCH \
             "repos/${REPOSITORY}/check-runs/${authorization_id}" \
             -f status=completed \
             -f conclusion=success \
             -f 'output[title]=Late review rerun authorized' \
             -f "output[summary]=${authorization_summary}" >/dev/null
+          verify_check_run_state "${authorization_id}" \
+            'Late review rerun authorization' "${HEAD_SHA}" completed success \
+            "${refresh_url}" 'Late review rerun authorized' \
+            "${authorization_summary}" "${authorization_external_id}"
           current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
           test "$(labels_sha256_from_pr "${current_pr}")" = "${PR_LABELS_SHA256}"
           test "$(read_metadata_revision)" = "${PR_LAST_EDITED_AT}"

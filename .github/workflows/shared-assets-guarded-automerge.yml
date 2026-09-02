@@ -15,31 +15,277 @@ on:
         ready_for_review,
         converted_to_draft,
       ]
+  workflow_run:
+    workflows: ["Re-evaluate protected current-revision evidence"]
+    types: [completed]
+    branches: [develop]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: >-
+    ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.id }}
   cancel-in-progress: true
 
 jobs:
-  verify-shared-assets:
-    name: Verify trusted shared-assets PR
+  classify-shared-assets-invocation:
+    name: Classify protected shared-assets finalizer invocation
     if: >-
-      github.event.pull_request.user.login
-        == 'lightning-it-shared-assets-sync[bot]'
-      && github.event.pull_request.head.repo.full_name == github.repository
-      && !(
-        github.repository == 'lightning-it/.github'
-        && github.event.pull_request.base.ref == 'develop'
-        && startsWith(github.event.pull_request.head.ref, 'backmerge/')
-        && endsWith(github.event.pull_request.head.ref, '-main')
-        && startsWith(
-          github.event.pull_request.title,
-          'chore(governance): record main ancestry before '
+      (
+        github.event_name == 'pull_request'
+        && github.event.pull_request.user.login
+          == 'lightning-it-shared-assets-sync[bot]'
+        && github.event.pull_request.head.repo.full_name == github.repository
+        && !(
+          github.repository == 'lightning-it/.github'
+          && github.event.pull_request.base.ref == 'develop'
+          && startsWith(github.event.pull_request.head.ref, 'backmerge/')
+          && endsWith(github.event.pull_request.head.ref, '-main')
+          && startsWith(
+            github.event.pull_request.title,
+            'chore(governance): record main ancestry before '
+          )
         )
       )
+      ||
+      (
+        github.event_name == 'workflow_run'
+        && github.event.workflow_run.event == 'workflow_dispatch'
+        && github.event.workflow_run.status == 'completed'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.path
+          == '.github/workflows/current-revision-rerun.yml'
+        && github.event.workflow_run.head_branch == 'develop'
+        && github.event.workflow_run.run_attempt == 1
+        && github.event.workflow_run.actor.login == 'github-actions[bot]'
+        && github.event.workflow_run.triggering_actor.login
+          == 'github-actions[bot]'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      accepted: ${{ steps.classify.outputs.accepted }}
+      author: ${{ steps.classify.outputs.author }}
+      base_ref: ${{ steps.classify.outputs.base_ref }}
+      base_sha: ${{ steps.classify.outputs.base_sha }}
+      head_ref: ${{ steps.classify.outputs.head_ref }}
+      head_repo: ${{ steps.classify.outputs.head_repo }}
+      head_sha: ${{ steps.classify.outputs.head_sha }}
+      pr_number: ${{ steps.classify.outputs.pr_number }}
+      title: ${{ steps.classify.outputs.title }}
+
+    steps:
+      - name: Bind event, protected helper and live pull request
+        id: classify
+        env:
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_PR_TITLE: ${{ github.event.pull_request.title }}
+          EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          GH_TOKEN: ${{ github.token }}
+          HELPER_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          HELPER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HELPER_DISPLAY_TITLE: ${{ github.event.workflow_run.display_title }}
+          HELPER_EVENT: ${{ github.event.workflow_run.event }}
+          HELPER_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HELPER_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HELPER_PATH: ${{ github.event.workflow_run.path }}
+          HELPER_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          HELPER_RUN_ID: ${{ github.event.workflow_run.id }}
+          HELPER_STATUS: ${{ github.event.workflow_run.status }}
+          HELPER_TRIGGERING_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          LISTENER_REF: ${{ github.ref }}
+          LISTENER_REF_PROTECTED: ${{ github.ref_protected }}
+          LISTENER_SHA: ${{ github.sha }}
+          LISTENER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          LISTENER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          readonly SYNC_APP_BOT="lightning-it-shared-assets-sync[bot]"
+          case "${EVENT_NAME}" in
+            pull_request)
+              test "${EVENT_ACTOR}" = "${SYNC_APP_BOT}"
+              test "${EVENT_TRIGGERING_ACTOR}" = "${SYNC_APP_BOT}"
+              pr_number="${EVENT_PR_NUMBER}"
+              expected_base="${EVENT_BASE_SHA}"
+              expected_head="${EVENT_HEAD_SHA}"
+              base_ref="${EVENT_BASE_REF}"
+              ;;
+            workflow_run)
+              [[ "${EVENT_DEFAULT_BRANCH}" =~ ^(develop|main)$ ]]
+              [[ "${LISTENER_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
+              test "${LISTENER_REF_PROTECTED}" = true
+              test "${LISTENER_REF}" = "refs/heads/${EVENT_DEFAULT_BRANCH}"
+              test "${LISTENER_SHA}" = "${LISTENER_WORKFLOW_SHA}"
+              test "${LISTENER_WORKFLOW_REF}" = \
+                "${REPO}/.github/workflows/shared-assets-guarded-automerge.yml@${LISTENER_REF}"
+              live_repository="$(gh api "repos/${REPO}")"
+              jq -e \
+                --arg default_branch "${EVENT_DEFAULT_BRANCH}" \
+                --arg repository "${REPO}" '
+                .full_name == $repository
+                and .default_branch == $default_branch
+              ' <<<"${live_repository}" >/dev/null
+              live_default_branch="$(gh api \
+                "repos/${REPO}/branches/${EVENT_DEFAULT_BRANCH}")"
+              jq -e \
+                --arg default_branch "${EVENT_DEFAULT_BRANCH}" \
+                --arg workflow_sha "${LISTENER_WORKFLOW_SHA}" '
+                .name == $default_branch
+                and .protected == true
+                and .commit.sha == $workflow_sha
+              ' <<<"${live_default_branch}" >/dev/null
+              test "${HELPER_ACTOR}" = 'github-actions[bot]'
+              test "${HELPER_TRIGGERING_ACTOR}" = 'github-actions[bot]'
+              test "${HELPER_EVENT}" = workflow_dispatch
+              test "${HELPER_STATUS}" = completed
+              test "${HELPER_CONCLUSION}" = success
+              test "${HELPER_PATH}" = '.github/workflows/current-revision-rerun.yml'
+              test "${HELPER_HEAD_BRANCH}" = develop
+              test "${HELPER_RUN_ATTEMPT}" = 1
+              [[ "${HELPER_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+              test "${HELPER_RUN_ID}" != "${GITHUB_RUN_ID}"
+              if [[ "${HELPER_DISPLAY_TITLE}" =~ ^Protected\ verifier\ handoff\ PR\ \#([1-9][0-9]*)\ producer\ ([1-9][0-9]*)\ head\ ([0-9a-f]{40})$ ]]; then
+                pr_number="${BASH_REMATCH[1]}"
+                expected_head="${BASH_REMATCH[3]}"
+              else
+                echo "Malformed protected helper title binding." >&2
+                exit 1
+              fi
+              expected_base="${HELPER_HEAD_SHA}"
+              base_ref=develop
+              helper="$(gh api "repos/${REPO}/actions/runs/${HELPER_RUN_ID}")"
+              jq -e \
+                --arg api_url "${GITHUB_API_URL}" \
+                --arg base_ref "${base_ref}" \
+                --arg base_sha "${expected_base}" \
+                --arg repository "${REPO}" \
+                --arg title "${HELPER_DISPLAY_TITLE}" \
+                --argjson run_id "${HELPER_RUN_ID}" '
+                .id == $run_id
+                and .event == "workflow_dispatch"
+                and .path == ".github/workflows/current-revision-rerun.yml"
+                and .head_branch == $base_ref
+                and .head_sha == $base_sha
+                and .run_attempt == 1
+                and .display_title == $title
+                and .actor.login == "github-actions[bot]"
+                and .triggering_actor.login == "github-actions[bot]"
+                and .url == ($api_url + "/repos/" + $repository
+                  + "/actions/runs/" + ($run_id | tostring))
+                and .status == "completed" and .conclusion == "success"
+              ' <<<"${helper}" >/dev/null
+              helper_jobs="$(gh api --paginate --slurp \
+                "repos/${REPO}/actions/runs/${HELPER_RUN_ID}/jobs?filter=all&per_page=100")"
+              jq -e '
+                [ .[] | .jobs[]
+                  | select(.name == "Re-run the one protected verifier attempt")
+                ] as $matches
+                | ($matches | length) == 1
+                and $matches[0].run_attempt == 1
+                and ($matches[0].runner_id | type) == "number"
+                and $matches[0].runner_id > 0
+                and ($matches[0].steps | type) == "array"
+                and ($matches[0].steps | length) > 0
+                and $matches[0].status == "completed"
+                and $matches[0].conclusion == "success"
+              ' <<<"${helper_jobs}" >/dev/null
+              ;;
+            *)
+              echo "Unsupported shared-assets finalizer event." >&2
+              exit 1
+              ;;
+          esac
+
+          [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${expected_base}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${expected_head}" =~ ^[0-9a-f]{40}$ ]]
+          test "${base_ref}" = develop
+          live_pr="$(gh api "repos/${REPO}/pulls/${pr_number}")"
+          jq -e \
+            --arg author "${SYNC_APP_BOT}" \
+            --arg base_ref "${base_ref}" \
+            --arg base_sha "${expected_base}" \
+            --arg head_sha "${expected_head}" \
+            --arg repository "${REPO}" \
+            --argjson pr_number "${pr_number}" '
+            .number == $pr_number
+            and .state == "open" and .draft == false
+            and .user.login == $author
+            and .base.ref == $base_ref and .base.sha == $base_sha
+            and .head.repo.full_name == $repository
+            and .head.sha == $head_sha
+            and ([.labels[].name] | index("chore") != null)
+            and ([.labels[].name] | index("shared-assets-lit") != null)
+          ' <<<"${live_pr}" >/dev/null
+          head_ref="$(jq -er '.head.ref | select(type == "string")' \
+            <<<"${live_pr}")"
+          head_repo="$(jq -er '.head.repo.full_name | select(type == "string")' \
+            <<<"${live_pr}")"
+          title="$(jq -er '.title | select(type == "string")' <<<"${live_pr}")"
+          repo_name="${REPO#*/}"
+          repository_quality_prefix="chore/sync-repository-quality-${repo_name}-"
+          shared_assets_prefix="chore/sync-shared-assets-lit-${repo_name}-"
+          if [[ "${head_ref}" == "${repository_quality_prefix}"* ]] \
+            && [[ "${head_ref#"${repository_quality_prefix}"}" \
+              =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]] \
+            && [ "${title}" = "chore: sync repository quality assets" ]; then
+            :
+          elif [[ "${head_ref}" == "${shared_assets_prefix}"* ]] \
+            && [[ "${head_ref#"${shared_assets_prefix}"}" \
+              =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]] \
+            && { [ "${title}" = "chore: sync shared-assets-lit" ] \
+              || [ "${title}" = "chore: sync shared assets" ]; }; then
+            :
+          else
+            echo "Unsupported trusted shared-assets PR shape." >&2
+            exit 1
+          fi
+
+          if [ "${EVENT_NAME}" = pull_request ]; then
+            test "${EVENT_PR_AUTHOR}" = "${SYNC_APP_BOT}"
+            test "${EVENT_PR_NUMBER}" = "${pr_number}"
+            test "${EVENT_BASE_REF}" = "${base_ref}"
+            test "${EVENT_BASE_SHA}" = "${expected_base}"
+            test "${EVENT_HEAD_REF}" = "${head_ref}"
+            test "${EVENT_HEAD_REPO}" = "${head_repo}"
+            test "${EVENT_HEAD_SHA}" = "${expected_head}"
+            test "${EVENT_PR_TITLE}" = "${title}"
+          fi
+
+          {
+            echo 'accepted=true'
+            echo "author=${SYNC_APP_BOT}"
+            echo "base_ref=${base_ref}"
+            echo "base_sha=${expected_base}"
+            echo "head_ref=${head_ref}"
+            echo "head_repo=${head_repo}"
+            echo "head_sha=${expected_head}"
+            echo "pr_number=${pr_number}"
+            echo "title=${title}"
+          } >>"${GITHUB_OUTPUT}"
+
+  verify-shared-assets:
+    name: Verify trusted shared-assets PR
+    needs: classify-shared-assets-invocation
+    if: >-
+      needs.classify-shared-assets-invocation.result == 'success'
+      && needs.classify-shared-assets-invocation.outputs.accepted == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     outputs:
@@ -52,16 +298,21 @@ jobs:
       - name: Verify automated sync PR identity
         id: guard
         env:
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BASE: ${{ github.event.pull_request.base.ref }}
-          PR_HEAD: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_AUTHOR: ${{ needs.classify-shared-assets-invocation.outputs.author }}
+          PR_BASE: ${{ needs.classify-shared-assets-invocation.outputs.base_ref }}
+          PR_HEAD: ${{ needs.classify-shared-assets-invocation.outputs.head_ref }}
+          PR_HEAD_SHA: ${{ needs.classify-shared-assets-invocation.outputs.head_sha }}
+          PR_HEAD_REPO: ${{ needs.classify-shared-assets-invocation.outputs.head_repo }}
+          PR_NUMBER: ${{ needs.classify-shared-assets-invocation.outputs.pr_number }}
+          PR_TITLE: ${{ needs.classify-shared-assets-invocation.outputs.title }}
           REPO: ${{ github.repository }}
           SYNC_APP_ID: ${{ vars.SHARED_ASSETS_SYNC_APP_ID }}
-          TRIGGER_ACTOR: ${{ github.actor }}
+          TRIGGER_ACTOR: >-
+            ${{ github.event.workflow_run.actor.login || github.actor }}
+          TRIGGERING_ACTOR: >-
+            ${{ github.event.workflow_run.triggering_actor.login
+                || github.triggering_actor }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -80,9 +331,10 @@ jobs:
             trusted=false
           fi
 
-          if [ "$TRIGGER_ACTOR" != "$SYNC_APP_BOT" ]; then
-            trusted=false
-          fi
+          case "${EVENT_NAME}:${TRIGGER_ACTOR}:${TRIGGERING_ACTOR}" in
+            pull_request:"${SYNC_APP_BOT}":"${SYNC_APP_BOT}"|workflow_run:"github-actions[bot]":"github-actions[bot]") ;;
+            *) trusted=false ;;
+          esac
 
           if [ "$PR_AUTHOR" != "$SYNC_APP_BOT" ]; then
             trusted=false
@@ -200,8 +452,8 @@ jobs:
         if: steps.guard.outputs.trusted != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ needs.classify-shared-assets-invocation.outputs.pr_number }}
+          PR_URL: ${{ github.server_url }}/${{ github.repository }}/pull/${{ needs.classify-shared-assets-invocation.outputs.pr_number }}
           REPO: ${{ github.repository }}
           SYNC_APP_BOT: lightning-it-shared-assets-sync[bot]
           SYNC_APP_ID: ${{ vars.SHARED_ASSETS_SYNC_APP_ID }}
@@ -354,15 +606,15 @@ jobs:
         env:
           EXPECTED_SUBJECT: ${{ steps.guard.outputs.subject }}
           GH_TOKEN: ${{ github.token }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BASE: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ needs.classify-shared-assets-invocation.outputs.author }}
+          PR_BASE: ${{ needs.classify-shared-assets-invocation.outputs.base_ref }}
+          PR_BASE_SHA: ${{ needs.classify-shared-assets-invocation.outputs.base_sha }}
+          PR_HEAD: ${{ needs.classify-shared-assets-invocation.outputs.head_ref }}
+          PR_HEAD_REPO: ${{ needs.classify-shared-assets-invocation.outputs.head_repo }}
+          PR_HEAD_SHA: ${{ needs.classify-shared-assets-invocation.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.classify-shared-assets-invocation.outputs.pr_number }}
+          PR_URL: ${{ github.server_url }}/${{ github.repository }}/pull/${{ needs.classify-shared-assets-invocation.outputs.pr_number }}
+          PR_TITLE: ${{ needs.classify-shared-assets-invocation.outputs.title }}
           REPO: ${{ github.repository }}
           SYNC_APP_BOT: lightning-it-shared-assets-sync[bot]
           SYNC_APP_ID: ${{ vars.SHARED_ASSETS_SYNC_APP_ID }}
@@ -504,16 +756,20 @@ jobs:
 
   finalize-shared-assets-merge:
     name: Finalize exact trusted shared-assets merge
-    needs: verify-shared-assets
+    needs: [classify-shared-assets-invocation, verify-shared-assets]
     if: >-
-      needs.verify-shared-assets.result == 'success'
+      needs.classify-shared-assets-invocation.result == 'success'
+      && needs.classify-shared-assets-invocation.outputs.accepted == 'true'
+      && needs.verify-shared-assets.result == 'success'
       && needs.verify-shared-assets.outputs.trusted == 'true'
-      && github.event.pull_request.user.login
+      && needs.classify-shared-assets-invocation.outputs.author
         == 'lightning-it-shared-assets-sync[bot]'
-      && github.event.pull_request.head.repo.full_name == github.repository
+      && needs.classify-shared-assets-invocation.outputs.head_repo
+        == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
+      actions: read
       checks: read
       contents: write
       pull-requests: write
@@ -530,17 +786,20 @@ jobs:
 
       - name: Re-prove completed guard and merge exact head
         env:
+          CONTROLLER_SHA: ${{ github.workflow_sha }}
           CURRENT_RUN_ID: ${{ github.run_id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BASE: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ needs.classify-shared-assets-invocation.outputs.author }}
+          PR_BASE: ${{ needs.classify-shared-assets-invocation.outputs.base_ref }}
+          PR_BASE_SHA: ${{ needs.classify-shared-assets-invocation.outputs.base_sha }}
+          PR_HEAD: ${{ needs.classify-shared-assets-invocation.outputs.head_ref }}
+          PR_HEAD_REPO: ${{ needs.classify-shared-assets-invocation.outputs.head_repo }}
+          PR_HEAD_SHA: ${{ needs.classify-shared-assets-invocation.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.classify-shared-assets-invocation.outputs.pr_number }}
+          PR_TITLE: ${{ needs.classify-shared-assets-invocation.outputs.title }}
+          PR_URL: ${{ github.server_url }}/${{ github.repository }}/pull/${{ needs.classify-shared-assets-invocation.outputs.pr_number }}
           POLICY_TOKEN: ${{ steps.policy-app.outputs.token }}
           REPO: ${{ github.repository }}
           SYNC_APP_BOT: lightning-it-shared-assets-sync[bot]
@@ -587,27 +846,96 @@ jobs:
           }
 
           completed_guard_is_bound() {
-            local guard_pages run_prefix
-            run_prefix="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${CURRENT_RUN_ID}/job/"
-            if ! guard_pages="$(
-              gh api --paginate --slurp \
-                "repos/${REPO}/commits/${PR_HEAD_SHA}/check-runs?filter=all&per_page=100"
-            )"; then
-              return 1
-            fi
-            jq -e \
-              --arg head "$PR_HEAD_SHA" \
-              --arg run_prefix "$run_prefix" '
-              [ .[] | .check_runs[]
-                | select(.name == "Verify trusted shared-assets PR")
-                | select(.app.id == 15368 and .app.slug == "github-actions")
-                | select(.head_sha == $head)
-                | select(.details_url | startswith($run_prefix))
-              ] as $matches
-              | ($matches | length) == 1
-              and $matches[0].status == "completed"
-              and $matches[0].conclusion == "success"
-            ' >/dev/null <<<"$guard_pages"
+            local current_jobs current_run guard_pages run_prefix
+            case "$EVENT_NAME" in
+              pull_request)
+                run_prefix="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${CURRENT_RUN_ID}/job/"
+                if ! guard_pages="$(
+                  gh api --paginate --slurp \
+                    "repos/${REPO}/commits/${PR_HEAD_SHA}/check-runs?filter=all&per_page=100"
+                )"; then
+                  return 1
+                fi
+                jq -e \
+                  --arg head "$PR_HEAD_SHA" \
+                  --arg run_prefix "$run_prefix" '
+                  [ .[] | .check_runs[]
+                    | select(.name == "Verify trusted shared-assets PR")
+                    | select(.app.id == 15368 and .app.slug == "github-actions")
+                    | select(.head_sha == $head)
+                    | select(.details_url | startswith($run_prefix))
+                  ] as $matches
+                  | ($matches | length) == 1
+                  and $matches[0].status == "completed"
+                  and $matches[0].conclusion == "success"
+                ' >/dev/null <<<"$guard_pages"
+                ;;
+              workflow_run)
+                [[ "$DEFAULT_BRANCH" =~ ^(develop|main)$ ]]
+                [[ "$CONTROLLER_SHA" =~ ^[0-9a-f]{40}$ ]]
+                live_repository="$(gh api "repos/${REPO}")" || return 1
+                jq -e \
+                  --arg default_branch "$DEFAULT_BRANCH" \
+                  --arg repository "$REPO" '
+                  .full_name == $repository
+                  and .default_branch == $default_branch
+                ' >/dev/null <<<"$live_repository" || return 1
+                live_default_branch="$(gh api \
+                  "repos/${REPO}/branches/${DEFAULT_BRANCH}")" || return 1
+                jq -e \
+                  --arg controller_sha "$CONTROLLER_SHA" \
+                  --arg default_branch "$DEFAULT_BRANCH" '
+                  .name == $default_branch
+                  and .protected == true
+                  and .commit.sha == $controller_sha
+                ' >/dev/null <<<"$live_default_branch" || return 1
+                if ! current_run="$(
+                  gh api "repos/${REPO}/actions/runs/${CURRENT_RUN_ID}"
+                )"; then
+                  return 1
+                fi
+                jq -e \
+                  --arg api_url "$GITHUB_API_URL" \
+                  --arg controller_ref "$DEFAULT_BRANCH" \
+                  --arg controller_sha "$CONTROLLER_SHA" \
+                  --arg repository "$REPO" \
+                  --argjson run_id "$CURRENT_RUN_ID" '
+                  .id == $run_id
+                  and .event == "workflow_run"
+                  and .path == ".github/workflows/shared-assets-guarded-automerge.yml"
+                  and .head_branch == $controller_ref
+                  and .head_sha == $controller_sha
+                  and .run_attempt == 1
+                  and .actor.login == "github-actions[bot]"
+                  and .triggering_actor.login == "github-actions[bot]"
+                  and .url == ($api_url + "/repos/" + $repository
+                    + "/actions/runs/" + ($run_id | tostring))
+                  and .status == "in_progress" and .conclusion == null
+                ' >/dev/null <<<"$current_run" || return 1
+                if ! current_jobs="$(
+                  gh api --paginate --slurp \
+                    "repos/${REPO}/actions/runs/${CURRENT_RUN_ID}/jobs?filter=all&per_page=100"
+                )"; then
+                  return 1
+                fi
+                jq -e \
+                  --arg controller_sha "$CONTROLLER_SHA" '
+                  [ .[] | .jobs[]
+                    | select(.name == "Verify trusted shared-assets PR")
+                  ] as $matches
+                  | ($matches | length) == 1
+                  and $matches[0].run_attempt == 1
+                  and $matches[0].head_sha == $controller_sha
+                  and ($matches[0].runner_id | type) == "number"
+                  and $matches[0].runner_id > 0
+                  and ($matches[0].steps | type) == "array"
+                  and ($matches[0].steps | length) > 0
+                  and $matches[0].status == "completed"
+                  and $matches[0].conclusion == "success"
+                ' >/dev/null <<<"$current_jobs"
+                ;;
+              *) return 1 ;;
+            esac
           }
 
           strict_base_guard_is_enforced() {

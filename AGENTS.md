@@ -186,6 +186,12 @@
   review`. The built-in `:read-only` permission profile technically denies
   writes and command network access. This path never applies to human,
   community, or other automation authors.
+- Reusable `pull_request_target` re-evaluation binds its executed controller
+  SHA and ref to the live protected default branch, even when the PR base is
+  different; PR base and head remain separately exact. A `workflow_run`
+  finalizer separately re-reads that controller and its runner-backed guard
+  job while binding the triggering helper to the exact protected PR base.
+  One trust-boundary SHA never substitutes for another.
 - A deterministic ancestry-backmerge retry MUST exhaustively read the open and
   closed pull-request history for its exact repository-owned branch, base and
   head before it creates a pull request. Any closed exact match, unexpected
@@ -195,14 +201,14 @@
   re-enabling a failed workflow path. Recovery after terminal evidence uses a
   fresh revision through the normal correction, promotion and backmerge chain;
   it never attaches the same commit to a successor PR.
-- When the one authorized final Copilot review arrives only after the bounded
-  verifier has failed, the protected refresh normally reuses that review. If
-  GitHub holds the Copilot-authored refresh in `action_required` before its
-  first job, a current write-authorized maintainer may dispatch the protected
-  `develop` refresh with the exact PR, base, head and review ID. Recovery must
-  prove the blocked refresh and the request/review time window, then rerun only
-  the failed verifier job. It never requests another review or reruns the full
-  workflow.
+- Review-authored refresh events are forbidden. During the bounded protected
+  cutover, a current write-authorized maintainer may dispatch only the
+  protected `develop` refresh for a previously blocked exact Copilot refresh.
+  Before any Check API operation it must revalidate that live permission,
+  re-read that the live default branch remains protected, and bind the exact
+  PR, base, head and review ID. Recovery must prove the blocked refresh and
+  request/review time window, then rerun only the failed verifier job. It never
+  requests another review or reruns the full workflow.
 - `pre-commit` may provide fast feedback, but it is optional and never
   authorizes a push or substitutes for push-ready evidence.
 
