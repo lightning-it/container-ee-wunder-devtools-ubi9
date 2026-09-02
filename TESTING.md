@@ -36,21 +36,15 @@ Products and runtimes:
 Run the managed repository-policy checks:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install PyYAML==6.0.3
-.venv/bin/python scripts/lit-repository-quality.py
-.venv/bin/python scripts/lit-push-ready.py push-ready
+scripts/lit-ci-profile.sh repository-quality
 ```
 
-Run the declared pre-commit profile:
-
-```bash
-pre-commit run --all-files
-```
-
-Run the repository-specific commands declared in
-`.lit/push-ready.json` and the required CI workflow named in
-`.lit/repository.yml`. Do not substitute unrelated toolchains.
+This command is a managed dispatcher into the digest-pinned Devtools image;
+it does not use host language runtimes as acceptance evidence. If the image
+lacks a required tool, update and normally release the Devtools image and then
+repin its managed digest instead of creating a host virtual environment.
+Where present, `.github/requirements/repository-quality.lock` is consumed by
+this profile and must match the PyYAML version in the pinned Devtools image.
 
 Heavy Incus execution is not required for this repository. Do not report an Incus run as part of its acceptance evidence.
 
