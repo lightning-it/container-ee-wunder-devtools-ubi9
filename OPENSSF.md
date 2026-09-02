@@ -1,5 +1,7 @@
 # OpenSSF Readiness
 
+<!-- cspell:ignore ossf -->
+
 This repository follows the Lightning IT shared OpenSSF readiness model generated from `lightning-it/shared-assets-lit`.
 
 ## Governing Decisions And Standards

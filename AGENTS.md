@@ -186,6 +186,12 @@
   review`. The built-in `:read-only` permission profile technically denies
   writes and command network access. This path never applies to human,
   community, or other automation authors.
+- Reusable `pull_request_target` re-evaluation binds its executed controller
+  SHA and ref to the live protected default branch, even when the PR base is
+  different; PR base and head remain separately exact. A `workflow_run`
+  finalizer separately re-reads that controller and its runner-backed guard
+  job while binding the triggering helper to the exact protected PR base.
+  One trust-boundary SHA never substitutes for another.
 - A deterministic ancestry-backmerge retry MUST exhaustively read the open and
   closed pull-request history for its exact repository-owned branch, base and
   head before it creates a pull request. Any closed exact match, unexpected
@@ -196,13 +202,28 @@
   fresh revision through the normal correction, promotion and backmerge chain;
   it never attaches the same commit to a successor PR.
 - When the one authorized final Copilot review arrives only after the bounded
-  verifier has failed, the protected refresh normally reuses that review. If
-  GitHub holds the Copilot-authored refresh in `action_required` before its
-  first job, a current write-authorized maintainer may dispatch the protected
-  `develop` refresh with the exact PR, base, head and review ID. Recovery must
-  prove the blocked refresh and the request/review time window, then rerun only
-  the failed verifier job. It never requests another review or reruns the full
-  workflow.
+  verifier has failed, recovery is allowed only through an explicit dispatch
+  of the live protected default-branch refresh. Review-authored refreshes are
+  forbidden because they execute from `refs/pull/*/merge`. The dispatch binds
+  the controller to the live protected default-branch ref and SHA; binds the
+  exact PR, base, head and unique current-head review; and for a correction
+  re-review proves the immutable consumed one-time-remediation marker, its
+  protected run and runner-backed job, plus exactly one request event. A
+  resolved finding also requires an immutable write-authorized maintainer
+  reply and a fully paginated resolved thread set. The evidence-reply author
+  and protected-dispatch actor are independent authorities and may differ;
+  equality MUST NOT be required. Both must independently retain live
+  `push=true` plus `write`, `maintain`, or `admin`, and both permissions must be
+  rechecked immediately before mutation. The refresh has Checks read-only and
+  never invalidates a neutral check itself. Before it discards invalid neutral
+  evidence, it must prove the latest exact-head organization Required Workflow
+  through its `actions/required_workflows` URL, its exact current run attempt
+  (a positive integer), the original PR author as run actor, that same author
+  as the attempt-one triggering actor or exactly `github-actions[bot]` as the
+  triggering actor of a later protected rerun, the runner-backed failed job,
+  and the exact failed v3 reservation binding for PR, base and head. The refresh
+  never requests AI or creates/updates checks, and may mutate only the exact
+  failed verifier job through one job-level rerun.
 - `pre-commit` may provide fast feedback, but it is optional and never
   authorizes a push or substitutes for push-ready evidence.
 

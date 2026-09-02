@@ -70,7 +70,7 @@ jobs:
     if: >-
       github.run_attempt == 1 &&
       (
-        ( github.event_name == 'pull_request_target' && github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', github.event.pull_request.base.ref) && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
+        ( github.event_name == 'pull_request_target' && github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@refs/heads/{1}', github.repository, github.event.repository.default_branch) && github.ref == format('refs/heads/{0}', github.event.pull_request.base.ref) && github.ref_protected == true && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
         ( github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]' && github.triggering_actor == 'github-actions[bot]' && github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/current-revision-rerun.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', inputs.base_ref) && github.ref_protected == true ) ||
         ( github.event_name == 'push' && github.workflow_sha == inputs.expected_head && github.workflow_ref == format('{0}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop', github.repository) && github.ref == 'refs/heads/develop' && github.ref_protected == true && github.sha == inputs.expected_head && github.event.ref == 'refs/heads/develop' && github.event.after == inputs.expected_head )
       )
@@ -86,12 +86,15 @@ jobs:
       - name: Validate the live binding and rerun exactly once
         env:
           EVENT_ACTOR: ${{ github.actor }}
+          EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           EVENT_BASE_REF: ${{ github.event.inputs.base_ref }}
           EVENT_EXPECTED_BASE: ${{ github.event.inputs.expected_base }}
           EVENT_EXPECTED_HEAD: ${{ github.event.inputs.expected_head }}
           EVENT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           EVENT_PRODUCER_RUN_ID: ${{ github.event.inputs.producer_run_id }}
           EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          EXECUTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
           EXPECTED_BASE: ${{ inputs.expected_base }}
           EXPECTED_HEAD: ${{ inputs.expected_head }}
           GH_TOKEN: ${{ github.token }}
@@ -100,9 +103,34 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${GITHUB_RUN_ATTEMPT}" =~ ^1$ ]]
-          [[ "${GITHUB_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXECUTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
           case "${GITHUB_EVENT_NAME}" in
-            pull_request_target) controller_sha="${EXPECTED_BASE}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/copilot-review.yml@${GITHUB_REF}" ;;
+            pull_request_target)
+              [[ "${EVENT_DEFAULT_BRANCH}" =~ ^(develop|main)$ ]]
+              [[ "${EVENT_PR_BASE_REF}" =~ ^(develop|main)$ ]]
+              test "${GITHUB_REF_PROTECTED}" = true
+              test "${GITHUB_REF}" = "refs/heads/${EVENT_PR_BASE_REF}"
+              expected_workflow_ref="${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${EVENT_DEFAULT_BRANCH}"
+              live_repository="$(gh api "repos/${REPOSITORY}")"
+              jq -e \
+                --arg default_branch "${EVENT_DEFAULT_BRANCH}" \
+                --arg repository "${REPOSITORY}" '
+                .full_name == $repository
+                and .default_branch == $default_branch
+              ' <<<"${live_repository}" >/dev/null
+              live_default_branch="$(gh api \
+                "repos/${REPOSITORY}/branches/${EVENT_DEFAULT_BRANCH}")"
+              controller_sha="$(jq -er \
+                '.commit.sha | select(test("^[0-9a-f]{40}$"))' \
+                <<<"${live_default_branch}")"
+              jq -e \
+                --arg default_branch "${EVENT_DEFAULT_BRANCH}" \
+                --arg controller_sha "${controller_sha}" '
+                .name == $default_branch
+                and .protected == true
+                and .commit.sha == $controller_sha
+              ' <<<"${live_default_branch}" >/dev/null
+              ;;
             workflow_dispatch)
               controller_sha="${EXPECTED_BASE}"; expected_workflow_ref="${REPOSITORY}/.github/workflows/current-revision-rerun.yml@${GITHUB_REF}"
               test "${EVENT_ACTOR}" = 'github-actions[bot]'
@@ -121,7 +149,7 @@ jobs:
               ;;
             *) echo "Unsupported protected rerun caller event: ${GITHUB_EVENT_NAME}" >&2; exit 1 ;;
           esac
-          test "${GITHUB_WORKFLOW_SHA}" = "${controller_sha}"
+          test "${EXECUTED_WORKFLOW_SHA}" = "${controller_sha}"
           test "${GITHUB_WORKFLOW_REF}" = "${expected_workflow_ref}"
           case "${GITHUB_REF}" in
             refs/heads/develop|refs/heads/main) ;;
