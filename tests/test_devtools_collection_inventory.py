@@ -193,6 +193,13 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
             dockerfile,
         )
         self.assertIn(
+            'cp vendor.sum go.sum && \\\n'
+            '    GOFLAGS=-mod=mod go get '
+            '"google.golang.org/grpc@v${GO_GRPC_VERSION}"',
+            dockerfile,
+        )
+        self.assertIn("CGO_ENABLED=0 GOFLAGS=-mod=mod go build", dockerfile)
+        self.assertIn(
             "for binary in terraform tflint terraform-docs gh docker "
             "docker-compose",
             dockerfile,

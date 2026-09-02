@@ -122,10 +122,10 @@ RUN curl -fsSLo /tmp/docker-cli.tar.gz \
     [[ "$docker_source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] && \
     cp vendor.mod go.mod && \
     cp vendor.sum go.sum && \
-    go get "google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
-    test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = \
+    GOFLAGS=-mod=mod go get "google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
+    test "$(GOFLAGS=-mod=mod go list -m -f '{{.Version}}' google.golang.org/grpc)" = \
       "v${GO_GRPC_VERSION}" && \
-    CGO_ENABLED=0 go build \
+    CGO_ENABLED=0 GOFLAGS=-mod=mod go build \
       -trimpath -buildvcs=false \
       -ldflags="-s -w \
         -X github.com/docker/cli/cli/version.Version=${docker_source_version} \
