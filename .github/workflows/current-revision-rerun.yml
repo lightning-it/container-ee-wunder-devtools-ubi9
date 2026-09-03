@@ -306,7 +306,7 @@ jobs:
           if [[ "${neutral_external_id}" =~ ^mlx90-current-revision:v4:${producer_id}:([0-9a-f]{64})$ ]]; then
             evidence_version=v4
             input_sha256="${BASH_REMATCH[1]}"
-          elif [[ "${neutral_external_id}" =~ ^mlx90-current-revision:(copilot|managed-sync|ancestry-backmerge):v6:${PR_NUMBER}:${producer_id}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
+          elif [[ "${neutral_external_id}" =~ ^mlx90-current-revision:(copilot|managed-sync|renovate|ancestry-backmerge):v6:${PR_NUMBER}:${producer_id}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
             evidence_version=v6
             external_kind="${BASH_REMATCH[1]}"
           elif [[ "${neutral_external_id}" =~ ^mlx90-current-revision:(copilot|ancestry-backmerge):v5:${producer_id}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
@@ -647,6 +647,21 @@ jobs:
               test "${base_ref}" = develop
               test "$(jq -r .review_path <<<"${neutral_summary}")" = \
                 'deterministic evidence-bound ancestry exemption'
+            elif [ "${external_kind}" = renovate ]; then
+              test "${author}" = 'renovate[bot]'
+              test "${head_repository}" = "${REPOSITORY}"
+              test "${base_ref}" = develop
+              [[ "${head_ref}" == renovate/* ]]
+              jq -e '
+                ([.labels[].name] | index("renovate") != null)
+                and ([.labels[].name] | index("dependencies") != null)
+                and ([.labels[].name] | index("safe-automerge") != null)
+                and ([.labels[].name] | index("breaking-update") == null)
+              ' <<<"${pr}" >/dev/null
+              jq -e 'has("review_id") and (.review_id == null)' \
+                <<<"${neutral_summary}" >/dev/null
+              test "$(jq -r .review_path <<<"${neutral_summary}")" = \
+                'deterministic policy-bound Renovate exemption'
             elif [ "${external_kind}" = managed-sync ]; then
               test "${author}" = 'lightning-it-shared-assets-sync[bot]'
               test "${REPOSITORY}" != 'lightning-it/.github'
@@ -654,6 +669,7 @@ jobs:
               test "$(jq -r .review_path <<<"${neutral_summary}")" = \
                 'deterministic provenance-bound managed distribution exemption'
             else
+              test "${external_kind}" = copilot
               test "${author}" != 'lightning-it-release-automation[bot]'
               test "${author}" != 'lightning-it-shared-assets-sync[bot]'
               test "$(jq -r .review_path <<<"${neutral_summary}")" = \
