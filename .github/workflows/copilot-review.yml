@@ -1911,8 +1911,26 @@ jobs:
       github.event_name == 'pull_request_target' &&
       github.event.action == 'ready_for_review' &&
       github.event.pull_request.draft == false &&
+      github.repository != 'lightning-it/.github' &&
       github.event.pull_request.base.ref == 'develop' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        (
+          startsWith(
+            github.event.pull_request.head.ref,
+            'chore/sync-shared-assets-lit-'
+          ) &&
+          github.event.pull_request.title == 'chore: sync shared-assets-lit'
+        ) ||
+        (
+          startsWith(
+            github.event.pull_request.head.ref,
+            'chore/sync-repository-quality-'
+          ) &&
+          github.event.pull_request.title ==
+            'chore: sync repository quality assets'
+        )
+      ) &&
       github.event.pull_request.user.login
         == 'lightning-it-shared-assets-sync[bot]' &&
       github.actor == 'lightning-it-shared-assets-sync[bot]' &&
