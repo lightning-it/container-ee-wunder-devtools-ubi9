@@ -561,16 +561,34 @@ jobs:
             return 1
           }
           if [ "${evidence_version}" != v4 ]; then
-            test "${producer_id}" = "${GITHUB_RUN_ID}"
-            jq -e '
-              .run_attempt == 1
-              and .status == "in_progress"
-              and .conclusion == null
-            ' <<<"${producer}" >/dev/null
+            detached_producer=false
+            if [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]; then
+              detached_producer=true
+              wait_for_successful_detached_producer
+              jq -e '
+                .run_attempt == 1
+                and .status == "completed"
+                and .conclusion == "success"
+              ' <<<"${producer}" >/dev/null
+              producer_handoff_job='Request protected verifier re-evaluation'
+              if [ "${external_kind}" = managed-sync ]; then
+                producer_handoff_job='Dispatch protected managed-sync finalizer re-evaluation'
+              fi
+            else
+              test "${producer_id}" = "${GITHUB_RUN_ID}"
+              jq -e '
+                .run_attempt == 1
+                and .status == "in_progress"
+                and .conclusion == null
+              ' <<<"${producer}" >/dev/null
+              producer_handoff_job='Request protected verifier re-evaluation / Re-run the one protected verifier attempt'
+            fi
             producer_jobs_pages="$(gh api --paginate --slurp \
               "repos/${REPOSITORY}/actions/runs/${producer_id}/jobs?filter=all&per_page=100")"
             jq -e \
               --arg head "${EXPECTED_HEAD}" \
+              --arg handoff_job "${producer_handoff_job}" \
+              --argjson detached "${detached_producer}" \
               --argjson run_id "${producer_id}" '
                 def exact_job($name):
                   select(.run_id == $run_id and .run_attempt == 1
@@ -581,8 +599,13 @@ jobs:
                   exact_job("Verify current revision policy")
                   | select(.status == "completed" and .conclusion == "success")] | length) == 1
                 and ([.[].jobs[] |
-                  exact_job("Request protected verifier re-evaluation / Re-run the one protected verifier attempt")
-                  | select(.status == "in_progress" and .conclusion == null)] | length) == 1
+                  exact_job($handoff_job)
+                  | select(
+                      if $detached then
+                        .status == "completed" and .conclusion == "success"
+                      else
+                        .status == "in_progress" and .conclusion == null
+                      end)] | length) == 1
               ' <<<"${producer_jobs_pages}" >/dev/null
           else
             # Only the v4 Exact-Revision producer dispatches this detached
@@ -616,8 +639,11 @@ jobs:
               ' <<<"${producer}" >/dev/null
           else
             if [ "${external_kind}" = ancestry-backmerge ]; then
-              test "${REPOSITORY}" = 'lightning-it/.github'
-              test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+              expected_backmerge_author='lightning-it-release-automation[bot]'
+              if [ "${REPOSITORY}" = 'lightning-it/.github' ]; then
+                expected_backmerge_author='lightning-it-shared-assets-sync[bot]'
+              fi
+              test "${author}" = "${expected_backmerge_author}"
               test "${base_ref}" = develop
               test "$(jq -r .review_path <<<"${neutral_summary}")" = \
                 'deterministic evidence-bound ancestry exemption'
