@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.16.0@sha256:7674d82bf7c0f87064196e333f994613ca6e23d9fdee9157ae037f2209d2343a"
+IMAGE="quay.io/l-it/ee-wunder-devtools-ubi9:v1.16.1@sha256:c5e8707e825fcddb3e7bbc7592ebdc99a02e6ba9fa2cad71b88bcd5c71bd4d08"
 CONTAINER_HOME="${CONTAINER_HOME:-/tmp/wunder}"
 WORKSPACE_MODE="${WUNDER_DEVTOOLS_WORKSPACE_MODE:-ro}"
 RUN_AS_HOST_UID_POLICY="${WUNDER_DEVTOOLS_RUN_AS_HOST_UID:-0}"
@@ -134,14 +134,15 @@ if [ "$RUN_AS_HOST_UID_POLICY" = "1" ]; then
     # Rootless Podman maps container UID/GID 0 to the invoking host user.
     CONTAINER_UID=0
     CONTAINER_GID=0
+    # Podman Machine rejects uid/gid tmpfs mount options. Its rootless user
+    # namespace already owns the mount, so only the private mode is needed.
+    RUN_TMPFS_MOUNT="${RUN_TMPFS_MOUNT},mode=0755"
   else
     # Hosted Docker and rootful Podman preserve numeric bind-mount ownership.
     CONTAINER_UID="$(id -u)"
     CONTAINER_GID="$(id -g)"
+    RUN_TMPFS_MOUNT="${RUN_TMPFS_MOUNT},uid=${CONTAINER_UID},gid=${CONTAINER_GID},mode=0755"
   fi
-  # Keep /run private to the selected controller identity instead of making
-  # it writable by every account in the container.
-  RUN_TMPFS_MOUNT="${RUN_TMPFS_MOUNT},uid=${CONTAINER_UID},gid=${CONTAINER_GID},mode=0755"
 fi
 
 DOCKER_ARGS=(

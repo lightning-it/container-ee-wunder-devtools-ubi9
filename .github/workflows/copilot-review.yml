@@ -40,9 +40,10 @@ concurrency:
   cancel-in-progress: false
 
 # Release-App pull requests use only the sibling protected MLX-90 §7.2
-# Exact-Revision Codex check, without an exemption in this controller. This
-# workflow retains the final-head GitHub Copilot path for applicable human PRs
-# plus the separately identified Shared-Assets-App automation exemptions.
+# Exact-Revision Codex check, except for a proven ancestry-only main-to-develop
+# backmerge, which uses the deterministic REP-60 exemption below and no AI.
+# This workflow retains the final-head GitHub Copilot path for applicable human
+# PRs plus the separately identified automation exemptions.
 # The one main trust-root handoff is authorized only by the immutable job ledger
 # of the organization Required Workflow. Candidate metadata never authorizes an
 # exemption by itself, and a missing or ambiguous protected ledger fails closed.
@@ -405,7 +406,12 @@ jobs:
           needs.classify-main-trust-root-handoff.outputs.repository_producers_authorized == 'true')) &&
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' &&
+      (github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' ||
+        (github.event.pull_request.base.ref == 'develop' &&
+          startsWith(github.event.pull_request.head.ref, 'backmerge/') &&
+          endsWith(github.event.pull_request.head.ref, '-main') &&
+          startsWith(github.event.pull_request.title,
+            'chore(governance): record main ancestry before '))) &&
       (github.event.action == 'edited' ||
         github.event.action == 'labeled' ||
         github.event.action == 'unlabeled' ||
@@ -704,6 +710,10 @@ jobs:
           set -euo pipefail
           trusted=false
           trusted_kind=none
+          expected_backmerge_author='lightning-it-release-automation[bot]'
+          if [ "${REPOSITORY}" = "lightning-it/.github" ]; then
+            expected_backmerge_author='lightning-it-shared-assets-sync[bot]'
+          fi
           live_pr="{}"
           policy_label_events="[]"
           if [ "${PR_AUTHOR}" = "renovate[bot]" ] \
@@ -816,8 +826,7 @@ jobs:
               <<<"${live_pr}" >/dev/null; then
             trusted=true
             trusted_kind=repository-quality
-          elif [ "${REPOSITORY}" = "lightning-it/.github" ] \
-            && [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ] \
+          elif [ "${PR_AUTHOR}" = "${expected_backmerge_author}" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == backmerge/*-main ]] \
             && [ "${PR_BASE}" = "develop" ] \
@@ -1550,7 +1559,21 @@ jobs:
           review_path="applicable Copilot or governed automation exemption"
           external_kind="copilot"
           result_title="Current revision review passed"
-          if [[ "${TRUSTED_KIND}" =~ ^(shared-assets|repository-quality)$ ]]; then
+          if [ "${TRUSTED_KIND}" = renovate ]; then
+            test "${author}" = 'renovate[bot]'
+            test "${base_ref}" = develop
+            test "${EVENT_HEAD_REPOSITORY}" = "${REPOSITORY}"
+            [[ "${EVENT_HEAD_REF}" == renovate/* ]]
+            jq -e '
+              ([.labels[].name] | index("renovate") != null)
+              and ([.labels[].name] | index("dependencies") != null)
+              and ([.labels[].name] | index("safe-automerge") != null)
+              and ([.labels[].name] | index("breaking-update") == null)
+            ' <<<"${pr}" >/dev/null
+            review_path="deterministic policy-bound Renovate exemption"
+            external_kind="renovate"
+            result_title="Current revision Renovate exemption passed"
+          elif [[ "${TRUSTED_KIND}" =~ ^(shared-assets|repository-quality)$ ]]; then
             test "${REPOSITORY}" != 'lightning-it/.github'
             test "${author}" = 'lightning-it-shared-assets-sync[bot]'
             test "${base_ref}" = develop
@@ -1558,8 +1581,11 @@ jobs:
             external_kind="managed-sync"
             result_title="Current revision managed distribution exemption passed"
           elif [ "${TRUSTED_KIND}" = ancestry-backmerge ]; then
-            test "${REPOSITORY}" = "lightning-it/.github"
-            test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+            expected_backmerge_author='lightning-it-release-automation[bot]'
+            if [ "${REPOSITORY}" = "lightning-it/.github" ]; then
+              expected_backmerge_author='lightning-it-shared-assets-sync[bot]'
+            fi
+            test "${author}" = "${expected_backmerge_author}"
             test "${TRUSTED_KIND}" = ancestry-backmerge
             test "${base_ref}" = develop
             default_head="$(gh api "repos/${REPOSITORY}/branches/${DEFAULT_BRANCH}" --jq .commit.sha)"
@@ -1610,9 +1636,7 @@ jobs:
             external_kind="ancestry-backmerge"
             result_title="Current revision deterministic exemption passed"
           else
-            test "${TRUSTED_KIND}" != shared-assets
-            test "${TRUSTED_KIND}" != repository-quality
-            test "${TRUSTED_KIND}" != ancestry-backmerge
+            test "${TRUSTED_KIND}" = none
             test "${author}" != 'lightning-it-shared-assets-sync[bot]'
             test "${author}" != 'lightning-it-release-automation[bot]'
           fi
@@ -1838,9 +1862,35 @@ jobs:
     # `verify-current-revision-policy` deliberately tolerates an inapplicable,
     # skipped Release-App classifier. Keep that skip from being reintroduced
     # through GitHub's implicit `success()` predicate on this downstream job.
+    # A proven ancestry-only backmerge already has a deterministic neutral
+    # result which the independent Required Workflow verifies directly. Do not
+    # race that verifier with a redundant rerun request.
     if: >-
       always() &&
-      needs.verify-current-revision-policy.result == 'success'
+      needs.verify-current-revision-policy.result == 'success' &&
+      !(
+        github.event_name == 'pull_request_target' &&
+        github.event.pull_request.base.ref == 'develop' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'backmerge/') &&
+        endsWith(github.event.pull_request.head.ref, '-main') &&
+        startsWith(
+          github.event.pull_request.title,
+          'chore(governance): record main ancestry before '
+        ) &&
+        (
+          (
+            github.repository == 'lightning-it/.github' &&
+            github.event.pull_request.user.login ==
+              'lightning-it-shared-assets-sync[bot]'
+          ) ||
+          (
+            github.repository != 'lightning-it/.github' &&
+            github.event.pull_request.user.login ==
+              'lightning-it-release-automation[bot]'
+          )
+        )
+      )
     permissions:
       actions: write
       checks: read
@@ -1851,3 +1901,196 @@ jobs:
       pr_number: ${{ github.event.pull_request.number }}
       expected_base: ${{ github.event.pull_request.base.sha }}
       expected_head: ${{ github.event.pull_request.head.sha }}
+
+  dispatch-managed-sync-finalizer-reevaluation:
+    name: Dispatch protected managed-sync finalizer re-evaluation
+    needs: verify-current-revision-policy
+    if: >-
+      always() &&
+      needs.verify-current-revision-policy.result == 'success' &&
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'ready_for_review' &&
+      github.event.pull_request.draft == false &&
+      github.repository != 'lightning-it/.github' &&
+      github.event.pull_request.base.ref == 'develop' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        (
+          startsWith(
+            github.event.pull_request.head.ref,
+            'chore/sync-shared-assets-lit-'
+          ) &&
+          github.event.pull_request.title == 'chore: sync shared-assets-lit'
+        ) ||
+        (
+          startsWith(
+            github.event.pull_request.head.ref,
+            'chore/sync-repository-quality-'
+          ) &&
+          github.event.pull_request.title ==
+            'chore: sync repository quality assets'
+        )
+      ) &&
+      github.event.pull_request.user.login
+        == 'lightning-it-shared-assets-sync[bot]' &&
+      github.actor == 'lightning-it-shared-assets-sync[bot]' &&
+      github.triggering_actor == 'lightning-it-shared-assets-sync[bot]'
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Dispatch one protected helper for the bound managed-sync result
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXECUTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PRODUCER_RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          readonly SYNC_APP_BOT='lightning-it-shared-assets-sync[bot]'
+          test "${DEFAULT_BRANCH}" = develop
+          [[ "${EXPECTED_BASE}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${PRODUCER_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${EXECUTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}"
+          test "${GITHUB_REF_PROTECTED}" = true
+          test "${GITHUB_WORKFLOW_REF}" = \
+            "${REPOSITORY}/.github/workflows/copilot-review.yml@${GITHUB_REF}"
+          live_default="$(gh api \
+            "repos/${REPOSITORY}/branches/${DEFAULT_BRANCH}")"
+          jq -e \
+            --arg branch "${DEFAULT_BRANCH}" \
+            --arg sha "${EXECUTED_WORKFLOW_SHA}" '
+              .name == $branch
+              and .protected == true
+              and .commit.sha == $sha
+            ' <<<"${live_default}" >/dev/null
+          pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          jq -e \
+            --arg author "${SYNC_APP_BOT}" \
+            --arg base "${EXPECTED_BASE}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --arg repository "${REPOSITORY}" '
+              .state == "open"
+              and .draft == false
+              and .user.login == $author
+              and .base.ref == "develop"
+              and .base.sha == $base
+              and .base.repo.full_name == $repository
+              and .head.sha == $head
+              and .head.repo.full_name == $repository
+              and (.title == "chore: sync shared-assets-lit"
+                or .title == "chore: sync shared assets"
+                or .title == "chore: sync repository quality assets")
+              and ([.labels[].name] | index("chore") != null)
+              and ([.labels[].name] | index("shared-assets-lit") != null)
+            ' <<<"${pr}" >/dev/null
+          live_base="$(gh api \
+            "repos/${REPOSITORY}/branches/develop" --jq .commit.sha)"
+          test "${live_base}" = "${EXPECTED_BASE}"
+
+          neutral_pages="$(gh api --paginate --slurp \
+            "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
+          neutral="$(jq -c \
+            --arg base "${EXPECTED_BASE}" \
+            --arg check_url_prefix "${GITHUB_SERVER_URL}/${REPOSITORY}/runs/" \
+            --arg external_id "mlx90-current-revision:managed-sync:v6:${PR_NUMBER}:${PRODUCER_RUN_ID}:${EXPECTED_BASE}:${EXPECTED_HEAD}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --arg producer_url "${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}" \
+            --argjson pr_number "${PR_NUMBER}" \
+            --argjson producer_run_id "${PRODUCER_RUN_ID}" '
+              [.[].check_runs[]? |
+                select(.name == "Current revision review") |
+                select(.app.id == 15368 and .app.slug == "github-actions") |
+                select(.head_sha == $head) |
+                select(.external_id == $external_id) |
+                select(.details_url == ($check_url_prefix + (.id | tostring))) |
+                select(.status == "completed" and .conclusion == "success") |
+                select((.output.summary | fromjson) as $summary |
+                  $summary.schema == 4
+                  and $summary.base_sha == $base
+                  and $summary.head_sha == $head
+                  and $summary.pull_request_number == $pr_number
+                  and $summary.producer_run_id == $producer_run_id
+                  and $summary.run_url == $producer_url)]
+            ' <<<"${neutral_pages}")"
+          test "$(jq 'length' <<<"${neutral}")" -eq 1
+
+          gh api --method POST \
+            "repos/${REPOSITORY}/actions/workflows/current-revision-rerun.yml/dispatches" \
+            -f "ref=develop" \
+            -f "inputs[base_ref]=develop" \
+            -f "inputs[pr_number]=${PR_NUMBER}" \
+            -f "inputs[expected_base]=${EXPECTED_BASE}" \
+            -f "inputs[expected_head]=${EXPECTED_HEAD}" \
+            -f "inputs[producer_run_id]=${PRODUCER_RUN_ID}" >/dev/null
+          expected_title="Protected verifier handoff PR #${PR_NUMBER} producer ${PRODUCER_RUN_ID} head ${EXPECTED_HEAD}"
+          handoff=''
+          for observation_attempt in $(seq 1 20); do
+            runs="$(gh api \
+              "repos/${REPOSITORY}/actions/workflows/current-revision-rerun.yml/runs?event=workflow_dispatch&branch=develop&per_page=100")"
+            candidates="$(jq -c \
+              --arg actor 'github-actions[bot]' \
+              --arg base "${EXPECTED_BASE}" \
+              --arg repository "${REPOSITORY}" \
+              --arg title "${expected_title}" '
+                [.workflow_runs[] |
+                  select(.event == "workflow_dispatch") |
+                  select(.path == ".github/workflows/current-revision-rerun.yml") |
+                  select(.display_title == $title) |
+                  select(.head_branch == "develop" and .head_sha == $base) |
+                  select(.repository.full_name == $repository) |
+                  select(.actor.login == $actor
+                    and .triggering_actor.login == $actor)]
+              ' <<<"${runs}")"
+            test "$(jq 'length' <<<"${candidates}")" -le 1
+            if [ "$(jq 'length' <<<"${candidates}")" -eq 1 ]; then
+              handoff="$(jq -c '.[0]' <<<"${candidates}")"
+              break
+            fi
+            if [ "${observation_attempt}" -eq 20 ]; then
+              echo "The managed-sync protected handoff was not materialized in time." >&2
+              exit 1
+            fi
+            sleep 3
+          done
+          handoff_id="$(jq -er \
+            '.id | select(type == "number" and . > 0)' <<<"${handoff}")"
+          job=''
+          for job_attempt in $(seq 1 20); do
+            jobs="$(gh api \
+              "repos/${REPOSITORY}/actions/runs/${handoff_id}/jobs?filter=all&per_page=100")"
+            materialized="$(jq -c '
+              [.jobs[] |
+                select(.name == "Re-run the one protected verifier attempt")]
+              ' <<<"${jobs}")"
+            test "$(jq 'length' <<<"${materialized}")" -le 1
+            if [ "$(jq 'length' <<<"${materialized}")" -eq 1 ]; then
+              job="$(jq -c '.[0]' <<<"${materialized}")"
+              break
+            fi
+            if [ "${job_attempt}" -eq 20 ]; then
+              echo "The managed-sync protected handoff job was not materialized in time." >&2
+              exit 1
+            fi
+            sleep 3
+          done
+          jq -e \
+            --arg base "${EXPECTED_BASE}" '
+              .head_sha == $base
+              and .run_attempt == 1
+              and (.status == "queued"
+                or .status == "in_progress"
+                or .status == "completed")
+            ' <<<"${job}" >/dev/null
