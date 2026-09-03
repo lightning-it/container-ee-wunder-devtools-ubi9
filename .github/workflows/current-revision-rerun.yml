@@ -70,7 +70,7 @@ jobs:
     if: >-
       github.run_attempt == 1 &&
       (
-        ( github.event_name == 'pull_request_target' && github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@refs/heads/{1}', github.repository, github.event.repository.default_branch) && github.ref == format('refs/heads/{0}', github.event.pull_request.base.ref) && github.ref_protected == true && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
+        ( github.event_name == 'pull_request_target' && github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@refs/heads/{1}', github.repository, github.event.repository.default_branch) && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.ref_protected == true && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
         ( github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]' && github.triggering_actor == 'github-actions[bot]' && github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/current-revision-rerun.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', inputs.base_ref) && github.ref_protected == true ) ||
         ( github.event_name == 'push' && github.workflow_sha == inputs.expected_head && github.workflow_ref == format('{0}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop', github.repository) && github.ref == 'refs/heads/develop' && github.ref_protected == true && github.sha == inputs.expected_head && github.event.ref == 'refs/heads/develop' && github.event.after == inputs.expected_head )
       )
@@ -109,7 +109,7 @@ jobs:
               [[ "${EVENT_DEFAULT_BRANCH}" =~ ^(develop|main)$ ]]
               [[ "${EVENT_PR_BASE_REF}" =~ ^(develop|main)$ ]]
               test "${GITHUB_REF_PROTECTED}" = true
-              test "${GITHUB_REF}" = "refs/heads/${EVENT_PR_BASE_REF}"
+              test "${GITHUB_REF}" = "refs/heads/${EVENT_DEFAULT_BRANCH}"
               expected_workflow_ref="${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${EVENT_DEFAULT_BRANCH}"
               live_repository="$(gh api "repos/${REPOSITORY}")"
               jq -e \
