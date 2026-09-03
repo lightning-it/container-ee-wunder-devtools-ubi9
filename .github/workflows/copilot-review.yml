@@ -40,9 +40,10 @@ concurrency:
   cancel-in-progress: false
 
 # Release-App pull requests use only the sibling protected MLX-90 §7.2
-# Exact-Revision Codex check, without an exemption in this controller. This
-# workflow retains the final-head GitHub Copilot path for applicable human PRs
-# plus the separately identified Shared-Assets-App automation exemptions.
+# Exact-Revision Codex check, except for a proven ancestry-only main-to-develop
+# backmerge, which uses the deterministic REP-60 exemption below and no AI.
+# This workflow retains the final-head GitHub Copilot path for applicable human
+# PRs plus the separately identified automation exemptions.
 # The one main trust-root handoff is authorized only by the immutable job ledger
 # of the organization Required Workflow. Candidate metadata never authorizes an
 # exemption by itself, and a missing or ambiguous protected ledger fails closed.
@@ -405,7 +406,12 @@ jobs:
           needs.classify-main-trust-root-handoff.outputs.repository_producers_authorized == 'true')) &&
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' &&
+      (github.event.pull_request.user.login != 'lightning-it-release-automation[bot]' ||
+        (github.event.pull_request.base.ref == 'develop' &&
+          startsWith(github.event.pull_request.head.ref, 'backmerge/') &&
+          endsWith(github.event.pull_request.head.ref, '-main') &&
+          startsWith(github.event.pull_request.title,
+            'chore(governance): record main ancestry before '))) &&
       (github.event.action == 'edited' ||
         github.event.action == 'labeled' ||
         github.event.action == 'unlabeled' ||
@@ -704,6 +710,10 @@ jobs:
           set -euo pipefail
           trusted=false
           trusted_kind=none
+          expected_backmerge_author='lightning-it-release-automation[bot]'
+          if [ "${REPOSITORY}" = "lightning-it/.github" ]; then
+            expected_backmerge_author='lightning-it-shared-assets-sync[bot]'
+          fi
           live_pr="{}"
           policy_label_events="[]"
           if [ "${PR_AUTHOR}" = "renovate[bot]" ] \
@@ -816,8 +826,7 @@ jobs:
               <<<"${live_pr}" >/dev/null; then
             trusted=true
             trusted_kind=repository-quality
-          elif [ "${REPOSITORY}" = "lightning-it/.github" ] \
-            && [ "${PR_AUTHOR}" = "lightning-it-shared-assets-sync[bot]" ] \
+          elif [ "${PR_AUTHOR}" = "${expected_backmerge_author}" ] \
             && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
             && [[ "${PR_HEAD}" == backmerge/*-main ]] \
             && [ "${PR_BASE}" = "develop" ] \
@@ -1558,8 +1567,11 @@ jobs:
             external_kind="managed-sync"
             result_title="Current revision managed distribution exemption passed"
           elif [ "${TRUSTED_KIND}" = ancestry-backmerge ]; then
-            test "${REPOSITORY}" = "lightning-it/.github"
-            test "${author}" = 'lightning-it-shared-assets-sync[bot]'
+            expected_backmerge_author='lightning-it-release-automation[bot]'
+            if [ "${REPOSITORY}" = "lightning-it/.github" ]; then
+              expected_backmerge_author='lightning-it-shared-assets-sync[bot]'
+            fi
+            test "${author}" = "${expected_backmerge_author}"
             test "${TRUSTED_KIND}" = ancestry-backmerge
             test "${base_ref}" = develop
             default_head="$(gh api "repos/${REPOSITORY}/branches/${DEFAULT_BRANCH}" --jq .commit.sha)"
