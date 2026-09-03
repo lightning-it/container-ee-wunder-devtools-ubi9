@@ -1850,9 +1850,35 @@ jobs:
     # `verify-current-revision-policy` deliberately tolerates an inapplicable,
     # skipped Release-App classifier. Keep that skip from being reintroduced
     # through GitHub's implicit `success()` predicate on this downstream job.
+    # A proven ancestry-only backmerge already has a deterministic neutral
+    # result which the independent Required Workflow verifies directly. Do not
+    # race that verifier with a redundant rerun request.
     if: >-
       always() &&
-      needs.verify-current-revision-policy.result == 'success'
+      needs.verify-current-revision-policy.result == 'success' &&
+      !(
+        github.event_name == 'pull_request_target' &&
+        github.event.pull_request.base.ref == 'develop' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'backmerge/') &&
+        endsWith(github.event.pull_request.head.ref, '-main') &&
+        startsWith(
+          github.event.pull_request.title,
+          'chore(governance): record main ancestry before '
+        ) &&
+        (
+          (
+            github.repository == 'lightning-it/.github' &&
+            github.event.pull_request.user.login ==
+              'lightning-it-shared-assets-sync[bot]'
+          ) ||
+          (
+            github.repository != 'lightning-it/.github' &&
+            github.event.pull_request.user.login ==
+              'lightning-it-release-automation[bot]'
+          )
+        )
+      )
     permissions:
       actions: write
       checks: read
