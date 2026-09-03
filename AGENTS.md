@@ -192,6 +192,13 @@
   finalizer separately re-reads that controller and its runner-backed guard
   job while binding the triggering helper to the exact protected PR base.
   One trust-boundary SHA never substitutes for another.
+- Exactly the Shared-Assets-App `ready_for_review` run may dispatch one
+  standalone protected `current-revision-rerun.yml` after a unique successful
+  `managed-sync:v6` neutral result binds PR, source run, base, head and
+  protected default-branch controller. The successful helper `workflow_run`
+  is the only automatic guarded-finalizer re-entry after slower native checks
+  finish. Other events never dispatch it; it never requests AI or mutates a
+  check, and missing or duplicate handoff evidence fails closed.
 - A deterministic ancestry-backmerge retry MUST exhaustively read the open and
   closed pull-request history for its exact repository-owned branch, base and
   head before it creates a pull request. Any closed exact match, unexpected
