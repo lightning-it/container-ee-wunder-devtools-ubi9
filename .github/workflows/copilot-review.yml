@@ -1559,7 +1559,21 @@ jobs:
           review_path="applicable Copilot or governed automation exemption"
           external_kind="copilot"
           result_title="Current revision review passed"
-          if [[ "${TRUSTED_KIND}" =~ ^(shared-assets|repository-quality)$ ]]; then
+          if [ "${TRUSTED_KIND}" = renovate ]; then
+            test "${author}" = 'renovate[bot]'
+            test "${base_ref}" = develop
+            test "${EVENT_HEAD_REPOSITORY}" = "${REPOSITORY}"
+            [[ "${EVENT_HEAD_REF}" == renovate/* ]]
+            jq -e '
+              ([.labels[].name] | index("renovate") != null)
+              and ([.labels[].name] | index("dependencies") != null)
+              and ([.labels[].name] | index("safe-automerge") != null)
+              and ([.labels[].name] | index("breaking-update") == null)
+            ' <<<"${pr}" >/dev/null
+            review_path="deterministic policy-bound Renovate exemption"
+            external_kind="renovate"
+            result_title="Current revision Renovate exemption passed"
+          elif [[ "${TRUSTED_KIND}" =~ ^(shared-assets|repository-quality)$ ]]; then
             test "${REPOSITORY}" != 'lightning-it/.github'
             test "${author}" = 'lightning-it-shared-assets-sync[bot]'
             test "${base_ref}" = develop
@@ -1622,9 +1636,7 @@ jobs:
             external_kind="ancestry-backmerge"
             result_title="Current revision deterministic exemption passed"
           else
-            test "${TRUSTED_KIND}" != shared-assets
-            test "${TRUSTED_KIND}" != repository-quality
-            test "${TRUSTED_KIND}" != ancestry-backmerge
+            test "${TRUSTED_KIND}" = none
             test "${author}" != 'lightning-it-shared-assets-sync[bot]'
             test "${author}" != 'lightning-it-release-automation[bot]'
           fi
