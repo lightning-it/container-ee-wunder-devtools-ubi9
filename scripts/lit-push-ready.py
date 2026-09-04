@@ -1439,14 +1439,15 @@ def require_trusted_check_policy(
             )
 
 
-def integration_worktree_fingerprint(
-    cwd: Path, *, include_ignored: bool = False
-) -> str:
-    untracked_command = ["ls-files", "--others"]
-    if not include_ignored:
-        untracked_command.append("--exclude-standard")
-    untracked_command.append("-z")
-    untracked = git_output_at(cwd, *untracked_command).split("\0")
+def integration_worktree_fingerprint(cwd: Path) -> str:
+    # Deliberately omit --exclude-standard: deterministic validation must not
+    # be able to hide checkout mutations behind a repository ignore rule.
+    untracked = git_output_at(
+        cwd,
+        "ls-files",
+        "--others",
+        "-z",
+    ).split("\0")
     untracked_hashes: dict[str, str] = {}
     untracked_bytes = 0
     for name in (entry for entry in untracked if entry):
