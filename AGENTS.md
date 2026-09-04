@@ -169,6 +169,14 @@
   require an actual Copilot review of the current head. Only explicitly
   allowlisted Renovate and shared-assets changes may use a documented
   deterministic, evidence-bound exception; unknown bots fail closed.
+- The existing Renovate exception is valid only for the exact
+  `renovate[bot]` author, a same-repository `renovate/*` head, protected
+  `develop` base, all three `renovate`, `dependencies`, and `safe-automerge`
+  labels, no `breaking-update` label, and a null AI review ID. Its producer
+  publishes only the bound deterministic result and exits; the independent
+  Required Workflow verifies that completed producer directly and MUST NOT be
+  raced by a producer-authored rerun. No other Renovate or dependency exception
+  exists.
 - Automated GitHub Copilot requests funded by Lightning IT are restricted to
   pull requests whose exact author login is `litroc`. Every other human or
   external contributor must supply a valid current-head review under their own
