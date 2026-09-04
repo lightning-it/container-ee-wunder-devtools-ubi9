@@ -433,6 +433,8 @@ jobs:
       pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      review_id_empty: ${{ steps.publish-bound-neutral-result.outputs.review_id_empty }}
 
     steps:
       - name: Invalidate prior result after pull-request metadata change
@@ -1333,6 +1335,7 @@ jobs:
           echo "GitHub Copilot reviewed current head ${head_sha}; no unresolved Copilot findings remain."
 
       - name: Publish bound neutral result
+        id: publish-bound-neutral-result
         env:
           BOUND_LAST_EDITED_AT: ${{ steps.metadata-revision.outputs.last_edited_at }}
           BOUND_LABELS_SHA256: ${{ steps.metadata-revision.outputs.labels_sha256 }}
@@ -1645,6 +1648,11 @@ jobs:
           else
             test -z "${BOUND_REVIEW_ID}"
           fi
+          if [ -z "${BOUND_REVIEW_ID}" ]; then
+            echo "review_id_empty=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "review_id_empty=false" >>"${GITHUB_OUTPUT}"
+          fi
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           evidence="$(jq -cn \
             --arg base "${EVENT_BASE}" \
@@ -1862,32 +1870,47 @@ jobs:
     # `verify-current-revision-policy` deliberately tolerates an inapplicable,
     # skipped Release-App classifier. Keep that skip from being reintroduced
     # through GitHub's implicit `success()` predicate on this downstream job.
-    # A proven ancestry-only backmerge already has a deterministic neutral
-    # result which the independent Required Workflow verifies directly. Do not
-    # race that verifier with a redundant rerun request.
+    # A proven ancestry-only backmerge or the existing tightly allowlisted
+    # Renovate exception already has a deterministic neutral result which the
+    # independent Required Workflow verifies directly. Do not race that
+    # verifier with a redundant rerun request.
     if: >-
       always() &&
       needs.verify-current-revision-policy.result == 'success' &&
       !(
-        github.event_name == 'pull_request_target' &&
-        github.event.pull_request.base.ref == 'develop' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        startsWith(github.event.pull_request.head.ref, 'backmerge/') &&
-        endsWith(github.event.pull_request.head.ref, '-main') &&
-        startsWith(
-          github.event.pull_request.title,
-          'chore(governance): record main ancestry before '
-        ) &&
         (
+          github.event_name == 'pull_request_target' &&
+          github.event.pull_request.base.ref == 'develop' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.user.login == 'renovate[bot]' &&
+          startsWith(github.event.pull_request.head.ref, 'renovate/') &&
+          contains(github.event.pull_request.labels.*.name, 'renovate') &&
+          contains(github.event.pull_request.labels.*.name, 'dependencies') &&
+          contains(github.event.pull_request.labels.*.name, 'safe-automerge') &&
+          !contains(github.event.pull_request.labels.*.name, 'breaking-update') &&
+          needs.verify-current-revision-policy.outputs.review_id_empty == 'true'
+        ) ||
+        (
+          github.event_name == 'pull_request_target' &&
+          github.event.pull_request.base.ref == 'develop' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          startsWith(github.event.pull_request.head.ref, 'backmerge/') &&
+          endsWith(github.event.pull_request.head.ref, '-main') &&
+          startsWith(
+            github.event.pull_request.title,
+            'chore(governance): record main ancestry before '
+          ) &&
           (
-            github.repository == 'lightning-it/.github' &&
-            github.event.pull_request.user.login ==
-              'lightning-it-shared-assets-sync[bot]'
-          ) ||
-          (
-            github.repository != 'lightning-it/.github' &&
-            github.event.pull_request.user.login ==
-              'lightning-it-release-automation[bot]'
+            (
+              github.repository == 'lightning-it/.github' &&
+              github.event.pull_request.user.login ==
+                'lightning-it-shared-assets-sync[bot]'
+            ) ||
+            (
+              github.repository != 'lightning-it/.github' &&
+              github.event.pull_request.user.login ==
+                'lightning-it-release-automation[bot]'
+            )
           )
         )
       )
