@@ -277,7 +277,7 @@ def protected_asset_bytes(path: Path, name: str) -> bytes:
             fail(f"Protected {name} is unavailable: {error}")
         details = os.fstat(descriptor)
         if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
-            fail(f"Protected {name} must be one regular non-symlink file.")
+            fail(f"Protected {name} must be one regular file with link count 1 (no hardlinks).")
         if details.st_uid != os.geteuid():
             fail(f"Protected {name} must be owned by the current user.")
         if details.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
@@ -341,7 +341,7 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
             if existing_descriptor >= 0:
                 existing = os.fstat(existing_descriptor)
                 if not stat.S_ISREG(existing.st_mode) or existing.st_nlink != 1:
-                    fail(f"Protected {name} must be one regular non-symlink file.")
+                    fail(f"Protected {name} must be one regular file with link count 1 (no hardlinks).")
                 if existing.st_uid != os.geteuid():
                     fail(f"Protected {name} must be owned by the current user.")
                 if existing.st_mode & (stat.S_IWGRP | stat.S_IWOTH):

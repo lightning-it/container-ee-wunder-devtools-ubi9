@@ -78,9 +78,29 @@ jobs:
           test "${TRUSTED_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
           test "${TRUSTED_WORKFLOW_SHA}" = "${DISPATCH_BASE_SHA}"
           install -d -m 0700 trusted-controller
-          gh api \
-            "repos/${REPOSITORY}/contents/scripts/materialize-exact-revision-review.py?ref=${TRUSTED_WORKFLOW_SHA}" \
-            --jq .content | base64 --decode >trusted-controller/materialize.py
+          load_protected_asset() {
+            local destination path payload
+            path="$1"
+            destination="$2"
+            payload="$(gh api \
+              "repos/${REPOSITORY}/contents/${path}?ref=${TRUSTED_WORKFLOW_SHA}")"
+            jq -e \
+              --arg path "${path}" '
+                .type == "file"
+                and .path == $path
+                and .encoding == "base64"
+                and (.content | type == "string" and length > 0)
+                and (.size | type == "number" and . > 0 and . <= 1000000)
+                and (.sha | type == "string" and test("^[0-9a-f]{40}$"))
+              ' <<<"${payload}" >/dev/null
+            jq -er .content <<<"${payload}" \
+              | base64 --decode >"${destination}"
+            test "$(git hash-object "${destination}")" = \
+              "$(jq -r .sha <<<"${payload}")"
+          }
+          load_protected_asset \
+            scripts/materialize-exact-revision-review.py \
+            trusted-controller/materialize.py
           chmod 0500 trusted-controller/materialize.py
           python3 trusted-controller/materialize.py materialize \
             --repository "${REPOSITORY}" \
@@ -92,15 +112,15 @@ jobs:
             --trigger "${TRIGGER}" \
             --dispatch-ref "${DISPATCH_REF}" \
             --review-directory exact-revision-review >/dev/null
-          gh api \
-            "repos/${REPOSITORY}/contents/.github/codex/prompts/review-exact-head.md?ref=${TRUSTED_WORKFLOW_SHA}" \
-            --jq .content | base64 --decode >exact-revision-review/review-prompt.md
-          gh api \
-            "repos/${REPOSITORY}/contents/.github/codex/schemas/exact-head-review.schema.json?ref=${TRUSTED_WORKFLOW_SHA}" \
-            --jq .content | base64 --decode >exact-revision-review/review-schema.json
-          gh api \
-            "repos/${REPOSITORY}/contents/.github/workflows/release-bot-exact-head-review.yml?ref=${TRUSTED_WORKFLOW_SHA}" \
-            --jq .content | base64 --decode >trusted-controller/workflow.yml
+          load_protected_asset \
+            .github/codex/prompts/review-exact-head.md \
+            exact-revision-review/review-prompt.md
+          load_protected_asset \
+            .github/codex/schemas/exact-head-review.schema.json \
+            exact-revision-review/review-schema.json
+          load_protected_asset \
+            .github/workflows/release-bot-exact-head-review.yml \
+            trusted-controller/workflow.yml
           test -s exact-revision-review/review-prompt.md
           jq -e '.type == "object"' exact-revision-review/review-schema.json >/dev/null
           python3 trusted-controller/materialize.py bind-assets \
