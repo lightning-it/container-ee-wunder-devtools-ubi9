@@ -231,12 +231,15 @@ jobs:
             required_runs="$(jq -c \
               --arg api_url "${GITHUB_API_URL}" \
               --arg author "${PR_AUTHOR}" \
+              --arg base_ref "${PR_BASE_REF}" \
+              --arg base_sha "${BASE_SHA}" \
               --arg head "${HEAD_SHA}" \
               --arg head_ref "${PR_HEAD_REF}" \
               --arg head_repository "${PR_HEAD_REPOSITORY}" \
               --arg prefix "Protected current revision PR #${PR_NUMBER} " \
               --arg repository "${REPOSITORY}" \
-              --arg suffix " ${HEAD_SHA}" '
+              --arg suffix " ${HEAD_SHA}" \
+              --argjson pr "${PR_NUMBER}" '
                 [.[].workflow_runs[]? |
                   select(.event == "pull_request_target") |
                   select(.path == ".github/workflows/supplementary-current-revision-required.yml") |
@@ -251,7 +254,18 @@ jobs:
                       and .triggering_actor.login == $author)
                     or (.run_attempt > 1
                       and .triggering_actor.login == "github-actions[bot]")) |
-                  select((.pull_requests | length) == 0) |
+                  select((.pull_requests | length) == 1) |
+                  select(.pull_requests[0].number == $pr) |
+                  select(.pull_requests[0].url == ($api_url + "/repos/"
+                    + $repository + "/pulls/" + ($pr | tostring))) |
+                  select(.pull_requests[0].base.ref == $base_ref) |
+                  select(.pull_requests[0].base.sha == $base_sha) |
+                  select(.pull_requests[0].base.repo.url == ($api_url
+                    + "/repos/" + $repository)) |
+                  select(.pull_requests[0].head.ref == $head_ref) |
+                  select(.pull_requests[0].head.sha == $head) |
+                  select(.pull_requests[0].head.repo.url == ($api_url
+                    + "/repos/" + $head_repository)) |
                   select(.name == .display_title) |
                   select(.name == ($prefix + "opened" + $suffix)
                     or .name == ($prefix + "synchronize" + $suffix)
@@ -349,6 +363,7 @@ jobs:
             check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
             validate_neutral_producer() {
               local external_id evidence_version kind producer producer_id
+              local producer_attempt_jobs producer_failures producer_helper_failures
               local producer_jobs producer_jobs_pages producer_run_attempt producer_url
               local review_id review_pages
               external_id="$(jq -er '.[0].external_id | select(type == "string")' <<<"${neutral}")"
@@ -406,7 +421,7 @@ jobs:
                   and .head_repository.full_name == $head_repository
                   and .head_branch == $head_ref and .head_sha == $head_sha
                   and .html_url == $url and .status == "completed"
-                  and .conclusion == "success"
+                  and (.conclusion == "success" or .conclusion == "failure")
                   and (.run_attempt | type) == "number"
                   and .run_attempt >= 1 and .run_attempt <= 2
                   and (.pull_requests | length) == 1
@@ -419,6 +434,50 @@ jobs:
               producer_run_attempt="$(jq -er '.run_attempt | select(type == "number")' <<<"${producer}")"
               producer_jobs_pages="$(gh api --paginate --slurp \
                 "repos/${REPOSITORY}/actions/runs/${producer_id}/jobs?filter=all&per_page=100")" || return 1
+              producer_attempt_jobs="$(jq -c \
+                --arg head "${HEAD_SHA}" \
+                --argjson attempt "${producer_run_attempt}" \
+                --argjson run_id "${producer_id}" '
+                  [.[].jobs[]? |
+                    select(.run_id == $run_id and .head_sha == $head) |
+                    select(.run_attempt == $attempt and .status == "completed")]
+                ' <<<"${producer_jobs_pages}")" || return 1
+              test "$(jq 'length' <<<"${producer_attempt_jobs}")" -gt 0 \
+                || return 1
+              producer_failures="$(jq -c \
+                '[.[] | select(.conclusion == "failure")]' \
+                <<<"${producer_attempt_jobs}")" || return 1
+              if [ "$(jq -r .conclusion <<<"${producer}")" = success ]; then
+                test "$(jq 'length' <<<"${producer_failures}")" -eq 0 \
+                  || return 1
+              else
+                # A neutral PASS is published before this one downstream
+                # helper runs. Accept an overall failed producer only when
+                # that exact runner-backed helper is the sole failed job and
+                # its exact verifier-rerun step is the sole failed step.
+                producer_helper_failures="$(jq -c '
+                  [.[] |
+                    select(.name == "Request protected verifier re-evaluation / Re-run the one protected verifier attempt") |
+                    select((.runner_id | type) == "number" and .runner_id > 0) |
+                    select((.runner_name | type) == "string" and (.runner_name | length) > 0) |
+                    select((.steps | type) == "array" and (.steps | length) > 0) |
+                    select(([.steps[]? |
+                      select(.name == "Validate the live binding and rerun exactly once") |
+                      select(.status == "completed" and .conclusion == "failure")]
+                      | length) == 1) |
+                    select(([.steps[]? | select(.conclusion == "failure")]
+                      | length) == 1)]
+                  ' <<<"${producer_failures}")" || return 1
+                test "$(jq 'length' <<<"${producer_failures}")" -eq 1 \
+                  || return 1
+                test "$(jq 'length' <<<"${producer_helper_failures}")" -eq 1 \
+                  || return 1
+                jq -e 'all(.[];
+                  .conclusion == "success"
+                  or .conclusion == "skipped"
+                  or .name == "Request protected verifier re-evaluation / Re-run the one protected verifier attempt")' \
+                  <<<"${producer_attempt_jobs}" >/dev/null || return 1
+              fi
               producer_jobs="$(jq -c --argjson attempt "${producer_run_attempt}" '
                 [.[].jobs[]? | select(.name == "Verify current revision policy") |
                   select(.run_attempt == $attempt and .status == "completed"
