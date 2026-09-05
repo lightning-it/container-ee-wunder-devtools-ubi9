@@ -915,30 +915,36 @@ jobs:
           attempt_one_jobs=$(jq -c '[.[].jobs[]]' <<<"${attempt_one_jobs_pages}")
           jq -e 'all(.[]; has("runner_id") and (.steps | type) == "array")' <<<"${attempt_one_jobs}" >/dev/null
           # Only API-published neutral checks are admissible without a runner.
-          # A skipped one-time authorization job is never review evidence.
+          # The centrally protected immutable v5-successor authorization is
+          # an optional, known skipped job on unrelated repositories/PRs. It
+          # is never review evidence and no other synthetic job is admitted.
           synthetic_evidence_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Current revision review" or .name == "Protected current-revision verifier")]' <<<"${attempt_one_jobs}")
+          synthetic_authorization_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Authorize exact Supplementary catch-up v5 successor") | select(.run_attempt == 1 and .status == "completed" and .conclusion == "skipped")]' <<<"${attempt_one_jobs}")
+          test "$(jq 'length' <<<"${synthetic_authorization_jobs}")" -le 1
           runner_backed_jobs=$(jq -c \
             '[.[] | select(.runner_id != null or (.steps | length) > 0)]' \
             <<<"${attempt_one_jobs}")
           test "$(jq 'length' <<<"${attempt_one_jobs}")" -eq \
-            "$(jq -n --argjson evidence "${synthetic_evidence_jobs}" --argjson runners "${runner_backed_jobs}" '(($evidence | length) + ($runners | length))')"
+            "$(jq -n --argjson authorization "${synthetic_authorization_jobs}" --argjson evidence "${synthetic_evidence_jobs}" --argjson runners "${runner_backed_jobs}" '(($authorization | length) + ($evidence | length) + ($runners | length))')"
           test "$(jq 'length' <<<"${runner_backed_jobs}")" -eq 1
           rerunnable_jobs=$(jq -c '[.[] | select(.name == "Required current-revision workflow") | select(.runner_id != null and (.steps | length) > 0) | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${runner_backed_jobs}")
           test "$(jq 'length' <<<"${rerunnable_jobs}")" -eq 1
+          required_job_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' \
+            <<<"${rerunnable_jobs}")"
           revalidate_pr_metadata
           if ! gh api --method POST \
-              "repos/${REPOSITORY}/actions/runs/${run_id}/rerun" >/dev/null; then
-            # GitHub can accept the run rerun and still close the client request
+              "repos/${REPOSITORY}/actions/jobs/${required_job_id}/rerun" >/dev/null; then
+            # GitHub can accept the verifier-job rerun and still close the client request
             # with a non-success response when another service-side request
             # wins the same transition. Accept that outcome only after the
             # live run proves that attempt two was actually materialized.
             run="$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}")"
             observed_attempt="$(jq -er '.run_attempt | select(type == "number" and . >= 1)' <<<"${run}")"
             if [ "${observed_attempt}" -ne 2 ]; then
-              echo "Required-run rerun failed without exactly one materialized second attempt." >&2
+              echo "Required verifier job rerun failed without exactly one materialized second attempt." >&2
               exit 1
             fi
-            echo "A concurrent service-side request already materialized the required-run rerun."
+            echo "A concurrent service-side request already materialized the required verifier job rerun."
           fi
           # Waiting here creates a circular dependency.
           revalidate_pr_metadata
