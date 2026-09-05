@@ -66,7 +66,7 @@ jobs:
       TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
 
     steps:
-      - name: Load protected materializer, prompt, and schema
+      - name: Load the complete protected review-asset closure
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -121,6 +121,9 @@ jobs:
           load_protected_asset \
             .github/workflows/release-bot-exact-head-review.yml \
             trusted-controller/workflow.yml
+          load_protected_asset \
+            .github/workflows/current-revision-rerun.yml \
+            trusted-controller/current-revision-rerun.yml
           test -s exact-revision-review/review-prompt.md
           jq -e '.type == "object"' exact-revision-review/review-schema.json >/dev/null
           python3 trusted-controller/materialize.py bind-assets \
@@ -135,6 +138,7 @@ jobs:
             --review-directory exact-revision-review \
             --materializer-path trusted-controller/materialize.py \
             --prompt-path exact-revision-review/review-prompt.md \
+            --rerun-workflow-path trusted-controller/current-revision-rerun.yml \
             --schema-path exact-revision-review/review-schema.json \
             --workflow-path trusted-controller/workflow.yml >/dev/null
           chmod 0400 \
@@ -142,6 +146,7 @@ jobs:
             exact-revision-review/review-metadata.json \
             exact-revision-review/review-prompt.md \
             exact-revision-review/review-schema.json \
+            trusted-controller/current-revision-rerun.yml \
             trusted-controller/workflow.yml
 
       - name: Reserve one immutable review input or reuse its protected PASS
@@ -669,6 +674,7 @@ jobs:
             --review-directory exact-revision-review \
             --materializer-path trusted-controller/materialize.py \
             --prompt-path exact-revision-review/review-prompt.md \
+            --rerun-workflow-path trusted-controller/current-revision-rerun.yml \
             --schema-path exact-revision-review/review-schema.json \
             --workflow-path trusted-controller/workflow.yml >/dev/null
           metadata=exact-revision-review/review-metadata.json

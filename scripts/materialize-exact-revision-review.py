@@ -30,6 +30,7 @@ COMMAND_TIMEOUT_SECONDS = 120
 ASSET_ARGUMENTS = {
     "materializer_sha256": "materializer_path",
     "prompt_sha256": "prompt_path",
+    "rerun_workflow_sha256": "rerun_workflow_path",
     "schema_sha256": "schema_path",
     "workflow_sha256": "workflow_path",
 }
@@ -48,6 +49,7 @@ IMMUTABLE_METADATA_KEYS = (
     "trigger",
     "materializer_sha256",
     "prompt_sha256",
+    "rerun_workflow_sha256",
     "schema_sha256",
     "workflow_sha256",
     "input_sha256",
@@ -256,6 +258,34 @@ def open_owned_parent_directory(path: Path, name: str, requirement: str) -> tupl
             "Validated parent directory",
         )
     return directory, no_follow, close_on_exec
+
+
+def validated_runner_temp() -> Path:
+    """Return the absolute, owned, non-writable-by-others runner temp directory."""
+    value = os.environ.get("RUNNER_TEMP", "")
+    if not value:
+        fail("RUNNER_TEMP is required for protected temporary workspaces.")
+    runner_temp = Path(value)
+    if not runner_temp.is_absolute():
+        fail("RUNNER_TEMP must identify an absolute directory.")
+    if not runner_temp.is_dir():
+        fail("RUNNER_TEMP must identify an existing directory.")
+    directory, _, _ = open_owned_parent_directory(
+        runner_temp / ".mlx90-runner-temp-anchor",
+        "RUNNER_TEMP directory",
+        "Protected temporary workspace creation",
+    )
+    cleanup_errors = close_descriptor_after_error(
+        directory,
+        "Validated RUNNER_TEMP directory",
+    )
+    if cleanup_errors:
+        failure = MaterializationError(
+            "RUNNER_TEMP could not be closed safely after validation."
+        )
+        add_error_notes(failure, cleanup_errors)
+        raise failure
+    return runner_temp
 
 
 def protected_asset_bytes(path: Path, name: str) -> bytes:
@@ -644,17 +674,51 @@ def git_output(
     return result.stdout
 
 
-def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[str, Any]:
-    validate_inputs(arguments)
-    runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
-    if not runner_temp.is_dir():
-        fail("RUNNER_TEMP must identify an existing directory.")
+def write_materialized_workspace(
+    output_directory: Path,
+    diff: bytes,
+    metadata: dict[str, Any],
+) -> None:
+    """Publish the two-file review workspace or remove the exact partial output."""
     if output_directory.exists():
         fail(f"Review workspace already exists: {output_directory}")
     try:
         output_directory.mkdir(mode=0o700, parents=False)
     except OSError as error:
         fail(f"Unable to create the exact-revision review workspace: {error}")
+
+    patch = output_directory / "change.patch"
+    metadata_path = output_directory / "review-metadata.json"
+    try:
+        write_owned_regular_file(patch, diff, "review diff")
+        write_owned_regular_file(
+            metadata_path,
+            (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+            "review metadata",
+        )
+    except BaseException as error:
+        cleanup_errors: list[str] = []
+        for path, name in (
+            (metadata_path, "review metadata"),
+            (patch, "review diff"),
+        ):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                cleanup_errors.append(f"Partial {name} cleanup failed: {cleanup_error}")
+        try:
+            output_directory.rmdir()
+        except OSError as cleanup_error:
+            cleanup_errors.append(f"Partial review workspace cleanup failed: {cleanup_error}")
+        add_error_notes(error, cleanup_errors)
+        raise
+
+
+def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[str, Any]:
+    validate_inputs(arguments)
+    runner_temp = validated_runner_temp()
+    if output_directory.exists():
+        fail(f"Review workspace already exists: {output_directory}")
 
     with tempfile.TemporaryDirectory(prefix="exact-revision-materializer.", dir=runner_temp) as temporary:
         temporary_root = Path(temporary)
@@ -782,7 +846,7 @@ def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[s
 
         read_live_pull_request(arguments, home=home)
         metadata = {
-            "schema_version": 3,
+            "schema_version": 4,
             "repository": arguments.repository,
             "pull_request": arguments.pull_request,
             "base_ref": arguments.base_ref,
@@ -795,14 +859,7 @@ def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[s
             "trusted_workflow_sha": arguments.trusted_workflow_sha,
             "trigger": arguments.trigger,
         }
-        patch = output_directory / "change.patch"
-        metadata_path = output_directory / "review-metadata.json"
-        write_owned_regular_file(patch, diff, "review diff")
-        write_owned_regular_file(
-            metadata_path,
-            (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8"),
-            "review metadata",
-        )
+        write_materialized_workspace(output_directory, diff, metadata)
         return metadata
 
 
@@ -854,9 +911,7 @@ def verify(
             f"missing={missing}, unexpected={unexpected}"
         )
 
-    runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
-    if not runner_temp.is_dir():
-        fail("RUNNER_TEMP must identify an existing directory.")
+    runner_temp = validated_runner_temp()
     with tempfile.TemporaryDirectory(prefix="exact-revision-recheck.", dir=runner_temp) as temporary:
         regenerated = Path(temporary) / "review"
         actual_metadata = bind_protected_assets(materialize(arguments, regenerated), asset_paths)
@@ -884,6 +939,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--review-directory", required=True, type=Path)
     parser.add_argument("--materializer-path", type=Path)
     parser.add_argument("--prompt-path", type=Path)
+    parser.add_argument("--rerun-workflow-path", type=Path)
     parser.add_argument("--schema-path", type=Path)
     parser.add_argument("--workflow-path", type=Path)
     return parser.parse_args()
