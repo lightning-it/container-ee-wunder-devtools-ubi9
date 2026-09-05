@@ -41,11 +41,29 @@ concurrency:
 # executed. Codex sees one bounded directory containing only immutable metadata,
 # the full binary diff, protected prompt, and protected schema.
 jobs:
+  reject-unauthorized-dispatch:
+    name: Reject unauthorized Exact-Revision dispatch
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.run_attempt != 1 ||
+      github.actor != 'lightning-it-release-automation[bot]' ||
+      github.triggering_actor != 'lightning-it-release-automation[bot]'
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Fail closed
+        run: |
+          echo "Only the Release App may start the first Exact-Revision dispatch attempt." >&2
+          exit 1
+
   exact-revision-codex-review:
     name: Current revision review
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      github.actor == 'lightning-it-release-automation[bot]'
+      github.run_attempt == 1 &&
+      github.actor == 'lightning-it-release-automation[bot]' &&
+      github.triggering_actor == 'lightning-it-release-automation[bot]'
     permissions:
       actions: read
       checks: write
@@ -124,6 +142,9 @@ jobs:
           load_protected_asset \
             .github/workflows/current-revision-rerun.yml \
             trusted-controller/current-revision-rerun.yml
+          load_protected_asset \
+            .github/workflows/copilot-review.yml \
+            trusted-controller/copilot-review.yml
           test -s exact-revision-review/review-prompt.md
           jq -e '.type == "object"' exact-revision-review/review-schema.json >/dev/null
           python3 trusted-controller/materialize.py bind-assets \
@@ -136,6 +157,7 @@ jobs:
             --trigger "${TRIGGER}" \
             --dispatch-ref "${DISPATCH_REF}" \
             --review-directory exact-revision-review \
+            --copilot-workflow-path trusted-controller/copilot-review.yml \
             --materializer-path trusted-controller/materialize.py \
             --prompt-path exact-revision-review/review-prompt.md \
             --rerun-workflow-path trusted-controller/current-revision-rerun.yml \
@@ -146,6 +168,7 @@ jobs:
             exact-revision-review/review-metadata.json \
             exact-revision-review/review-prompt.md \
             exact-revision-review/review-schema.json \
+            trusted-controller/copilot-review.yml \
             trusted-controller/current-revision-rerun.yml \
             trusted-controller/workflow.yml
 
@@ -156,7 +179,7 @@ jobs:
         run: |
           set -euo pipefail
           input_sha256="$(jq -er .input_sha256 exact-revision-review/review-metadata.json)"
-          external_prefix="mlx90-exact-revision:v4:${input_sha256}:"
+          external_prefix="mlx90-exact-revision:v5:${input_sha256}:"
           external_id="${external_prefix}${GITHUB_RUN_ID}"
           expected_title="Exact-Revision Codex PR #${PR_NUMBER} ${EXPECTED_BASE}..${EXPECTED_HEAD}"
           read_reservation_checks() {
@@ -672,6 +695,7 @@ jobs:
             --trigger "${TRIGGER}" \
             --dispatch-ref "${DISPATCH_REF}" \
             --review-directory exact-revision-review \
+            --copilot-workflow-path trusted-controller/copilot-review.yml \
             --materializer-path trusted-controller/materialize.py \
             --prompt-path exact-revision-review/review-prompt.md \
             --rerun-workflow-path trusted-controller/current-revision-rerun.yml \

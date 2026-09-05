@@ -194,6 +194,14 @@
   review`. The built-in `:read-only` permission profile technically denies
   writes and command network access. This path never applies to human,
   community, or other automation authors.
+- A protected Exact-Revision bootstrap is one dependency-closed trust surface.
+  It MUST install `.github/workflows/copilot-review.yml`,
+  `.github/workflows/release-bot-exact-head-review.yml`,
+  `.github/workflows/current-revision-rerun.yml`,
+  `scripts/materialize-exact-revision-review.py`,
+  `.github/codex/prompts/review-exact-head.md`, and
+  `.github/codex/schemas/exact-head-review.schema.json` byte-identically and
+  atomically. A partial bootstrap fails closed.
 - Reusable `pull_request_target` re-evaluation binds its executed controller
   SHA and ref to the live protected default branch, even when the PR base is
   different; PR base and head remain separately exact. A `workflow_run`

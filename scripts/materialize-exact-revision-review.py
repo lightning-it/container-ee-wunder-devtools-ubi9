@@ -28,6 +28,7 @@ MAX_REVIEW_BYTES = 200_000
 MAX_PROTECTED_ASSET_BYTES = 1_000_000
 COMMAND_TIMEOUT_SECONDS = 120
 ASSET_ARGUMENTS = {
+    "copilot_workflow_sha256": "copilot_workflow_path",
     "materializer_sha256": "materializer_path",
     "prompt_sha256": "prompt_path",
     "rerun_workflow_sha256": "rerun_workflow_path",
@@ -47,6 +48,7 @@ IMMUTABLE_METADATA_KEYS = (
     "review_bytes",
     "trusted_workflow_sha",
     "trigger",
+    "copilot_workflow_sha256",
     "materializer_sha256",
     "prompt_sha256",
     "rerun_workflow_sha256",
@@ -846,7 +848,7 @@ def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[s
 
         read_live_pull_request(arguments, home=home)
         metadata = {
-            "schema_version": 4,
+            "schema_version": 5,
             "repository": arguments.repository,
             "pull_request": arguments.pull_request,
             "base_ref": arguments.base_ref,
@@ -938,6 +940,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--dispatch-ref", default="")
     parser.add_argument("--review-directory", required=True, type=Path)
     parser.add_argument("--materializer-path", type=Path)
+    parser.add_argument("--copilot-workflow-path", type=Path)
     parser.add_argument("--prompt-path", type=Path)
     parser.add_argument("--rerun-workflow-path", type=Path)
     parser.add_argument("--schema-path", type=Path)
