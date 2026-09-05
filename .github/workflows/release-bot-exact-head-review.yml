@@ -41,6 +41,9 @@ concurrency:
 # executed. Codex sees one bounded directory containing only immutable metadata,
 # the full binary diff, protected prompt, and protected schema.
 jobs:
+  # The organization Required Workflow recognizes this exact job name only
+  # when GitHub records the authorized path as skipped, runnerless, and
+  # step-less. Coordinate any name or predicate change with that consumer.
   reject-unauthorized-dispatch:
     name: Reject unauthorized Exact-Revision dispatch
     if: >-
