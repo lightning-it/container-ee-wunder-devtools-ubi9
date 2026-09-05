@@ -260,6 +260,8 @@ jobs:
           [[ "${TRUSTED_WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]]
           test "${DEFAULT_BRANCH}" = develop
           [[ "${EXPECTED_BASE_REF}" =~ ^(develop|main)$ ]]
+          # pull_request_target executes the protected controller from the
+          # repository default branch; the PR base may independently be main.
           test "${TRUSTED_WORKFLOW_REF}" = \
             "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${DEFAULT_BRANCH}"
           controller_branch="$(gh api \
@@ -1494,6 +1496,8 @@ jobs:
           test "$(read_labels_sha256)" = "${BOUND_LABELS_SHA256}"
           [[ "${EVENT_BASE_REF}" =~ ^(develop|main)$ ]]
           test "${DEFAULT_BRANCH}" = develop
+          # pull_request_target executes the protected controller from the
+          # repository default branch; the PR base may independently be main.
           test "${TRUSTED_WORKFLOW_REF}" = \
             "${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${DEFAULT_BRANCH}"
           controller_branch="$(api_read \

@@ -184,8 +184,11 @@
   or funds it. Personal tokens and personal provider keys never enter Actions.
 - Every exact same-repository PR authored by
   `lightning-it-release-automation[bot]` uses only the ADR-defined, protected
-  MLX-90 §7.2 Exact-Revision Codex review. No deterministic release exemption
-  and no GitHub Copilot fallback is permitted. The review binds the live base,
+  MLX-90 §7.2 Exact-Revision Codex review, except for an exact, exhaustively
+  verified ancestry-only `main` to `develop` backmerge. That one REP-60 case
+  uses the deterministic evidence-bound zero-AI exception and never dispatches
+  Codex or Copilot. No other deterministic release exemption and no GitHub
+  Copilot fallback is permitted. The §7.2 review binds the live base,
   head, unique merge base, integration tree, and SHA-256 of the complete binary
   Git-object diff. It MUST run from the protected base copy of
   `.github/workflows/release-bot-exact-head-review.yml`, receive no checkout,
@@ -225,6 +228,13 @@
   only that job once, must observe attempt two as `github-actions[bot]`, and
   never requests AI or mutates a check. The ordinary controller still owns
   the one final Pipeline-Copilot request and result.
+- After the controller publishes one exact neutral PASS, the protected rerun
+  helper discovers exactly one organization Required Workflow run through its
+  non-local `actions/required_workflows` URL and complete PR/base/head/repo
+  binding. That lookup is never PASS evidence. A reservation is optional only
+  if attempt one ended before publishing it; if present, it must identify the
+  same run. Only the one failed verifier job may be rerun once, and attempt two
+  must execute the full ordinary verification before it can pass.
 - A deterministic ancestry-backmerge retry MUST exhaustively read the open and
   closed pull-request history for its exact repository-owned branch, base and
   head before it creates a pull request. Any closed exact match, unexpected
