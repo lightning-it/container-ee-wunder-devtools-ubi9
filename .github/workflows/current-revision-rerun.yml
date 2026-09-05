@@ -9,8 +9,11 @@ run-name: >-
   head ${{ inputs.expected_head }}
 
 on:
-  # Reusable workflows inherit the caller's GitHub event context. The
-  # pull_request_target and push predicates below therefore bind real callers.
+  # A called workflow receives its caller's event payload and event name; it
+  # never sees `workflow_call` as github.event_name. The reusable job gate below
+  # selects callers by their exact protected workflow_ref plus event-specific
+  # payload bindings. The shell case then independently rejects every event
+  # except pull_request_target, push, and the standalone workflow_dispatch.
   workflow_call:
     inputs:
       base_ref:
@@ -70,9 +73,9 @@ jobs:
     if: >-
       github.run_attempt == 1 &&
       (
-        ( github.event_name == 'pull_request_target' && github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@refs/heads/{1}', github.repository, github.event.repository.default_branch) && github.ref_protected == true && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
+        ( github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@refs/heads/{1}', github.repository, github.event.repository.default_branch) && github.ref_protected == true && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
         ( github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]' && github.triggering_actor == 'github-actions[bot]' && github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/current-revision-rerun.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', inputs.base_ref) && github.ref_protected == true ) ||
-        ( github.event_name == 'push' && github.workflow_sha == inputs.expected_head && github.workflow_ref == format('{0}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop', github.repository) && github.ref == 'refs/heads/develop' && github.ref_protected == true && github.sha == inputs.expected_head && github.event.ref == 'refs/heads/develop' && github.event.after == inputs.expected_head )
+        ( github.workflow_sha == inputs.expected_head && github.workflow_ref == format('{0}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop', github.repository) && github.ref == 'refs/heads/develop' && github.ref_protected == true && github.sha == inputs.expected_head && github.event.ref == 'refs/heads/develop' && github.event.after == inputs.expected_head )
       )
     permissions:
       actions: write

@@ -904,6 +904,8 @@ def main() -> int:
             )
     except MaterializationError as error:
         print(f"error: {error}", file=sys.stderr)
+        for note in getattr(error, "__notes__", ()):
+            print(f"error detail: {note}", file=sys.stderr)
         return 1
     print(json.dumps(metadata, sort_keys=True))
     return 0
