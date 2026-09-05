@@ -215,6 +215,16 @@
   is the only automatic guarded-finalizer re-entry after slower native checks
   finish. Other events never dispatch it; it never requests AI or mutates a
   check, and missing or duplicate handoff evidence fails closed.
+- A first immutable main trust-root bootstrap whose organization Required
+  Workflow attempt one failed before creating a verifier reservation may use
+  the protected default-branch refresh with `review_id=0` only after the
+  external verifier advanced. It requires the exact same-repository `litroc`
+  PR targeting `main`, the canonical title/head-ref, no current-head Copilot
+  review or request marker, no reservation, and the exact first-attempt run
+  whose sole runner-backed failure is bootstrap classification. It may rerun
+  only that job once, must observe attempt two as `github-actions[bot]`, and
+  never requests AI or mutates a check. The ordinary controller still owns
+  the one final Pipeline-Copilot request and result.
 - A deterministic ancestry-backmerge retry MUST exhaustively read the open and
   closed pull-request history for its exact repository-owned branch, base and
   head before it creates a pull request. Any closed exact match, unexpected
