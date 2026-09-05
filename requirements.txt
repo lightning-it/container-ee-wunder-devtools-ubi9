@@ -16,7 +16,7 @@ ansible-lint==6.22.2
 antsibull-changelog==0.35.1
 
 # Version 50.0.0 fixes CVE-2026-69247 in PKCS#7 EnvelopedData decryption.
-cryptography==50.0.0
+cryptography==50.0.1
 
 # ---------------------------------------------------------------------------
 # YAML linting (allow patch/minor, forbid major)
