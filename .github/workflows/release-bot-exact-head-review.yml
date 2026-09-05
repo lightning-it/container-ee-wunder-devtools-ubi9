@@ -41,11 +41,32 @@ concurrency:
 # executed. Codex sees one bounded directory containing only immutable metadata,
 # the full binary diff, protected prompt, and protected schema.
 jobs:
+  # The organization Required Workflow recognizes this exact job name only
+  # when GitHub records the authorized path as skipped, runnerless, and
+  # step-less. Coordinate any name or predicate change with that consumer.
+  reject-unauthorized-dispatch:
+    name: Reject unauthorized Exact-Revision dispatch
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.run_attempt != 1 ||
+      github.actor != 'lightning-it-release-automation[bot]' ||
+      github.triggering_actor != 'lightning-it-release-automation[bot]'
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Fail closed
+        run: |
+          echo "Only the Release App may start the first Exact-Revision dispatch attempt." >&2
+          exit 1
+
   exact-revision-codex-review:
     name: Current revision review
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      github.actor == 'lightning-it-release-automation[bot]'
+      github.run_attempt == 1 &&
+      github.actor == 'lightning-it-release-automation[bot]' &&
+      github.triggering_actor == 'lightning-it-release-automation[bot]'
     permissions:
       actions: read
       checks: write
@@ -66,7 +87,7 @@ jobs:
       TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
 
     steps:
-      - name: Load protected materializer, prompt, and schema
+      - name: Load the complete protected review-asset closure
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -78,9 +99,29 @@ jobs:
           test "${TRUSTED_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
           test "${TRUSTED_WORKFLOW_SHA}" = "${DISPATCH_BASE_SHA}"
           install -d -m 0700 trusted-controller
-          gh api \
-            "repos/${REPOSITORY}/contents/scripts/materialize-exact-revision-review.py?ref=${TRUSTED_WORKFLOW_SHA}" \
-            --jq .content | base64 --decode >trusted-controller/materialize.py
+          load_protected_asset() {
+            local destination path payload
+            path="$1"
+            destination="$2"
+            payload="$(gh api \
+              "repos/${REPOSITORY}/contents/${path}?ref=${TRUSTED_WORKFLOW_SHA}")"
+            jq -e \
+              --arg path "${path}" '
+                .type == "file"
+                and .path == $path
+                and .encoding == "base64"
+                and (.content | type == "string" and length > 0)
+                and (.size | type == "number" and . > 0 and . <= 1000000)
+                and (.sha | type == "string" and test("^[0-9a-f]{40}$"))
+              ' <<<"${payload}" >/dev/null
+            jq -er .content <<<"${payload}" \
+              | base64 --decode >"${destination}"
+            test "$(git hash-object "${destination}")" = \
+              "$(jq -r .sha <<<"${payload}")"
+          }
+          load_protected_asset \
+            scripts/materialize-exact-revision-review.py \
+            trusted-controller/materialize.py
           chmod 0500 trusted-controller/materialize.py
           python3 trusted-controller/materialize.py materialize \
             --repository "${REPOSITORY}" \
@@ -92,15 +133,21 @@ jobs:
             --trigger "${TRIGGER}" \
             --dispatch-ref "${DISPATCH_REF}" \
             --review-directory exact-revision-review >/dev/null
-          gh api \
-            "repos/${REPOSITORY}/contents/.github/codex/prompts/review-exact-head.md?ref=${TRUSTED_WORKFLOW_SHA}" \
-            --jq .content | base64 --decode >exact-revision-review/review-prompt.md
-          gh api \
-            "repos/${REPOSITORY}/contents/.github/codex/schemas/exact-head-review.schema.json?ref=${TRUSTED_WORKFLOW_SHA}" \
-            --jq .content | base64 --decode >exact-revision-review/review-schema.json
-          gh api \
-            "repos/${REPOSITORY}/contents/.github/workflows/release-bot-exact-head-review.yml?ref=${TRUSTED_WORKFLOW_SHA}" \
-            --jq .content | base64 --decode >trusted-controller/workflow.yml
+          load_protected_asset \
+            .github/codex/prompts/review-exact-head.md \
+            exact-revision-review/review-prompt.md
+          load_protected_asset \
+            .github/codex/schemas/exact-head-review.schema.json \
+            exact-revision-review/review-schema.json
+          load_protected_asset \
+            .github/workflows/release-bot-exact-head-review.yml \
+            trusted-controller/workflow.yml
+          load_protected_asset \
+            .github/workflows/current-revision-rerun.yml \
+            trusted-controller/current-revision-rerun.yml
+          load_protected_asset \
+            .github/workflows/copilot-review.yml \
+            trusted-controller/copilot-review.yml
           test -s exact-revision-review/review-prompt.md
           jq -e '.type == "object"' exact-revision-review/review-schema.json >/dev/null
           python3 trusted-controller/materialize.py bind-assets \
@@ -113,8 +160,10 @@ jobs:
             --trigger "${TRIGGER}" \
             --dispatch-ref "${DISPATCH_REF}" \
             --review-directory exact-revision-review \
+            --copilot-workflow-path trusted-controller/copilot-review.yml \
             --materializer-path trusted-controller/materialize.py \
             --prompt-path exact-revision-review/review-prompt.md \
+            --rerun-workflow-path trusted-controller/current-revision-rerun.yml \
             --schema-path exact-revision-review/review-schema.json \
             --workflow-path trusted-controller/workflow.yml >/dev/null
           chmod 0400 \
@@ -122,6 +171,8 @@ jobs:
             exact-revision-review/review-metadata.json \
             exact-revision-review/review-prompt.md \
             exact-revision-review/review-schema.json \
+            trusted-controller/copilot-review.yml \
+            trusted-controller/current-revision-rerun.yml \
             trusted-controller/workflow.yml
 
       - name: Reserve one immutable review input or reuse its protected PASS
@@ -131,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           input_sha256="$(jq -er .input_sha256 exact-revision-review/review-metadata.json)"
-          external_prefix="mlx90-exact-revision:v4:${input_sha256}:"
+          external_prefix="mlx90-exact-revision:v5:${input_sha256}:"
           external_id="${external_prefix}${GITHUB_RUN_ID}"
           expected_title="Exact-Revision Codex PR #${PR_NUMBER} ${EXPECTED_BASE}..${EXPECTED_HEAD}"
           read_reservation_checks() {
@@ -647,8 +698,10 @@ jobs:
             --trigger "${TRIGGER}" \
             --dispatch-ref "${DISPATCH_REF}" \
             --review-directory exact-revision-review \
+            --copilot-workflow-path trusted-controller/copilot-review.yml \
             --materializer-path trusted-controller/materialize.py \
             --prompt-path exact-revision-review/review-prompt.md \
+            --rerun-workflow-path trusted-controller/current-revision-rerun.yml \
             --schema-path exact-revision-review/review-schema.json \
             --workflow-path trusted-controller/workflow.yml >/dev/null
           metadata=exact-revision-review/review-metadata.json

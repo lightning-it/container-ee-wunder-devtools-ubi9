@@ -169,6 +169,14 @@
   require an actual Copilot review of the current head. Only explicitly
   allowlisted Renovate and shared-assets changes may use a documented
   deterministic, evidence-bound exception; unknown bots fail closed.
+- The existing Renovate exception is valid only for the exact
+  `renovate[bot]` author, a same-repository `renovate/*` head, protected
+  `develop` base, all three `renovate`, `dependencies`, and `safe-automerge`
+  labels, no `breaking-update` label, and a null AI review ID. Its producer
+  publishes only the bound deterministic result and exits; the independent
+  Required Workflow verifies that completed producer directly and MUST NOT be
+  raced by a producer-authored rerun. No other Renovate or dependency exception
+  exists.
 - Automated GitHub Copilot requests funded by Lightning IT are restricted to
   pull requests whose exact author login is `litroc`. Every other human or
   external contributor must supply a valid current-head review under their own
@@ -186,6 +194,14 @@
   review`. The built-in `:read-only` permission profile technically denies
   writes and command network access. This path never applies to human,
   community, or other automation authors.
+- A protected Exact-Revision bootstrap is one dependency-closed trust surface.
+  It MUST install `.github/workflows/copilot-review.yml`,
+  `.github/workflows/release-bot-exact-head-review.yml`,
+  `.github/workflows/current-revision-rerun.yml`,
+  `scripts/materialize-exact-revision-review.py`,
+  `.github/codex/prompts/review-exact-head.md`, and
+  `.github/codex/schemas/exact-head-review.schema.json` byte-identically and
+  atomically. A partial bootstrap fails closed.
 - Reusable `pull_request_target` re-evaluation binds its executed controller
   SHA and ref to the live protected default branch, even when the PR base is
   different; PR base and head remain separately exact. A `workflow_run`
@@ -199,6 +215,16 @@
   is the only automatic guarded-finalizer re-entry after slower native checks
   finish. Other events never dispatch it; it never requests AI or mutates a
   check, and missing or duplicate handoff evidence fails closed.
+- A first immutable main trust-root bootstrap whose organization Required
+  Workflow attempt one failed before creating a verifier reservation may use
+  the protected default-branch refresh with `review_id=0` only after the
+  external verifier advanced. It requires the exact same-repository `litroc`
+  PR targeting `main`, the canonical title/head-ref, no current-head Copilot
+  review or request marker, no reservation, and the exact first-attempt run
+  whose sole runner-backed failure is bootstrap classification. It may rerun
+  only that job once, must observe attempt two as `github-actions[bot]`, and
+  never requests AI or mutates a check. The ordinary controller still owns
+  the one final Pipeline-Copilot request and result.
 - A deterministic ancestry-backmerge retry MUST exhaustively read the open and
   closed pull-request history for its exact repository-owned branch, base and
   head before it creates a pull request. Any closed exact match, unexpected

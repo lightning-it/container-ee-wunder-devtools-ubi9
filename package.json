@@ -1,5 +1,5 @@
 {
-  "packageManager": "npm@11.19.0",
+  "packageManager": "npm@11.19.1",
   "devDependencies": {
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/github": "^12.0.0",
@@ -20,8 +20,8 @@
     "node-gyp": {
       "undici": "6.28.0"
     },
-    "js-yaml": "4.3.1",
-    "npm": "11.19.0"
+    "js-yaml": "4.3.2",
+    "npm": "11.19.1"
   },
   "private": true,
   "scripts": {

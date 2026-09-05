@@ -1007,6 +1007,19 @@ def minimal_check_environment(state_root: Path) -> dict[str, str]:
                 "WUNDER_CONTAINER_ENGINE must be docker or podman when set"
             )
         environment["WUNDER_CONTAINER_ENGINE"] = selected_engine
+    configured_container_host = os.environ.get("CONTAINER_HOST")
+    if configured_container_host:
+        if not configured_container_host.startswith("unix://"):
+            raise RuntimeError(
+                "deterministic checks refuse a non-local CONTAINER_HOST"
+            )
+        container_socket = existing_unix_socket(configured_container_host)
+        if not container_socket:
+            raise RuntimeError(
+                "deterministic checks require the configured local "
+                "CONTAINER_HOST socket"
+            )
+        environment["CONTAINER_HOST"] = f"unix://{container_socket}"
     configured_host = os.environ.get("DOCKER_HOST")
     if configured_host and not configured_host.startswith("unix://"):
         raise RuntimeError(
