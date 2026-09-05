@@ -23,8 +23,13 @@ on:
         required: true
         type: string
       review_id:
-        description: Exact current-head Copilot review ID
+        description: Exact current-head Copilot review ID, or 0 for protected bootstrap recovery
         required: true
+        type: number
+      required_workflow_run_id:
+        description: Exact failed Required-Workflow run for review-free bootstrap recovery
+        required: false
+        default: 0
         type: number
       evidence_comment_id:
         description: Optional exact maintainer reply proving resolved findings
@@ -66,11 +71,16 @@ jobs:
         env:
           CONTROLLER_SHA: ${{ github.workflow_sha }}
           CONTROLLER_REF: ${{ github.workflow_ref }}
+          EXPECTED_EXTERNAL_REQUIRED_WORKFLOW_BLOB_SHA: c4dbbecb30828bc30c9f68e917aca5670ba57353
+          EXTERNAL_REQUIRED_WORKFLOW_PATH: .github/workflows/supplementary-current-revision-required.yml
+          EXTERNAL_REQUIRED_WORKFLOW_REF: main
+          EXTERNAL_REQUIRED_WORKFLOW_REPOSITORY: lightning-it/.github
           GH_TOKEN: ${{ github.token }}
           INPUT_EVIDENCE_COMMENT_ID: ${{ inputs.evidence_comment_id }}
           INPUT_EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
           INPUT_EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
           INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_REQUIRED_WORKFLOW_RUN_ID: ${{ inputs.required_workflow_run_id }}
           INPUT_REVIEW_ID: ${{ inputs.review_id }}
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -80,12 +90,14 @@ jobs:
           BASE_SHA="${INPUT_EXPECTED_BASE_SHA}"
           HEAD_SHA="${INPUT_EXPECTED_HEAD_SHA}"
           PR_NUMBER="${INPUT_PR_NUMBER}"
+          REQUIRED_WORKFLOW_RUN_ID="${INPUT_REQUIRED_WORKFLOW_RUN_ID:-0}"
           REVIEW_ID="${INPUT_REVIEW_ID}"
           EVIDENCE_COMMENT_ID="${INPUT_EVIDENCE_COMMENT_ID:-0}"
           [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-          [[ "${REVIEW_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${REVIEW_ID}" =~ ^(0|[1-9][0-9]*)$ ]]
+          [[ "${REQUIRED_WORKFLOW_RUN_ID}" =~ ^(0|[1-9][0-9]*)$ ]]
           [[ "${EVIDENCE_COMMENT_ID}" =~ ^(0|[1-9][0-9]*)$ ]]
           [[ "${CONTROLLER_SHA}" =~ ^[0-9a-f]{40}$ ]]
           repository_state="$(gh api "repos/${REPOSITORY}")"
@@ -218,6 +230,44 @@ jobs:
             fi
             return 0
           }
+          verify_external_required_workflow() {
+            local branch_state repository_state workflow_blob workflow_payload
+            repository_state="$(gh api \
+              "repos/${EXTERNAL_REQUIRED_WORKFLOW_REPOSITORY}")"
+            jq -e \
+              --arg repository "${EXTERNAL_REQUIRED_WORKFLOW_REPOSITORY}" '
+                .full_name == $repository
+                and .private == false
+                and .owner.login == "lightning-it"
+                and .owner.type == "Organization"
+              ' <<<"${repository_state}" >/dev/null
+            branch_state="$(gh api \
+              "repos/${EXTERNAL_REQUIRED_WORKFLOW_REPOSITORY}/branches/${EXTERNAL_REQUIRED_WORKFLOW_REF}")"
+            EXTERNAL_REQUIRED_WORKFLOW_HEAD_SHA="$(jq -er \
+              '.commit.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+              <<<"${branch_state}")"
+            jq -e \
+              --arg branch "${EXTERNAL_REQUIRED_WORKFLOW_REF}" \
+              --arg head "${EXTERNAL_REQUIRED_WORKFLOW_HEAD_SHA}" '
+                .name == $branch
+                and .protected == true
+                and .commit.sha == $head
+              ' <<<"${branch_state}" >/dev/null
+            workflow_payload="$(gh api \
+              "repos/${EXTERNAL_REQUIRED_WORKFLOW_REPOSITORY}/contents/${EXTERNAL_REQUIRED_WORKFLOW_PATH}?ref=${EXTERNAL_REQUIRED_WORKFLOW_REF}")"
+            jq -e \
+              --arg blob "${EXPECTED_EXTERNAL_REQUIRED_WORKFLOW_BLOB_SHA}" \
+              --arg path "${EXTERNAL_REQUIRED_WORKFLOW_PATH}" '
+                .type == "file" and .path == $path and .sha == $blob
+                and .encoding == "base64"
+                and (.content | type == "string" and length > 0)
+                and (.size | type == "number" and . > 0 and . <= 200000)
+              ' <<<"${workflow_payload}" >/dev/null
+            workflow_blob="$(jq -er .content <<<"${workflow_payload}" \
+              | base64 --decode | git hash-object --stdin)"
+            test "${workflow_blob}" = \
+              "${EXPECTED_EXTERNAL_REQUIRED_WORKFLOW_BLOB_SHA}"
+          }
           require_failed_required_workflow() {
             local failed_reservation failed_reservation_id failed_reservation_pages
             local required_job
@@ -239,6 +289,7 @@ jobs:
               --arg prefix "Protected current revision PR #${PR_NUMBER} " \
               --arg repository "${REPOSITORY}" \
               --arg suffix " ${HEAD_SHA}" \
+              --arg workflow_name "Protected current-revision evidence verifier" \
               --argjson pr "${PR_NUMBER}" '
                 [.[].workflow_runs[]? |
                   select(.event == "pull_request_target") |
@@ -266,12 +317,12 @@ jobs:
                   select(.pull_requests[0].head.sha == $head) |
                   select(.pull_requests[0].head.repo.url == ($api_url
                     + "/repos/" + $head_repository)) |
-                  select(.name == .display_title) |
-                  select(.name == ($prefix + "opened" + $suffix)
-                    or .name == ($prefix + "synchronize" + $suffix)
-                    or .name == ($prefix + "reopened" + $suffix)
-                    or .name == ($prefix + "ready_for_review" + $suffix)
-                    or .name == ($prefix + "edited" + $suffix))]
+                  select(.display_title == ($prefix + "opened" + $suffix)
+                    or .display_title == ($prefix + "synchronize" + $suffix)
+                    or .display_title == ($prefix + "reopened" + $suffix)
+                    or .display_title == ($prefix + "ready_for_review" + $suffix)
+                    or .display_title == ($prefix + "edited" + $suffix)) |
+                  select(.name == .display_title or .name == $workflow_name)]
                 | sort_by(.run_number) | reverse
               ' <<<"${required_runs_pages}")"
             test "$(jq 'length' <<<"${required_runs}")" -gt 0
@@ -343,6 +394,212 @@ jobs:
                 and .status == "completed" and .conclusion == "failure"
               ' <<<"${failed_reservation}" >/dev/null
           }
+
+          if [ "${REVIEW_ID}" -eq 0 ]; then
+            # The first immutable main trust-root PR cannot publish a neutral
+            # review result until the independently protected organization
+            # Required Workflow has accepted its dependency-closed handoff.
+            # When that verifier advanced after attempt one failed, this
+            # protected default-branch controller may rerun only the exact
+            # failed job. It neither requests AI nor creates/updates a check.
+            test "${EVIDENCE_COMMENT_ID}" -eq 0
+            test "${GITHUB_ACTOR}" = litroc
+            test "${PR_AUTHOR}" = litroc
+            test "$(jq -r .user.type <<<"${pr}")" = User
+            test "${PR_BASE_REF}" = main
+            test "${PR_HEAD_REPOSITORY}" = "${REPOSITORY}"
+            test "$(jq -r .title <<<"${pr}")" = \
+              'fix(rep60): bootstrap protected main review trust root'
+            [[ "${PR_HEAD_REF}" =~ ^fix/rep60-main-trust-root-(successor|bootstrap)-v[1-9][0-9]*-[0-9]{8}$ ]]
+            test "${REQUIRED_WORKFLOW_RUN_ID}" -gt 0
+            has_live_write_permission "${GITHUB_ACTOR}"
+            verify_external_required_workflow
+
+            review_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
+            jq -e --arg head "${HEAD_SHA}" '
+              all(add[]?;
+                .commit_id != $head
+                or (.user.login != "copilot-pull-request-reviewer"
+                  and .user.login != "copilot-pull-request-reviewer[bot]"))
+            ' <<<"${review_pages}" >/dev/null
+            comments="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100")"
+            jq -e --arg marker "<!-- mlx90-copilot-request head=${HEAD_SHA} -->" '
+              all(add[]?; (.body // "") | contains($marker) | not)
+            ' <<<"${comments}" >/dev/null
+
+            failed_run="$(gh api \
+              "repos/${REPOSITORY}/actions/runs/${REQUIRED_WORKFLOW_RUN_ID}")"
+            jq -e \
+              --arg api_url "${GITHUB_API_URL}" \
+              --arg base "${BASE_SHA}" \
+              --arg head "${HEAD_SHA}" \
+              --arg head_ref "${PR_HEAD_REF}" \
+              --arg repository "${REPOSITORY}" \
+              --arg workflow_name "Protected current-revision evidence verifier" \
+              --argjson id "${REQUIRED_WORKFLOW_RUN_ID}" \
+              --argjson pr "${PR_NUMBER}" '
+                .id == $id and .event == "pull_request_target"
+                and .path == ".github/workflows/supplementary-current-revision-required.yml"
+                and (.workflow_id | type) == "number" and .workflow_id > 0
+                and .workflow_url == ($api_url + "/repos/" + $repository
+                  + "/actions/required_workflows/" + (.workflow_id | tostring))
+                and .repository.full_name == $repository
+                and .head_repository.full_name == $repository
+                and .head_branch == $head_ref and .head_sha == $head
+                and .actor.login == "litroc"
+                and .triggering_actor.login == "litroc"
+                and .run_attempt == 1
+                and .status == "completed" and .conclusion == "failure"
+                and (.pull_requests | length) == 1
+                and .pull_requests[0].number == $pr
+                and .pull_requests[0].base.ref == "main"
+                and .pull_requests[0].base.sha == $base
+                and .pull_requests[0].base.repo.url == ($api_url
+                  + "/repos/" + $repository)
+                and .pull_requests[0].head.ref == $head_ref
+                and .pull_requests[0].head.sha == $head
+                and .pull_requests[0].head.repo.url == ($api_url
+                  + "/repos/" + $repository)
+                and (.display_title == ("Protected current revision PR #"
+                  + ($pr | tostring) + " opened " + $head)
+                  or .display_title == ("Protected current revision PR #"
+                    + ($pr | tostring) + " ready_for_review " + $head))
+                and (.name == .display_title or .name == $workflow_name)
+              ' <<<"${failed_run}" >/dev/null
+            failed_jobs="$(gh api \
+              "repos/${REPOSITORY}/actions/runs/${REQUIRED_WORKFLOW_RUN_ID}/attempts/1/jobs?filter=all&per_page=100")"
+            jq -e '
+              type == "object"
+              and (.total_count | type) == "number"
+              and (.jobs | type) == "array"
+              and .total_count == (.jobs | length)
+              and .total_count >= 1 and .total_count <= 2
+              and all(.jobs[];
+                (.id | type) == "number" and .id > 0
+                and .run_attempt == 1 and .status == "completed"
+                and (.name == "Required current-revision workflow"
+                  or .name == "Authorize exact Supplementary catch-up v5 successor"))
+            ' <<<"${failed_jobs}" >/dev/null
+            failed_required_jobs="$(jq -c --arg head "${HEAD_SHA}" '
+              [.jobs[] |
+                select(.name == "Required current-revision workflow") |
+                select(.head_sha == $head) |
+                select(.conclusion == "failure") |
+                select((.runner_id | type) == "number" and .runner_id > 0) |
+                select((.runner_name | type) == "string" and length > 0) |
+                select(([.steps[]? |
+                  select(.name == "Classify protected main trust-root bootstrap handoff") |
+                  select(.status == "completed" and .conclusion == "failure")]
+                  | length) == 1) |
+                select(([.steps[]? | select(.conclusion == "failure")]
+                  | length) == 1)]
+            ' <<<"${failed_jobs}")"
+            test "$(jq 'length' <<<"${failed_required_jobs}")" -eq 1
+            synthetic_jobs="$(jq -c '[.jobs[] |
+              select(.name == "Authorize exact Supplementary catch-up v5 successor") |
+              select(.conclusion == "skipped") |
+              select(.runner_id == null and .runner_name == null) |
+              select((.steps | type) == "array" and (.steps | length) == 0)]' \
+              <<<"${failed_jobs}")"
+            test "$(jq 'length' <<<"${synthetic_jobs}")" -le 1
+            test "$(jq '[.jobs[] | select(.conclusion == "failure")] | length' \
+              <<<"${failed_jobs}")" -eq 1
+            FAILED_REQUIRED_JOB_ID="$(jq -er \
+              '.[0].id | select(type == "number" and . > 0)' \
+              <<<"${failed_required_jobs}")"
+
+            reservation_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?check_name=Protected%20current-revision%20verifier&filter=all&per_page=100")"
+            jq -e '
+              [.[].check_runs[]? |
+                select(.name == "Protected current-revision verifier")]
+              | length == 0
+            ' <<<"${reservation_pages}" >/dev/null
+
+            # Re-read every mutable binding immediately before the sole state
+            # transition. A moved default branch, PR, or consumed verifier
+            # attempt fails closed.
+            current_default="$(gh api \
+              "repos/${REPOSITORY}/branches/${default_branch}")"
+            jq -e --arg head "${CONTROLLER_SHA}" '
+              .protected == true and .commit.sha == $head
+            ' <<<"${current_default}" >/dev/null
+            current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+            jq -e \
+              --arg base "${BASE_SHA}" \
+              --arg head "${HEAD_SHA}" \
+              --arg head_ref "${PR_HEAD_REF}" \
+              --arg repository "${REPOSITORY}" '
+                .state == "open" and .draft == false
+                and .user.login == "litroc" and .user.type == "User"
+                and .title == "fix(rep60): bootstrap protected main review trust root"
+                and .base.ref == "main" and .base.sha == $base
+                and .base.repo.full_name == $repository
+                and .head.ref == $head_ref and .head.sha == $head
+                and .head.repo.full_name == $repository
+              ' <<<"${current_pr}" >/dev/null
+            current_failed_run="$(gh api \
+              "repos/${REPOSITORY}/actions/runs/${REQUIRED_WORKFLOW_RUN_ID}")"
+            jq -e \
+              --arg author "${PR_AUTHOR}" \
+              --arg head "${HEAD_SHA}" \
+              --argjson id "${REQUIRED_WORKFLOW_RUN_ID}" '
+                .id == $id and .head_sha == $head
+                and .run_attempt == 1
+                and .status == "completed" and .conclusion == "failure"
+                and .actor.login == $author
+                and .triggering_actor.login == $author
+              ' <<<"${current_failed_run}" >/dev/null
+
+            # The failed job has only one retry. Re-prove the external,
+            # protected organization verifier immediately before consuming it.
+            verify_external_required_workflow
+            if ! has_live_write_permission "${GITHUB_ACTOR}"; then
+              echo "Dispatch actor lost current write permission before bootstrap verifier rerun." >&2
+              exit 1
+            fi
+
+            gh api --method POST \
+              "repos/${REPOSITORY}/actions/jobs/${FAILED_REQUIRED_JOB_ID}/rerun" \
+              >/dev/null
+            rerun_observed=false
+            for attempt in $(seq 1 30); do
+              rerun="$(gh api \
+                "repos/${REPOSITORY}/actions/runs/${REQUIRED_WORKFLOW_RUN_ID}")"
+              if jq -e \
+                  --arg author "${PR_AUTHOR}" \
+                  --arg head "${HEAD_SHA}" '
+                    .head_sha == $head and .run_attempt == 2
+                    and .actor.login == $author
+                    and .triggering_actor.login == "github-actions[bot]"
+                    and (.status == "queued"
+                      or .status == "in_progress"
+                      or .status == "completed")
+                  ' <<<"${rerun}" >/dev/null; then
+                rerun_observed=true
+                break
+              fi
+              sleep 2
+            done
+            test "${rerun_observed}" = true
+            {
+              echo '### Protected main trust-root verifier recovery'
+              echo
+              echo "- PR: ${PR_NUMBER}"
+              echo "- Base: ${BASE_SHA}"
+              echo "- Head: ${HEAD_SHA}"
+              echo "- Required Workflow run: ${REQUIRED_WORKFLOW_RUN_ID}"
+              echo "- Required Workflow job: ${FAILED_REQUIRED_JOB_ID}"
+              echo "- External verifier head: ${EXTERNAL_REQUIRED_WORKFLOW_HEAD_SHA}"
+              echo "- External verifier blob: ${EXPECTED_EXTERNAL_REQUIRED_WORKFLOW_BLOB_SHA}"
+              echo '- AI requested: no'
+              echo '- Check mutated: no'
+            } >>"${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          test "${REQUIRED_WORKFLOW_RUN_ID}" -eq 0
 
           neutral_pages="$(gh api --paginate --slurp \
             "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
