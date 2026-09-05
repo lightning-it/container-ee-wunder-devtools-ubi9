@@ -1,5 +1,5 @@
-# Protected helper: it can rerun only the single verifier reservation bound to
-# the exact live PR head, and only once after a neutral PASS exists.
+# Protected helper: it can rerun only the single organization Required Workflow
+# run bound to the exact live PR revision, and only once after a neutral PASS.
 # yamllint disable rule:truthy rule:line-length
 ---
 name: Re-evaluate protected current-revision evidence
@@ -9,8 +9,9 @@ run-name: >-
   head ${{ inputs.expected_head }}
 
 on:
-  # A called workflow receives its caller's event payload and event name; it
-  # never sees `workflow_call` as github.event_name. The reusable job gate below
+  # GitHub documents that a called workflow receives its caller's github/event
+  # context; it never sees `workflow_call` as github.event_name. The reusable
+  # job gate below
   # selects callers by their exact protected workflow_ref plus event-specific
   # payload bindings. The shell case then independently rejects every event
   # except pull_request_target, push, and the standalone workflow_dispatch.
@@ -73,7 +74,7 @@ jobs:
     if: >-
       github.run_attempt == 1 &&
       (
-        ( github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@refs/heads/{1}', github.repository, github.event.repository.default_branch) && github.ref_protected == true && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
+        ( github.event_name == 'pull_request_target' && github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@refs/heads/{1}', github.repository, github.event.repository.default_branch) && github.ref_protected == true && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
         ( github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]' && github.triggering_actor == 'github-actions[bot]' && github.workflow_sha == inputs.expected_base && github.workflow_ref == format('{0}/.github/workflows/current-revision-rerun.yml@{1}', github.repository, github.ref) && github.ref == format('refs/heads/{0}', inputs.base_ref) && github.ref_protected == true ) ||
         ( github.workflow_sha == inputs.expected_head && github.workflow_ref == format('{0}/.github/workflows/promote-develop-to-main.yml@refs/heads/develop', github.repository) && github.ref == 'refs/heads/develop' && github.ref_protected == true && github.sha == inputs.expected_head && github.event.ref == 'refs/heads/develop' && github.event.after == inputs.expected_head )
       )
@@ -112,8 +113,10 @@ jobs:
               [[ "${EVENT_DEFAULT_BRANCH}" =~ ^(develop|main)$ ]]
               [[ "${EVENT_PR_BASE_REF}" =~ ^(develop|main)$ ]]
               test "${GITHUB_REF_PROTECTED}" = true
-              # GITHUB_REF is not the controller trust root. workflow_ref and
-              # the live default-branch SHA bind it; PR base/head stay separate.
+              # For pull_request_target, GitHub loads the controller from the
+              # repository default branch even when the PR base is main.
+              # GITHUB_REF is not that trust root: workflow_ref plus the live
+              # default-branch SHA bind it; PR base/head stay separately exact.
               expected_workflow_ref="${REPOSITORY}/.github/workflows/copilot-review.yml@refs/heads/${EVENT_DEFAULT_BRANCH}"
               live_repository="$(gh api "repos/${REPOSITORY}")"
               jq -e \
@@ -746,69 +749,114 @@ jobs:
               ' <<<"${producer}" >/dev/null
           fi
 
-          reservations=''
-          for reservation_attempt in $(seq 1 60); do
-            reservations_pages="$(gh api --paginate --slurp \
-              "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20current-revision%20verifier&filter=all&per_page=100")"
-            same_head_reservations="$(jq -c \
+          # Discover the organization Required Workflow itself first. During a
+          # direct-main trust-root bootstrap, attempt one can time out waiting
+          # for the one final review before it publishes its reservation. The
+          # protected non-local workflow URL, exact PR/base/head binding, and
+          # unique run are sufficient to identify the only rerunnable job; the
+          # second attempt still owns the complete final verification.
+          required_runs_pages="$(gh api --paginate --slurp \
+            "repos/${REPOSITORY}/actions/runs?event=pull_request_target&head_sha=${EXPECTED_HEAD}&per_page=100")"
+          jq -e '
+            type == "array"
+            and length > 0
+            and all(.[];
+              type == "object"
+              and (.total_count | type) == "number"
+              and (.workflow_runs | type) == "array")
+          ' <<<"${required_runs_pages}" >/dev/null
+          required_runs="$(jq -c \
+            --arg api_url "${GITHUB_API_URL}" \
+            --arg base_ref "${base_ref}" \
+            --arg base_sha "${EXPECTED_BASE}" \
+            --arg head_ref "${head_ref}" \
+            --arg head_repository "${head_repository}" \
+            --arg head_sha "${EXPECTED_HEAD}" \
+            --arg repository "${REPOSITORY}" \
+            --argjson pr_number "${PR_NUMBER}" '
+              [.[].workflow_runs[]? |
+                select(.event == "pull_request_target") |
+                select(.path == ".github/workflows/supplementary-current-revision-required.yml") |
+                select((.workflow_id | type) == "number" and .workflow_id > 0) |
+                select(.workflow_url == ($api_url + "/repos/" + $repository
+                  + "/actions/required_workflows/" + (.workflow_id | tostring))) |
+                select(.head_branch == $head_ref and .head_sha == $head_sha) |
+                select(.repository.full_name == $repository) |
+                select(.head_repository.full_name == $head_repository) |
+                select((.pull_requests | length) == 1) |
+                select(.pull_requests[0].number == $pr_number) |
+                select(.pull_requests[0].url == ($api_url + "/repos/" + $repository
+                  + "/pulls/" + ($pr_number | tostring))) |
+                select(.pull_requests[0].base.ref == $base_ref) |
+                select(.pull_requests[0].base.sha == $base_sha) |
+                select(.pull_requests[0].base.repo.url == ($api_url + "/repos/" + $repository)) |
+                select(.pull_requests[0].head.ref == $head_ref) |
+                select(.pull_requests[0].head.sha == $head_sha) |
+                select(.pull_requests[0].head.repo.url == ($api_url + "/repos/" + $head_repository))]
+            ' <<<"${required_runs_pages}")"
+          required_run_count="$(jq 'length' <<<"${required_runs}")"
+          if [ "${required_run_count}" -ne 1 ]; then
+            echo "Expected exactly one protected organization Required Workflow run for the immutable revision." >&2
+            exit 1
+          fi
+          run_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${required_runs}")"
+
+          # A reservation, when attempt one reached that stage, must agree with
+          # the independently discovered protected run. Its absence is allowed
+          # only so the one failed attempt can be re-evaluated after neutral PASS.
+          reservations_pages="$(gh api --paginate --slurp \
+            "repos/${REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?check_name=Protected%20current-revision%20verifier&filter=all&per_page=100")"
+          same_head_reservations="$(jq -c \
+            --arg head "${EXPECTED_HEAD}" '
+              [.[].check_runs[]? |
+                select(.name == "Protected current-revision verifier") |
+                select(.app.id == 15368 and .app.slug == "github-actions") |
+                select(.head_sha == $head)]
+            ' <<<"${reservations_pages}")"
+          if ! jq -e \
               --arg head "${EXPECTED_HEAD}" '
-                [.[].check_runs[]? |
-                  select(.name == "Protected current-revision verifier") |
-                  select(.app.id == 15368 and .app.slug == "github-actions") |
-                  select(.head_sha == $head)]
-              ' <<<"${reservations_pages}")"
-            if ! jq -e \
-                --arg head "${EXPECTED_HEAD}" '
-                  all(.[];
-                    (.external_id | type) == "string"
-                    and (.external_id as $external_id |
-                      ($external_id | test(
-                        "^rep60-required-workflow:v3:[1-9][0-9]*:[1-9][0-9]*:[0-9a-f]{40}:"
-                        + $head + "$"))
-                      or ($external_id | test(
-                        "^rep60-required-workflow:v2:[1-9][0-9]*:[1-9][0-9]*:"
-                        + $head + "$"))))
-                ' <<<"${same_head_reservations}" >/dev/null; then
-              echo "Protected verifier evidence is malformed, unsupported, or version-ambiguous." >&2
-              exit 1
-            fi
-            matching_reservations="$(jq -c \
-              --arg base "${EXPECTED_BASE}" \
-              --arg head "${EXPECTED_HEAD}" \
-              --arg pr "${PR_NUMBER}" '
-                [.[] |
-                  select(.external_id as $external_id |
+                all(.[];
+                  (.external_id | type) == "string"
+                  and (.external_id as $external_id |
                     ($external_id | test(
-                      "^rep60-required-workflow:v3:[1-9][0-9]*:"
-                      + $pr + ":" + $base + ":" + $head + "$"))
+                      "^rep60-required-workflow:v3:[1-9][0-9]*:[1-9][0-9]*:[0-9a-f]{40}:"
+                      + $head + "$"))
                     or ($external_id | test(
-                      "^rep60-required-workflow:v2:[1-9][0-9]*:"
-                      + $pr + ":" + $head + "$")))]
-              ' <<<"${same_head_reservations}")"
-            reservation_count="$(jq 'length' <<<"${matching_reservations}")"
-            if [ "${reservation_count}" -eq 1 ]; then
-              reservations="${matching_reservations}"
-              break
-            elif [ "${reservation_count}" -ne 0 ]; then
-              echo "Protected verifier evidence is malformed, unsupported, or version-ambiguous." >&2
-              exit 1
+                      "^rep60-required-workflow:v2:[1-9][0-9]*:[1-9][0-9]*:"
+                      + $head + "$"))))
+              ' <<<"${same_head_reservations}" >/dev/null; then
+            echo "Protected verifier evidence is malformed, unsupported, or version-ambiguous." >&2
+            exit 1
+          fi
+          matching_reservations="$(jq -c \
+            --arg base "${EXPECTED_BASE}" \
+            --arg head "${EXPECTED_HEAD}" \
+            --arg pr "${PR_NUMBER}" '
+              [.[] |
+                select(.external_id as $external_id |
+                  ($external_id | test(
+                    "^rep60-required-workflow:v3:[1-9][0-9]*:"
+                    + $pr + ":" + $base + ":" + $head + "$"))
+                  or ($external_id | test(
+                    "^rep60-required-workflow:v2:[1-9][0-9]*:"
+                    + $pr + ":" + $head + "$")))]
+            ' <<<"${same_head_reservations}")"
+          reservation_count="$(jq 'length' <<<"${matching_reservations}")"
+          test "${reservation_count}" -le 1
+          if [ "${reservation_count}" -eq 1 ]; then
+            reservation_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${matching_reservations}")"
+            reservation_url="$(jq -r '.[0].details_url // empty' <<<"${matching_reservations}")"
+            test "${reservation_url}" = "${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${reservation_id}"
+            reservation_external_id="$(jq -er '.[0].external_id | select(type == "string" and length > 0)' <<<"${matching_reservations}")"
+            if [[ "${reservation_external_id}" =~ ^rep60-required-workflow:v3:([1-9][0-9]*):${PR_NUMBER}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
+              reservation_run_id="${BASH_REMATCH[1]}"
+            else
+              [[ "${reservation_external_id}" =~ ^rep60-required-workflow:v2:([1-9][0-9]*):${PR_NUMBER}:${EXPECTED_HEAD}$ ]]
+              reservation_run_id="${BASH_REMATCH[1]}"
             fi
-            if [ "${reservation_attempt}" -eq 60 ]; then
-              echo "Protected verifier evidence did not materialize in time." >&2
-              exit 1
-            fi
-            sleep 5
-          done
-          test "$(jq 'length' <<<"${reservations}")" -eq 1
-          reservation_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${reservations}")"
-          reservation_url="$(jq -r '.[0].details_url // empty' <<<"${reservations}")"
-          test "${reservation_url}" = "${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${reservation_id}"
-          reservation_external_id="$(jq -er '.[0].external_id | select(type == "string" and length > 0)' <<<"${reservations}")"
-          if [[ "${reservation_external_id}" =~ ^rep60-required-workflow:v3:([1-9][0-9]*):${PR_NUMBER}:${EXPECTED_BASE}:${EXPECTED_HEAD}$ ]]; then
-            run_id="${BASH_REMATCH[1]}"
+            test "${reservation_run_id}" = "${run_id}"
           else
-            [[ "${reservation_external_id}" =~ ^rep60-required-workflow:v2:([1-9][0-9]*):${PR_NUMBER}:${EXPECTED_HEAD}$ ]]
-            run_id="${BASH_REMATCH[1]}"
+            echo "Protected verifier reservation is absent; the unique protected run owns bootstrap re-evaluation."
           fi
           verifier_run_url="${GITHUB_SERVER_URL}/${REPOSITORY}/actions/runs/${run_id}"
           run=''
