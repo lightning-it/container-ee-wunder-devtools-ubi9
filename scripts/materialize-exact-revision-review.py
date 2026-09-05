@@ -113,7 +113,11 @@ def run(
         command = " ".join(arguments) or "<empty-command>"
         fail(f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: {command}")
     if result.returncode != 0:
-        stderr = result.stderr if isinstance(result.stderr, str) else result.stderr.decode(errors="replace")
+        stderr = (
+            result.stderr
+            if isinstance(result.stderr, str)
+            else result.stderr.decode(errors="replace")
+        )
         command = " ".join(arguments) or "<empty-command>"
         fail(f"Command failed closed: {command}: {stderr.strip()}")
     return result
@@ -159,7 +163,9 @@ def add_error_notes(error: BaseException, notes: Sequence[str]) -> None:
             add_note(note)
 
 
-def fail_after_descriptor_cleanup(message: str, descriptor: int, label: str) -> NoReturn:
+def fail_after_descriptor_cleanup(
+    message: str, descriptor: int, label: str
+) -> NoReturn:
     """Raise one proof error after deterministically cleaning up its descriptor."""
     cleanup_errors = close_descriptor_after_error(descriptor, label)
     failure = MaterializationError(message)
@@ -167,7 +173,9 @@ def fail_after_descriptor_cleanup(message: str, descriptor: int, label: str) -> 
     raise failure
 
 
-def open_owned_parent_directory(path: Path, name: str, requirement: str) -> tuple[int, int, int]:
+def open_owned_parent_directory(
+    path: Path, name: str, requirement: str
+) -> tuple[int, int, int]:
     """Return the final parent fd plus O_NOFOLLOW and O_CLOEXEC flag values."""
     no_follow = getattr(os, "O_NOFOLLOW", None)
     if not isinstance(no_follow, int) or no_follow == 0:
@@ -208,7 +216,9 @@ def open_owned_parent_directory(path: Path, name: str, requirement: str) -> tupl
                     )
                 )
                 directory = -1
-                failure = MaterializationError(f"Protected {name} parent cannot be opened safely: {close_error}")
+                failure = MaterializationError(
+                    f"Protected {name} parent cannot be opened safely: {close_error}"
+                )
                 add_error_notes(failure, cleanup_errors)
                 raise failure from close_error
             directory = next_directory
@@ -220,7 +230,9 @@ def open_owned_parent_directory(path: Path, name: str, requirement: str) -> tupl
                 "Current parent directory",
             )
             directory = -1
-        failure = MaterializationError(f"Protected {name} parent cannot be opened safely: {error}")
+        failure = MaterializationError(
+            f"Protected {name} parent cannot be opened safely: {error}"
+        )
         add_error_notes(failure, cleanup_errors)
         raise failure from error
     except BaseException as error:
@@ -238,7 +250,9 @@ def open_owned_parent_directory(path: Path, name: str, requirement: str) -> tupl
             directory,
             "Validated parent directory",
         )
-        failure = MaterializationError(f"Protected {name} parent cannot be inspected safely: {error}")
+        failure = MaterializationError(
+            f"Protected {name} parent cannot be inspected safely: {error}"
+        )
         add_error_notes(failure, cleanup_errors)
         raise failure from error
     if not stat.S_ISDIR(parent_details.st_mode):
@@ -309,7 +323,9 @@ def protected_asset_bytes(path: Path, name: str) -> bytes:
             fail(f"Protected {name} is unavailable: {error}")
         details = os.fstat(descriptor)
         if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
-            fail(f"Protected {name} must be one regular file with link count 1 (no hardlinks).")
+            fail(
+                f"Protected {name} must be one regular file with link count 1 (no hardlinks)."
+            )
         if details.st_uid != os.geteuid():
             fail(f"Protected {name} must be owned by the current user.")
         if details.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
@@ -339,7 +355,9 @@ def protected_asset_bytes(path: Path, name: str) -> bytes:
         )
         if cleanup_errors:
             if active_error is None:
-                failure = MaterializationError(f"Protected {name} descriptors could not be closed safely.")
+                failure = MaterializationError(
+                    f"Protected {name} descriptors could not be closed safely."
+                )
                 add_error_notes(failure, cleanup_errors)
                 raise failure
             add_error_notes(active_error, cleanup_errors)
@@ -373,7 +391,9 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
             if existing_descriptor >= 0:
                 existing = os.fstat(existing_descriptor)
                 if not stat.S_ISREG(existing.st_mode) or existing.st_nlink != 1:
-                    fail(f"Protected {name} must be one regular file with link count 1 (no hardlinks).")
+                    fail(
+                        f"Protected {name} must be one regular file with link count 1 (no hardlinks)."
+                    )
                 if existing.st_uid != os.geteuid():
                     fail(f"Protected {name} must be owned by the current user.")
                 if existing.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
@@ -388,7 +408,9 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
                     f"Protected {name} existing descriptor",
                 )
                 if active_error is None and cleanup_errors:
-                    failure = MaterializationError(f"Protected {name} existing descriptor could not be closed safely.")
+                    failure = MaterializationError(
+                        f"Protected {name} existing descriptor could not be closed safely."
+                    )
                     add_error_notes(failure, cleanup_errors)
                     raise failure
                 if active_error is not None:
@@ -432,7 +454,9 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
             f"Protected {name} temporary descriptor",
         )
         if cleanup_errors:
-            failure = MaterializationError(f"Protected {name} temporary descriptor could not be closed safely.")
+            failure = MaterializationError(
+                f"Protected {name} temporary descriptor could not be closed safely."
+            )
             add_error_notes(failure, cleanup_errors)
             raise failure
 
@@ -451,7 +475,9 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
         except OSError:
             pass
     except OSError as error:
-        failure = MaterializationError(f"Protected {name} cannot be written atomically: {error}")
+        failure = MaterializationError(
+            f"Protected {name} cannot be written atomically: {error}"
+        )
         add_error_notes(failure, getattr(error, "__notes__", ()))
         raise failure from error
     finally:
@@ -472,7 +498,9 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
             except FileNotFoundError:
                 pass
             except OSError as cleanup_error:
-                final_cleanup_errors.append(f"Protected {name} temporary cleanup also failed: {cleanup_error}")
+                final_cleanup_errors.append(
+                    f"Protected {name} temporary cleanup also failed: {cleanup_error}"
+                )
         final_cleanup_errors.extend(
             close_descriptor_after_error(
                 directory,
@@ -481,20 +509,26 @@ def write_owned_regular_file(path: Path, payload: bytes, name: str) -> None:
         )
         if final_cleanup_errors:
             if active_error is None:
-                failure = MaterializationError(f"Protected {name} cleanup failed closed.")
+                failure = MaterializationError(
+                    f"Protected {name} cleanup failed closed."
+                )
                 add_error_notes(failure, final_cleanup_errors)
                 raise failure
             add_error_notes(active_error, final_cleanup_errors)
 
 
-def bind_protected_assets(metadata: dict[str, Any], asset_paths: dict[str, Path]) -> dict[str, Any]:
+def bind_protected_assets(
+    metadata: dict[str, Any], asset_paths: dict[str, Path]
+) -> dict[str, Any]:
     """Bind every base-controlled review asset into one canonical input hash."""
     if set(asset_paths) != set(ASSET_ARGUMENTS):
         fail("The complete protected review-asset set is required.")
     bound = dict(metadata)
     for metadata_key, path in asset_paths.items():
         asset_name = metadata_key.removesuffix("_sha256").replace("_", " ")
-        bound[metadata_key] = hashlib.sha256(protected_asset_bytes(path, asset_name)).hexdigest()
+        bound[metadata_key] = hashlib.sha256(
+            protected_asset_bytes(path, asset_name)
+        ).hexdigest()
     canonical = json.dumps(bound, sort_keys=True, separators=(",", ":")).encode("utf-8")
     bound["input_sha256"] = hashlib.sha256(canonical).hexdigest()
     return bound
@@ -524,11 +558,16 @@ def validate_inputs(arguments: argparse.Namespace) -> None:
         fail("The protected workflow SHA must equal the live pull-request base SHA.")
     if arguments.trigger not in {"ready_for_review", "app_dispatch"}:
         fail("Unsupported exact-review trigger.")
-    if arguments.trigger == "app_dispatch" and arguments.dispatch_ref != f"refs/heads/{arguments.base_ref}":
+    if (
+        arguments.trigger == "app_dispatch"
+        and arguments.dispatch_ref != f"refs/heads/{arguments.base_ref}"
+    ):
         fail("App dispatch must execute from the protected pull-request base ref.")
 
 
-def read_live_pull_request(arguments: argparse.Namespace, *, home: Path) -> dict[str, Any]:
+def read_live_pull_request(
+    arguments: argparse.Namespace, *, home: Path
+) -> dict[str, Any]:
     gh = executable("gh")
     result = run(
         [
@@ -570,7 +609,9 @@ def read_live_pull_request(arguments: argparse.Namespace, *, home: Path) -> dict
         "head_repository": head_repository.get("full_name"),
     }
     if observed != expected:
-        fail(f"Live pull-request binding changed or is unauthorized: {json.dumps(observed, sort_keys=True)}")
+        fail(
+            f"Live pull-request binding changed or is unauthorized: {json.dumps(observed, sort_keys=True)}"
+        )
     return pull_request
 
 
@@ -617,7 +658,9 @@ def git_output(
                 if remaining <= 0:
                     process.kill()
                     process.wait()
-                    fail(f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: {' '.join(command)}")
+                    fail(
+                        f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: {' '.join(command)}"
+                    )
                 for key, _events in selector.select(remaining):
                     if key.data == "stdout":
                         # MLX-90 rejects inputs greater than or equal to the
@@ -649,13 +692,17 @@ def git_output(
             if remaining <= 0:
                 process.kill()
                 process.wait()
-                fail(f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: {' '.join(command)}")
+                fail(
+                    f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: {' '.join(command)}"
+                )
             try:
                 return_code = process.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-                fail(f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: {' '.join(command)}")
+                fail(
+                    f"Command timed out after {COMMAND_TIMEOUT_SECONDS} seconds: {' '.join(command)}"
+                )
         finally:
             selector.close()
             process.stdout.close()
@@ -664,9 +711,13 @@ def git_output(
                 process.kill()
                 process.wait()
         if limit_exceeded:
-            fail(f"Exact-revision review input exceeds the protected byte limit of {max_bytes - 1} bytes.")
+            fail(
+                f"Exact-revision review input exceeds the protected byte limit of {max_bytes - 1} bytes."
+            )
         if return_code != 0:
-            fail(f"Command failed closed: {' '.join(command)}: {stderr.decode(errors='replace').strip()}")
+            fail(
+                f"Command failed closed: {' '.join(command)}: {stderr.decode(errors='replace').strip()}"
+            )
         return bytes(stdout)
     result = run(
         command,
@@ -711,18 +762,24 @@ def write_materialized_workspace(
         try:
             output_directory.rmdir()
         except OSError as cleanup_error:
-            cleanup_errors.append(f"Partial review workspace cleanup failed: {cleanup_error}")
+            cleanup_errors.append(
+                f"Partial review workspace cleanup failed: {cleanup_error}"
+            )
         add_error_notes(error, cleanup_errors)
         raise
 
 
-def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[str, Any]:
+def materialize(
+    arguments: argparse.Namespace, output_directory: Path
+) -> dict[str, Any]:
     validate_inputs(arguments)
     runner_temp = validated_runner_temp()
     if output_directory.exists():
         fail(f"Review workspace already exists: {output_directory}")
 
-    with tempfile.TemporaryDirectory(prefix="exact-revision-materializer.", dir=runner_temp) as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="exact-revision-materializer.", dir=runner_temp
+    ) as temporary:
         temporary_root = Path(temporary)
         home = temporary_root / "home"
         home.mkdir(mode=0o700)
@@ -843,7 +900,9 @@ def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[s
             fail("Git returned an invalid diff representation.")
         review_bytes = len(diff)
         if review_bytes <= 0 or review_bytes >= MAX_REVIEW_BYTES:
-            fail(f"Exact-revision review input must contain 1..{MAX_REVIEW_BYTES - 1} bytes; observed {review_bytes}.")
+            fail(
+                f"Exact-revision review input must contain 1..{MAX_REVIEW_BYTES - 1} bytes; observed {review_bytes}."
+            )
         diff_sha256 = hashlib.sha256(diff).hexdigest()
 
         read_live_pull_request(arguments, home=home)
@@ -868,7 +927,9 @@ def materialize(arguments: argparse.Namespace, output_directory: Path) -> dict[s
 def bind_assets(review_directory: Path, asset_paths: dict[str, Path]) -> dict[str, Any]:
     metadata_path = review_directory / "review-metadata.json"
     try:
-        metadata = json.loads(protected_asset_bytes(metadata_path, "review metadata").decode("utf-8"))
+        metadata = json.loads(
+            protected_asset_bytes(metadata_path, "review metadata").decode("utf-8")
+        )
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         fail(f"Review metadata is malformed: {error}")
     if not isinstance(metadata, dict):
@@ -892,13 +953,20 @@ def verify(
     validate_inputs(arguments)
     patch = review_directory / "change.patch"
     metadata_path = review_directory / "review-metadata.json"
-    if not patch.is_file() or patch.is_symlink() or not metadata_path.is_file() or metadata_path.is_symlink():
+    if (
+        not patch.is_file()
+        or patch.is_symlink()
+        or not metadata_path.is_file()
+        or metadata_path.is_symlink()
+    ):
         fail("The review diff and metadata must be regular, non-symlink files.")
     patch_size = patch.stat().st_size
     if patch_size <= 0 or patch_size >= MAX_REVIEW_BYTES:
         fail(f"The review diff must be between 1 and {MAX_REVIEW_BYTES - 1} bytes.")
     try:
-        expected_metadata = json.loads(protected_asset_bytes(metadata_path, "review metadata").decode("utf-8"))
+        expected_metadata = json.loads(
+            protected_asset_bytes(metadata_path, "review metadata").decode("utf-8")
+        )
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         fail(f"Review metadata is malformed: {error}")
     if not isinstance(expected_metadata, dict):
@@ -914,9 +982,13 @@ def verify(
         )
 
     runner_temp = validated_runner_temp()
-    with tempfile.TemporaryDirectory(prefix="exact-revision-recheck.", dir=runner_temp) as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="exact-revision-recheck.", dir=runner_temp
+    ) as temporary:
         regenerated = Path(temporary) / "review"
-        actual_metadata = bind_protected_assets(materialize(arguments, regenerated), asset_paths)
+        actual_metadata = bind_protected_assets(
+            materialize(arguments, regenerated), asset_paths
+        )
         if protected_asset_bytes(patch, "review diff") != protected_asset_bytes(
             regenerated / "change.patch", "regenerated diff"
         ):
@@ -936,7 +1008,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--expected-base", required=True)
     parser.add_argument("--expected-head", required=True)
     parser.add_argument("--trusted-workflow-sha", required=True)
-    parser.add_argument("--trigger", required=True, choices=("ready_for_review", "app_dispatch"))
+    parser.add_argument(
+        "--trigger", required=True, choices=("ready_for_review", "app_dispatch")
+    )
     parser.add_argument("--dispatch-ref", default="")
     parser.add_argument("--review-directory", required=True, type=Path)
     parser.add_argument("--materializer-path", type=Path)
@@ -954,7 +1028,9 @@ def main() -> int:
         if arguments.mode == "materialize":
             metadata = materialize(arguments, arguments.review_directory)
         elif arguments.mode == "bind-assets":
-            metadata = bind_assets(arguments.review_directory, asset_paths_from_arguments(arguments))
+            metadata = bind_assets(
+                arguments.review_directory, asset_paths_from_arguments(arguments)
+            )
         else:
             metadata = verify(
                 arguments,
