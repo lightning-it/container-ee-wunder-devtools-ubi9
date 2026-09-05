@@ -217,6 +217,10 @@ jobs:
   request-current-revision-review:
     name: Request Copilot review for current revision
     needs: classify-main-trust-root-handoff
+    # This predicate governs only Lightning-IT-funded review requests; it is
+    # deliberately not the acceptance predicate. Non-litroc contributors
+    # supply a current-head Copilot review under their own entitlement, and
+    # verify-current-revision-policy validates that review below.
     if: >-
       always() &&
       (needs.classify-main-trust-root-handoff.result == 'skipped' ||
@@ -1643,6 +1647,10 @@ jobs:
             test "${author}" != 'lightning-it-shared-assets-sync[bot]'
             test "${author}" != 'lightning-it-release-automation[bot]'
           fi
+          # Keep acceptance author-agnostic for ordinary human contributors.
+          # Only the request job above is restricted to litroc; every other
+          # contributor supplies the current-head review under their own
+          # entitlement and reaches the same strict bound-review validator.
           if [ "${external_kind}" = copilot ]; then
             validate_bound_review
           else
