@@ -53,7 +53,7 @@ requests-unixsocket>=0.3.0,<1.0.0
 # VMware SDK (only needed if devtools runs VMware modules/tests)
 # - community.vmware / vmware.vmware expect pyvmomi (provides pyVim)
 # ---------------------------------------------------------------------------
-pyvmomi==9.1.0.0
+pyvmomi==9.1.1.0
 
 # ---------------------------------------------------------------------------
 # COPR CLI (needed to configure/build COPR packages from inside the container)
