@@ -71,7 +71,7 @@ jobs:
         env:
           CONTROLLER_SHA: ${{ github.workflow_sha }}
           CONTROLLER_REF: ${{ github.workflow_ref }}
-          EXPECTED_EXTERNAL_REQUIRED_WORKFLOW_BLOB_SHA: c4dbbecb30828bc30c9f68e917aca5670ba57353
+          EXPECTED_EXTERNAL_REQUIRED_WORKFLOW_BLOB_SHA: 0e7b568fcf0ed6829f6e191d7b4e30d3699b48b6
           EXTERNAL_REQUIRED_WORKFLOW_PATH: .github/workflows/supplementary-current-revision-required.yml
           EXTERNAL_REQUIRED_WORKFLOW_REF: main
           EXTERNAL_REQUIRED_WORKFLOW_REPOSITORY: lightning-it/.github
