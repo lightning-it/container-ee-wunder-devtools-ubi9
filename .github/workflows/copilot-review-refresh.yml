@@ -190,7 +190,7 @@ jobs:
               -F number="${PR_NUMBER}")"
             jq -er \
               --argjson number "${PR_NUMBER}" '
-                select(((.errors // []) | length) == 0)
+                select(if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)
                 | select(.data.repository.pullRequest.number == $number)
                 | .data.repository.pullRequest.lastEditedAt
                 | if . == null then "null"
@@ -601,6 +601,101 @@ jobs:
           fi
           test "${REQUIRED_WORKFLOW_RUN_ID}" -eq 0
 
+          collect_review_threads() {
+            local graphql_query="$1" evidence_label="$2"
+            local after='' arguments has_next next_after page page_threads
+            local seen_thread_cursors='[]' collected_threads='[]'
+            while true; do
+              arguments=(-f query="${graphql_query}" -F owner="${owner}" \
+                -F name="${name}" -F number="${PR_NUMBER}")
+              if [ -n "${after}" ]; then arguments+=(-f after="${after}"); fi
+              if ! page="$(gh api graphql "${arguments[@]}")"; then
+                echo "${evidence_label} API request failed." >&2
+                return 1
+              fi
+              if ! jq -e --arg after "${after}" --arg head "${HEAD_SHA}" \
+                --argjson pr "${PR_NUMBER}" '
+                (if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)
+                and .data.repository.pullRequest.number == $pr
+                and .data.repository.pullRequest.headRefOid == $head
+                and (.data.repository.pullRequest.reviewThreads | type) == "object"
+                and (.data.repository.pullRequest.reviewThreads.nodes | type) == "array"
+                and (.data.repository.pullRequest.reviewThreads.pageInfo | type) == "object"
+                and ((.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage | type) == "boolean")
+                and (
+                  $after == ""
+                  or (.data.repository.pullRequest.reviewThreads.nodes | length) > 0
+                )
+                and (
+                  .data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false
+                  or (
+                    ((.data.repository.pullRequest.reviewThreads.pageInfo.endCursor | type) == "string")
+                    and (.data.repository.pullRequest.reviewThreads.pageInfo.endCursor | length) > 0
+                    and (.data.repository.pullRequest.reviewThreads.nodes | length) > 0
+                  )
+                )
+                and all(.data.repository.pullRequest.reviewThreads.nodes[]?;
+                  (type == "object")
+                  and ((.isResolved | type) == "boolean")
+                  and ((.comments | type) == "object")
+                  and ((.comments.nodes | type) == "array")
+                  and ((.comments.nodes | length) > 0)
+                  and ((.comments.pageInfo | type) == "object")
+                  and ((.comments.pageInfo.hasNextPage | type) == "boolean")
+                  and all(.comments.nodes[]?;
+                    (type == "object")
+                    and ((.author | type) == "object")
+                    and ((.author.login | type) == "string")
+                    and ((.author.login | length) > 0)
+                    and (.author.login | test("^[^[:space:]]+$"))
+                    and ((.pullRequestReview | type) == "object")
+                    and ((.pullRequestReview.commit | type) == "object")
+                    and ((.pullRequestReview.commit.oid | type) == "string")
+                    and (.pullRequestReview.commit.oid | test("^[0-9a-f]{40}$"))
+                  )
+                )
+              ' <<<"${page}" >/dev/null; then
+                echo "${evidence_label} evidence is malformed." >&2
+                return 1
+              fi
+              page_threads="$(jq -cer \
+                '.data.repository.pullRequest.reviewThreads.nodes' \
+                <<<"${page}")"
+              collected_threads="$(jq -cer --argjson page "${page_threads}" \
+                '. + $page' <<<"${collected_threads}")"
+              has_next="$(jq -r \
+                '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' \
+                <<<"${page}")"
+              case "${has_next}" in
+                false) break ;;
+                true)
+                  next_after="$(jq -er \
+                    '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' \
+                    <<<"${page}")"
+                  if jq -e --arg next "${next_after}" --arg current "${after}" \
+                    '($next == $current) or index($next)' \
+                    <<<"${seen_thread_cursors}" >/dev/null; then
+                    echo "${evidence_label} pagination cursor did not progress." >&2
+                    return 1
+                  fi
+                  seen_thread_cursors="$(jq -cer --arg next "${next_after}" \
+                    '. + [$next]' <<<"${seen_thread_cursors}")"
+                  after="${next_after}"
+                  ;;
+                *)
+                  echo "${evidence_label} pagination state is malformed." >&2
+                  return 1
+                  ;;
+              esac
+            done
+            if ! jq -e 'all(.[]; .comments.pageInfo.hasNextPage == false)' \
+              <<<"${collected_threads}" >/dev/null; then
+              echo "${evidence_label} comments exceed the verified page." >&2
+              return 1
+            fi
+            printf '%s' "${collected_threads}"
+          }
+
           neutral_pages="$(gh api --paginate --slurp \
             "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?check_name=Current%20revision%20review&filter=all&per_page=100")"
           neutral="$(jq -c --arg head "${HEAD_SHA}" '
@@ -855,38 +950,38 @@ jobs:
           if [ "${neutral_count}" -eq 1 ]; then
             read -r owner name <<<"${REPOSITORY//\// }"
             # shellcheck disable=SC2016  # GraphQL variables must stay literal.
-            query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{author{login} pullRequestReview{commit{oid}}}}}}}}}'
-            threads='[]'
-            after=''
-            while true; do
-              args=(-f query="${query}" -F owner="${owner}" -F name="${name}" -F number="${PR_NUMBER}")
-              if [ -n "${after}" ]; then args+=(-f after="${after}"); fi
-              page="$(gh api graphql "${args[@]}")"
-              page_threads="$(jq '.data.repository.pullRequest.reviewThreads.nodes' <<<"${page}")"
-              threads="$(jq -c --argjson page "${page_threads}" '. + $page' <<<"${threads}")"
-              if [ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${page}")" != true ]; then break; fi
-              after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"${page}")"
-              test -n "${after}"
-            done
-            incomplete="$(jq '[.[] |
-              select(.isResolved == false) |
-              select(.comments.pageInfo.hasNextPage == true)] | length' <<<"${threads}")"
-            if [ "${incomplete}" -gt 0 ]; then
-              echo "Unresolved review-thread comments exceed the verified page; refusing to preserve PASS." >&2
-              require_failed_required_workflow
-              exit 1
-            fi
-            unresolved="$(jq --arg head "${HEAD_SHA}" '[.[] |
+            query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){number headRefOid reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{author{login} pullRequestReview{commit{oid}}}}}}}}}'
+            thread_snapshot=''
+            for thread_snapshot_attempt in 1 2; do
+              if ! threads="$(collect_review_threads \
+                "${query}" "Review-thread")"; then
+                echo "Review-thread evidence is incomplete; refusing to preserve PASS." >&2
+                require_failed_required_workflow
+                exit 1
+              fi
+              unresolved="$(jq --arg head "${HEAD_SHA}" '[.[] |
               select(.isResolved == false) |
               select(any(.comments.nodes[];
                 (.author.login == "copilot-pull-request-reviewer"
                   or .author.login == "copilot-pull-request-reviewer[bot]")
                 and .pullRequestReview.commit.oid == $head))] | length' <<<"${threads}")"
-            if [ "${unresolved}" -gt 0 ]; then
+              if [ "${unresolved}" -gt 0 ]; then
               echo "Current-head Copilot findings invalidate the neutral PASS." >&2
               require_failed_required_workflow
               exit 1
-            fi
+              fi
+              observed_snapshot="$(jq -cS . <<<"${threads}" | sha256sum | cut -d' ' -f1)"
+              [[ "${observed_snapshot}" =~ ^[0-9a-f]{64}$ ]]
+              if [ "${thread_snapshot_attempt}" -eq 1 ]; then
+                thread_snapshot="${observed_snapshot}"
+                continue
+              fi
+              if [ "${observed_snapshot}" != "${thread_snapshot}" ]; then
+                echo "Review-thread evidence changed between snapshots; refusing to preserve PASS." >&2
+                require_failed_required_workflow
+                exit 1
+              fi
+            done
             current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
             test "$(labels_sha256_from_pr "${current_pr}")" = "${PR_LABELS_SHA256}"
             test "$(read_metadata_revision)" = "${PR_LAST_EDITED_AT}"
@@ -974,34 +1069,12 @@ jobs:
 
             read -r owner name <<<"${REPOSITORY//\// }"
             # shellcheck disable=SC2016  # GraphQL variables stay literal.
-            resolved_query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{databaseId author{login} pullRequestReview{databaseId commit{oid}}}}}}}}}'
-            threads='[]'
-            after=''
-            while true; do
-              arguments=(-f query="${resolved_query}" -F owner="${owner}" \
-                -F name="${name}" -F number="${PR_NUMBER}")
-              if [ -n "${after}" ]; then arguments+=(-f after="${after}"); fi
-              page="$(gh api graphql "${arguments[@]}")"
-              jq -e --arg head "${HEAD_SHA}" \
-                '.data.repository.pullRequest.headRefOid == $head' \
-                <<<"${page}" >/dev/null
-              page_threads="$(jq \
-                '.data.repository.pullRequest.reviewThreads.nodes' \
-                <<<"${page}")"
-              threads="$(jq -c --argjson page "${page_threads}" \
-                '. + $page' <<<"${threads}")"
-              if [ "$(jq -r \
-                  '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' \
-                  <<<"${page}")" != true ]; then
-                break
-              fi
-              after="$(jq -r \
-                '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' \
-                <<<"${page}")"
-              test -n "${after}"
-            done
-            jq -e 'all(.[]; .comments.pageInfo.hasNextPage == false)' \
-              <<<"${threads}" >/dev/null
+            resolved_query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){number headRefOid reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{databaseId author{login} pullRequestReview{databaseId commit{oid}}}}}}}}}'
+            if ! threads="$(collect_review_threads \
+              "${resolved_query}" "Resolved review-thread")"; then
+              echo "Resolved review-thread evidence is incomplete; no rerun is authorized." >&2
+              exit 1
+            fi
             if ! jq -e \
               --arg head "${HEAD_SHA}" \
               --argjson parent_id "${parent_id}" \
@@ -1025,6 +1098,9 @@ jobs:
               echo "Resolved-thread evidence is incomplete or non-authorizing; no rerun is authorized."
               exit 0
             fi
+            RESOLVED_THREAD_SNAPSHOT="$(jq -cS . <<<"${threads}" \
+              | sha256sum | cut -d' ' -f1)"
+            [[ "${RESOLVED_THREAD_SNAPSHOT}" =~ ^[0-9a-f]{64}$ ]]
             rerun_reason=resolved-finding
             trigger_occurred_at="${EVIDENCE_COMMENT_CREATED_AT}"
           else
@@ -1300,6 +1376,20 @@ jobs:
           # workflow-dispatch run and its immutable step summary are the audit
           # record; the sole state mutation below is the exact failed verifier
           # job rerun.
+          if [ "${EVIDENCE_COMMENT_ID}" -gt 0 ]; then
+            if ! final_resolved_threads="$(collect_review_threads \
+              "${resolved_query}" "Final resolved review-thread")"; then
+              echo "Final resolved review-thread evidence is incomplete; no rerun is authorized." >&2
+              exit 1
+            fi
+            final_resolved_snapshot="$(jq -cS . <<<"${final_resolved_threads}" \
+              | sha256sum | cut -d' ' -f1)"
+            [[ "${final_resolved_snapshot}" =~ ^[0-9a-f]{64}$ ]]
+            if [ "${final_resolved_snapshot}" != "${RESOLVED_THREAD_SNAPSHOT}" ]; then
+              echo "Resolved review-thread evidence changed before verifier rerun; no rerun is authorized." >&2
+              exit 1
+            fi
+          fi
           current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
           test "$(labels_sha256_from_pr "${current_pr}")" = "${PR_LABELS_SHA256}"
           test "$(read_metadata_revision)" = "${PR_LAST_EDITED_AT}"
