@@ -29,6 +29,7 @@ env:
   QUOTA_EXHAUSTED_MARKER: quota exhausted
   QUOTA_EXCEEDED_MARKER: quota exceeded
   SUPPRESSED_COMMENTS_MARKER: suppressed comments
+  ERROR_REVIEW_MARKER: encountered an error
 
 concurrency:
   # A synchronize/reopened verifier run must never cancel the one-time
@@ -321,35 +322,78 @@ jobs:
           requested_reviewers_url="repos/${REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers"
           marker="<!-- mlx90-copilot-request head=${EXPECTED_HEAD} -->"
           review_exists_for_head() {
-            local reviews
-            reviews="$(gh api --paginate --slurp \
-              "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
-            jq -e \
+            local reviews status
+            if ! reviews="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then
+              return 2
+            fi
+            if ! jq -e '
+              (type == "array")
+              and all(.[]?; type == "array")
+              and all(.[][]?;
+                (type == "object")
+                and ((.user | type) == "object")
+                and ((.user.login | type) == "string")
+                and ((.user.login | length) > 0)
+                and (.user.login | test("^[^[:space:]]+$"))
+                and ((.commit_id | type) == "string")
+                and (.commit_id | test("^[0-9a-f]{40}$"))
+                and ((.state | type) == "string")
+                and (.state == "PENDING" or .state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+                and has("body")
+                and (.body == null or ((.body | type) == "string"))
+              )
+            ' <<<"${reviews}" >/dev/null; then
+              return 2
+            fi
+            if jq -e \
               --arg reviewer "${reviewer}" \
               --arg head "${EXPECTED_HEAD}" \
               --arg retry_unable "${UNABLE_REVIEW_MARKER}" \
               --arg retry_no_files "${NO_FILES_REVIEW_MARKER}" \
               --arg retry_quota_exhausted "${QUOTA_EXHAUSTED_MARKER}" \
               --arg retry_quota_exceeded "${QUOTA_EXCEEDED_MARKER}" \
-              --arg retry_suppressed "${SUPPRESSED_COMMENTS_MARKER}" '
-                any(add[];
+              --arg retry_suppressed "${SUPPRESSED_COMMENTS_MARKER}" \
+              --arg retry_error "${ERROR_REVIEW_MARKER}" '
+                def compact_error_marker:
+                  ascii_downcase
+                  | split("")
+                  | map(select(test("\\s") | not))
+                  | join("");
+                ($retry_error | compact_error_marker) as $error
+                | any(add[];
                   .user.login == $reviewer
                   and .commit_id == $head
                   and (.state == "COMMENTED" or .state == "APPROVED")
                   and (((.body // "") | ascii_downcase) as $body
+                    | ($body | compact_error_marker) as $compact_body
                     | ($body | contains($retry_unable) | not)
                     and ($body | contains($retry_no_files) | not)
                     and ($body | contains("able to review any files") | not)
                     and ($body | contains($retry_quota_exhausted) | not)
                     and ($body | contains($retry_quota_exceeded) | not)
                     and ($body | contains($retry_suppressed) | not)
-                    and ($body | contains("encountered an error") | not))
+                    and ($compact_body | contains($error) | not))
                 )
-              ' <<<"${reviews}" >/dev/null
+              ' <<<"${reviews}" >/dev/null; then
+              return 0
+            else
+              status=$?
+            fi
+            if [ "${status}" -ne 1 ]; then
+              return "${status}"
+            fi
+            return 1
           }
           if review_exists_for_head; then
             echo "Copilot already reviewed the exact finalized head."
             exit 0
+          else
+            review_status=$?
+            if [ "${review_status}" -ne 1 ]; then
+              echo "Unable to safely evaluate existing Copilot reviews; refusing to request another review." >&2
+              exit "${review_status}"
+            fi
           fi
           reviewer_is_requested() {
             local response
@@ -520,7 +564,7 @@ jobs:
             jq -e \
               --arg edited_at "${EVENT_EDITED_AT}" \
               --argjson number "${PR_NUMBER}" '
-                ((.errors // []) | length) == 0
+                (if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)
                 and .data.repository.pullRequest.number == $number
                 and .data.repository.pullRequest.lastEditedAt == $edited_at
               ' <<<"${metadata}" >/dev/null
@@ -664,7 +708,7 @@ jobs:
                 -F number="${PR_NUMBER}")" \
               && jq -e \
                 --argjson number "${PR_NUMBER}" '
-                  ((.errors // []) | length) == 0
+                  (if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)
                   and .data.repository.pullRequest.number == $number
                   and (
                     .data.repository.pullRequest.lastEditedAt == null
@@ -952,7 +996,7 @@ jobs:
             local api_attempt output
             for api_attempt in $(seq 1 5); do
               if output="$(gh api graphql "$@")"; then
-                if jq -e '((.errors // []) | length) == 0' <<<"${output}" >/dev/null; then
+                if jq -e '(if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)' <<<"${output}" >/dev/null; then
                   printf '%s' "${output}"
                   return 0
                 fi
@@ -1010,9 +1054,10 @@ jobs:
           GRAPHQL
 
           review_comments_clean() {
-            local review_id="$1" expected_head="$2" after="" response has_next
+            local review_id="$1" expected_head="$2" after="" response has_next next_after
             local content_counts marker_count content_count meaningful_content=false
             local count_pattern=$'^[0-9]+\t[0-9]+$'
+            local seen_comment_cursors='[]'
             local -a arguments
             while true; do
               arguments=(
@@ -1028,21 +1073,37 @@ jobs:
               fi
               if ! jq -e \
                 --arg head "${expected_head}" \
-                '(.data.node.comments != null)
+                '((.data.node.comments | type) == "object")
                   and (.data.node.commit.oid == $head)
                   and (.data.node.pullRequest.headRefOid == $head)' \
                 <<<"${response}" >/dev/null; then
                 echo "Review ${review_id} no longer matches current head ${expected_head}." >&2
                 return 2
               fi
+              if ! jq -e --arg after "${after}" '
+                (.data.node | has("body"))
+                and (.data.node.body == null or ((.data.node.body | type) == "string"))
+                and (.data.node.comments.nodes | type) == "array"
+                and (($after == ""
+                    and .data.node.comments.pageInfo.hasNextPage == false)
+                  or (.data.node.comments.nodes | length) > 0)
+                and all(
+                  .data.node.comments.nodes[]?;
+                  (type == "object") and ((.body | type) == "string")
+                )
+              ' <<<"${response}" >/dev/null; then
+                echo "Review ${review_id} returned malformed review content; refusing to accept it." >&2
+                return 3
+              fi
 
               if ! content_counts="$(
                 jq -er \
                   --arg unable_marker "${UNABLE_REVIEW_MARKER}" \
                   --arg no_files_marker "${NO_FILES_REVIEW_MARKER}" \
-                  --arg quota_exhausted_marker "${QUOTA_EXHAUSTED_MARKER}" \
-                  --arg quota_exceeded_marker "${QUOTA_EXCEEDED_MARKER}" \
-                  --arg suppressed_comments_marker "${SUPPRESSED_COMMENTS_MARKER}" \
+                --arg quota_exhausted_marker "${QUOTA_EXHAUSTED_MARKER}" \
+                --arg quota_exceeded_marker "${QUOTA_EXCEEDED_MARKER}" \
+                --arg suppressed_comments_marker "${SUPPRESSED_COMMENTS_MARKER}" \
+                --arg error_marker "${ERROR_REVIEW_MARKER}" \
                   'def normalize_review_text:
                       ascii_downcase
                       | gsub("wasn[\u0027\u2019]t"; "was not")
@@ -1055,6 +1116,7 @@ jobs:
                   | ($quota_exhausted_marker | normalize_review_text) as $quota_exhausted
                   | ($quota_exceeded_marker | normalize_review_text) as $quota_exceeded
                   | ($suppressed_comments_marker | normalize_review_text) as $suppressed
+                  | ($error_marker | normalize_review_text) as $error
                   | [
                     ([
                       review_content
@@ -1066,6 +1128,7 @@ jobs:
                               or contains($quota_exhausted)
                               or contains($quota_exceeded)
                               or contains($suppressed)
+                              or contains($error)
                             )
                         )
                     ] | length),
@@ -1077,47 +1140,77 @@ jobs:
                   | @tsv' <<<"${response}"
               )"; then
                 echo "Unable to parse review content counts for review ${review_id}; refusing to accept the review." >&2
-                return 2
+                return 3
               fi
               if [[ ! "${content_counts}" =~ ${count_pattern} ]]; then
                 echo "Review ${review_id} returned invalid review content counts; refusing to accept the review." >&2
-                return 2
+                return 3
               fi
               IFS=$'\t' read -r marker_count content_count <<<"${content_counts}"
               if [ "${marker_count}" -gt 0 ]; then
-                return 1
+                echo "Review ${review_id} contains an unusable Copilot result; refusing to accept it." >&2
+                return 3
               fi
               if [ "${content_count}" -gt 0 ]; then
                 meaningful_content=true
               fi
 
-              has_next="$(jq -r '.data.node.comments.pageInfo.hasNextPage' <<<"${response}")"
-              if [ "${has_next}" != "true" ]; then
-                if [ "${meaningful_content}" = true ]; then
-                  return 0
-                fi
-                return 1
+              if ! has_next="$(
+                jq -r '
+                  .data.node.comments.pageInfo.hasNextPage
+                  | if type == "boolean" then . else error("invalid hasNextPage") end
+                ' <<<"${response}"
+              )"; then
+                echo "Review-comment pagination state is malformed; refusing to accept the review." >&2
+                return 3
               fi
-              after="$(jq -r '.data.node.comments.pageInfo.endCursor // empty' <<<"${response}")"
-              if [ -z "${after}" ]; then
-                echo "Review-comment pagination cursor is missing." >&2
-                return 2
-              fi
+              case "${has_next}" in
+                false)
+                  if [ "${meaningful_content}" = true ]; then
+                    return 0
+                  fi
+                  echo "Review ${review_id} has no usable Copilot content; refusing to accept it." >&2
+                  return 3
+                  ;;
+                true)
+                  if ! next_after="$(
+                    jq -er '
+                      .data.node.comments.pageInfo.endCursor
+                      | select(type == "string" and length > 0)
+                    ' <<<"${response}"
+                  )"; then
+                    echo "Review-comment pagination cursor is missing or malformed." >&2
+                    return 3
+                  fi
+                  if jq -e --arg next "${next_after}" --arg current "${after}" \
+                    '($next == $current) or index($next)' <<<"${seen_comment_cursors}" >/dev/null; then
+                    echo "Review-comment pagination cursor did not progress; refusing to accept the review." >&2
+                    return 3
+                  fi
+                  if ! seen_comment_cursors="$(
+                    jq -cer --arg next "${next_after}" '. + [$next]' <<<"${seen_comment_cursors}"
+                  )"; then
+                    echo "Unable to track review-comment pagination; refusing to accept the review." >&2
+                    return 3
+                  fi
+                  after="${next_after}"
+                  ;;
+                *)
+                  echo "Review-comment pagination state is malformed; refusing to accept the review." >&2
+                  return 3
+                  ;;
+              esac
             done
           }
 
-          # A rejected review cannot become acceptable during this run without
-          # an edit event, which starts a fresh run through the concurrency
-          # group. Cache rejected IDs so marker-only, empty, or whitespace-only
-          # reviews cost one detail query per run instead of one query on every
-          # polling attempt.
-          declare -A rejected_review_ids=()
           review_complete=false
           head_sha=""
           for attempt in $(seq 1 40); do
             head_sha=""
             before=""
             request_failed=false
+            candidate_reviews='[]'
+            seen_review_cursors='[]'
             while true; do
               arguments=(
                 -f query="${review_query}"
@@ -1152,67 +1245,211 @@ jobs:
                 echo "Pull-request metadata changed after this review run was bound." >&2
                 exit 1
               fi
+              if ! jq -e --arg before "${before}" '
+                (.data.repository.pullRequest.reviews.nodes | type) == "array"
+                and (($before == ""
+                    and .data.repository.pullRequest.reviews.pageInfo.hasPreviousPage == false)
+                  or (.data.repository.pullRequest.reviews.nodes | length) > 0)
+                and all(
+                  .data.repository.pullRequest.reviews.nodes[]?;
+                  (type == "object")
+                  and ((.author | type) == "object")
+                  and ((.author.login | type) == "string")
+                  and ((.author.login | length) > 0)
+                  and (.author.login | test("^[^[:space:]]+$"))
+                  and ((.state | type) == "string")
+                  and (.state == "PENDING" or .state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+                )
+              ' <<<"${response}" >/dev/null; then
+                echo "Review history is malformed; refusing to accept incomplete review evidence." >&2
+                exit 1
+              fi
 
-              candidate_review_ids="$(
-                jq -r \
+              page_candidates="$(
+                jq -cer \
                   --arg head "${head_sha}" \
                   --arg last_edited_at "${BOUND_LAST_EDITED_AT}" \
                   --arg not_before "${FRESH_REVIEW_AFTER}" \
                   --arg reviewer "${COPILOT_REVIEWER_LOGIN}" \
                   --arg require_fresh "${REQUIRE_FRESH_REVIEW}" \
-                  '(.data.repository.pullRequest.reviews.nodes // [])[]
+                  'def timestamp_key:
+                      if type != "string" then error("invalid timestamp")
+                      else
+                        capture("^(?<datetime>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<fraction>[0-9]{1,9}))?Z$") as $parts
+                        | ($parts.datetime + "Z") as $canonical
+                        | ($canonical | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) as $seconds
+                        | if ($seconds | gmtime | strftime("%Y-%m-%dT%H:%M:%SZ")) != $canonical
+                          then error("invalid timestamp")
+                          else [
+                            $seconds,
+                            ((($parts.fraction // "") + "000000000") | .[0:9] | tonumber)
+                          ]
+                          end
+                      end;
+                  def valid_timestamp:
+                      (try (timestamp_key | true) catch false) // false;
+                  def freshness_required:
+                      $last_edited_at != "null" or $require_fresh == "true";
+                  def is_fresh:
+                      (.submitted_at | timestamp_key) as $submitted
+                      | (if $last_edited_at == "null" then true
+                         else $submitted > ($last_edited_at | timestamp_key)
+                         end)
+                      and ($require_fresh != "true" or $submitted > ($not_before | timestamp_key));
+                  [ (.data.repository.pullRequest.reviews.nodes // [])[]?
                     | select(
-                        (.author.login // "") as $login
+                        .author.login as $login
                         | ($login == $reviewer or $login == ($reviewer + "[bot]"))
                       )
                     | select(.state == "COMMENTED" or .state == "APPROVED")
-                    | select(.commit.oid == $head)
+                    | {
+                        id: (.id // null),
+                        commit_oid: (
+                          if (.commit | type) == "object"
+                            and (.commit.oid | type) == "string"
+                          then .commit.oid else null end
+                        ),
+                        submitted_at: (.submittedAt // null)
+                      }
+                    # Historical reviews for an older head do not affect this
+                    # current-revision decision. A missing binding or a newer
+                    # mismatched binding is never silently ignored.
                     | select(
-                        $last_edited_at == "null"
-                        or ((.submittedAt // "") > $last_edited_at)
-                      )
-                    | select(
-                        $require_fresh != "true"
-                        or ((.submittedAt // "") > $not_before)
-                      )
-                    | (.id // empty)' <<<"${response}"
+                        ((.commit_oid == $head)
+                          and (.submitted_at | valid_timestamp)
+                          and is_fresh)
+                        or .commit_oid == null
+                        or (
+                          .commit_oid != null
+                          and .commit_oid != $head
+                          and (.commit_oid | test("^[0-9a-f]{40}$") | not)
+                        )
+                        or ((.submitted_at | valid_timestamp | not))
+                        or (
+                          (.submitted_at | valid_timestamp)
+                          and freshness_required
+                          and (.commit_oid != $head)
+                          and is_fresh
+                        )
+                      ) ]' <<<"${response}"
               )"
-              while IFS= read -r review_id; do
-                if [ -z "${review_id}" ]; then
-                  continue
-                fi
-                if [ -n "${rejected_review_ids["${review_id}"]:-}" ]; then
-                  continue
-                fi
-                if review_comments_clean "${review_id}" "${head_sha}"; then
-                  review_complete=true
-                  break
-                else
-                  comments_status=$?
-                  if [ "${comments_status}" -eq 2 ]; then
-                    request_failed=true
-                    break
-                  fi
-                  rejected_review_ids["${review_id}"]=1
-                fi
-              done <<<"${candidate_review_ids}"
-              if [ "${review_complete}" = true ]; then
-                break 2
-              fi
-              if [ "${request_failed}" = true ]; then
-                break
-              fi
+              candidate_reviews="$(jq -cer --argjson existing "${candidate_reviews}" \
+                '$existing + .' <<<"${page_candidates}")" || {
+                echo "Unable to collect Copilot review bindings; refusing to accept the review." >&2
+                exit 1
+              }
 
-              has_previous="$(jq -r '.data.repository.pullRequest.reviews.pageInfo.hasPreviousPage' <<<"${response}")"
-              if [ "${has_previous}" != "true" ]; then
-                break
-              fi
-              before="$(jq -r '.data.repository.pullRequest.reviews.pageInfo.startCursor // empty' <<<"${response}")"
-              if [ -z "${before}" ]; then
-                echo "Review pagination cursor is missing." >&2
+              if ! has_previous="$(
+                jq -r '
+                  .data.repository.pullRequest.reviews.pageInfo.hasPreviousPage
+                  | if type == "boolean" then . else error("invalid hasPreviousPage") end
+                ' <<<"${response}"
+              )"; then
+                echo "Review pagination state is malformed; refusing to accept the review." >&2
                 exit 1
               fi
+              case "${has_previous}" in
+                false)
+                  break
+                  ;;
+                true)
+                  if ! next_before="$(
+                    jq -er '
+                      .data.repository.pullRequest.reviews.pageInfo.startCursor
+                      | select(type == "string" and length > 0)
+                    ' <<<"${response}"
+                  )"; then
+                    echo "Review pagination cursor is missing or malformed." >&2
+                    exit 1
+                  fi
+                  if jq -e --arg next "${next_before}" --arg current "${before}" \
+                    '($next == $current) or index($next)' <<<"${seen_review_cursors}" >/dev/null; then
+                    echo "Review pagination cursor did not progress; refusing to accept incomplete review evidence." >&2
+                    exit 1
+                  fi
+                  if ! seen_review_cursors="$(
+                    jq -cer --arg next "${next_before}" '. + [$next]' <<<"${seen_review_cursors}"
+                  )"; then
+                    echo "Unable to track review pagination; refusing to accept incomplete review evidence." >&2
+                    exit 1
+                  fi
+                  before="${next_before}"
+                  ;;
+                *)
+                  echo "Review pagination state is malformed; refusing to accept the review." >&2
+                  exit 1
+                  ;;
+              esac
             done
+
+            if [ "${request_failed}" = true ]; then
+              if [ "${attempt}" -eq 40 ]; then
+                echo "Unable to verify the Copilot review after repeated API or head-change failures." >&2
+                exit 1
+              fi
+              echo "Retrying review verification after a transient API or head-change failure."
+              sleep 15
+              continue
+            fi
+
+            candidate_selection="$(
+              jq -cer \
+                --arg head "${head_sha}" \
+                --arg last_edited_at "${BOUND_LAST_EDITED_AT}" \
+                --arg not_before "${FRESH_REVIEW_AFTER}" \
+                --arg require_fresh "${REQUIRE_FRESH_REVIEW}" '
+                  def timestamp_key:
+                    if type != "string" then error("invalid timestamp")
+                    else
+                      capture("^(?<datetime>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<fraction>[0-9]{1,9}))?Z$") as $parts
+                      | ($parts.datetime + "Z") as $canonical
+                      | ($canonical | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) as $seconds
+                      | if ($seconds | gmtime | strftime("%Y-%m-%dT%H:%M:%SZ")) != $canonical
+                        then error("invalid timestamp")
+                        else [
+                          $seconds,
+                          ((($parts.fraction // "") + "000000000") | .[0:9] | tonumber)
+                        ]
+                        end
+                    end;
+                  if length == 0 then {status:"waiting"}
+                  elif length != 1 then {status:"terminal", reason:"ambiguous Copilot reviews"}
+                  elif (.[0].id | type) != "string" or (.[0].id | length) == 0
+                    then {status:"terminal", reason:"missing review identity"}
+                  elif .[0].commit_oid != $head
+                    then {status:"terminal", reason:"missing or mismatched GraphQL commit OID"}
+                  elif (((try (.[0].submitted_at | timestamp_key | true) catch false) // false) | not)
+                    then {status:"terminal", reason:"missing or invalid review submission time"}
+                  elif (if $last_edited_at == "null" then false
+                        else (.[0].submitted_at | timestamp_key) <= ($last_edited_at | timestamp_key)
+                        end)
+                    then {status:"terminal", reason:"stale Copilot review"}
+                  elif ($require_fresh == "true" and (.[0].submitted_at | timestamp_key) <= ($not_before | timestamp_key))
+                    then {status:"terminal", reason:"stale Copilot review"}
+                  else {status:"candidate", id:.[0].id}
+                  end' <<<"${candidate_reviews}"
+            )" || {
+              echo "Unable to classify Copilot review bindings; refusing to accept the review." >&2
+              exit 1
+            }
+            candidate_status="$(jq -er '.status' <<<"${candidate_selection}")" || exit 1
+            if [ "${candidate_status}" = "terminal" ]; then
+              echo "Copilot review is unusable or unbound: $(jq -r '.reason' <<<"${candidate_selection}")." >&2
+              exit 1
+            fi
+            if [ "${candidate_status}" = "candidate" ]; then
+              review_id="$(jq -er '.id' <<<"${candidate_selection}")" || exit 1
+              if review_comments_clean "${review_id}" "${head_sha}"; then
+                review_complete=true
+                break
+              else
+                comments_status=$?
+              fi
+              if [ "${comments_status}" -eq 3 ]; then
+                exit 1
+              fi
+              request_failed=true
+            fi
 
             if [ "${attempt}" -eq 40 ]; then
               if [ "${request_failed}" = true ]; then
@@ -1244,13 +1481,15 @@ jobs:
           ) {
             repository(owner: $owner, name: $repository) {
               pullRequest(number: $number) {
+                number
                 headRefOid
                 reviewThreads(first: 100, after: $after) {
                   pageInfo { hasNextPage endCursor }
                   nodes {
                     isResolved
-                    comments(first: 1) {
-                      nodes { author { login } }
+                    comments(first: 100) {
+                      pageInfo { hasNextPage }
+                      nodes { author { login } pullRequestReview { commit { oid } } }
                     }
                   }
                 }
@@ -1264,6 +1503,7 @@ jobs:
             after=""
             unresolved_copilot_threads=0
             request_failed=false
+            seen_thread_cursors='[]'
             while true; do
               arguments=(
                 -f query="${thread_query}"
@@ -1286,31 +1526,102 @@ jobs:
                 request_failed=true
                 break
               fi
+              if ! jq -e --arg after "${after}" --argjson number "${PR_NUMBER}" '
+                .data.repository.pullRequest.number == $number
+                and (.data.repository.pullRequest.reviewThreads | type) == "object"
+                and (.data.repository.pullRequest.reviewThreads.nodes | type) == "array"
+                and (($after == ""
+                    and .data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false)
+                  or (.data.repository.pullRequest.reviewThreads.nodes | length) > 0)
+                and all(
+                  .data.repository.pullRequest.reviewThreads.nodes[]?;
+                  (type == "object")
+                  and ((.isResolved | type) == "boolean")
+                  and ((.comments | type) == "object")
+                  and ((.comments.nodes | type) == "array")
+                  and ((.comments.nodes | length) > 0)
+                  and ((.comments.pageInfo | type) == "object")
+                  and ((.comments.pageInfo.hasNextPage | type) == "boolean")
+                  and (.comments.pageInfo.hasNextPage == false)
+                  and all(
+                    .comments.nodes[]?;
+                    (type == "object")
+                    and ((.author | type) == "object")
+                    and ((.author.login | type) == "string")
+                    and ((.author.login | length) > 0)
+                    and (.author.login | test("^[^[:space:]]+$"))
+                    and ((.pullRequestReview | type) == "object")
+                    and ((.pullRequestReview.commit | type) == "object")
+                    and ((.pullRequestReview.commit.oid | type) == "string")
+                    and (.pullRequestReview.commit.oid | test("^[0-9a-f]{40}$"))
+                  )
+                )
+              ' <<<"${response}" >/dev/null; then
+                echo "Review-thread evidence is malformed; refusing to accept unresolved-findings state." >&2
+                exit 1
+              fi
 
               page_unresolved="$(
                 jq \
                   --arg reviewer "${COPILOT_REVIEWER_LOGIN}" \
+                  --arg head_sha "${head_sha}" \
                   '[
-                    (.data.repository.pullRequest.reviewThreads.nodes // [])[]
+                    .data.repository.pullRequest.reviewThreads.nodes[]
                     | select(.isResolved == false)
                     | select(
-                        (.comments.nodes[0].author.login // "") as $login
-                        | ($login == $reviewer or $login == ($reviewer + "[bot]"))
+                        any(
+                          .comments.nodes[];
+                          ((.author.login // "") == $reviewer
+                           or (.author.login // "") == ($reviewer + "[bot]"))
+                          and .pullRequestReview.commit.oid == $head_sha
+                        )
                       )
                   ]
                   | length' <<<"${response}"
               )"
               unresolved_copilot_threads=$((unresolved_copilot_threads + page_unresolved))
 
-              has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${response}")"
-              if [ "${has_next}" != "true" ]; then
-                break
-              fi
-              after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"${response}")"
-              if [ -z "${after}" ]; then
-                echo "Review-thread pagination cursor is missing." >&2
+              if ! has_next="$(
+                jq -r '
+                  .data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage
+                  | if type == "boolean" then . else error("invalid hasNextPage") end
+                ' <<<"${response}"
+              )"; then
+                echo "Review-thread pagination state is malformed; refusing to accept unresolved-findings state." >&2
                 exit 1
               fi
+              case "${has_next}" in
+                false)
+                  break
+                  ;;
+                true)
+                  if ! next_after="$(
+                    jq -er '
+                      .data.repository.pullRequest.reviewThreads.pageInfo.endCursor
+                      | select(type == "string" and length > 0)
+                    ' <<<"${response}"
+                  )"; then
+                    echo "Review-thread pagination cursor is missing or malformed." >&2
+                    exit 1
+                  fi
+                  if jq -e --arg next "${next_after}" --arg current "${after}" \
+                    '($next == $current) or index($next)' <<<"${seen_thread_cursors}" >/dev/null; then
+                    echo "Review-thread pagination cursor did not progress; refusing to accept unresolved-findings state." >&2
+                    exit 1
+                  fi
+                  if ! seen_thread_cursors="$(
+                    jq -cer --arg next "${next_after}" '. + [$next]' <<<"${seen_thread_cursors}"
+                  )"; then
+                    echo "Unable to track review-thread pagination; refusing to accept unresolved-findings state." >&2
+                    exit 1
+                  fi
+                  after="${next_after}"
+                  ;;
+                *)
+                  echo "Review-thread pagination state is malformed; refusing to accept unresolved-findings state." >&2
+                  exit 1
+                  ;;
+              esac
             done
 
             if [ "${request_failed}" = false ] && [ "${unresolved_copilot_threads}" -eq 0 ]; then
@@ -1412,7 +1723,7 @@ jobs:
                   -F number="${PR_NUMBER}")" \
                 && jq -e \
                   --argjson number "${PR_NUMBER}" '
-                    ((.errors // []) | length) == 0
+                    (if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)
                     and .data.repository.pullRequest.number == $number
                     and (
                       .data.repository.pullRequest.lastEditedAt == null
@@ -1470,7 +1781,10 @@ jobs:
                 && jq -e --arg head "${EVENT_HEAD}" --arg review_id "${BOUND_REVIEW_ID}" '
                   [add[]? | select(.node_id == $review_id)] as $reviews |
                   ($reviews | length) == 1
+                  and ($reviews[0].commit_id | type) == "string"
                   and $reviews[0].commit_id == $head
+                  and ($reviews[0] | has("body"))
+                  and ($reviews[0].body == null or ($reviews[0].body | type) == "string")
                   and ($reviews[0].user.login == "copilot-pull-request-reviewer"
                     or $reviews[0].user.login == "copilot-pull-request-reviewer[bot]")
                   and ($reviews[0].state == "COMMENTED" or $reviews[0].state == "APPROVED")
@@ -1479,6 +1793,116 @@ jobs:
               fi
               if [ "${attempt}" -eq 10 ]; then
                 echo "The exact bound Copilot review did not converge across GitHub review APIs." >&2
+                return 1
+              fi
+              sleep 3
+            done
+          }
+          validate_bound_threads() {
+            local owner="${REPOSITORY%%/*}" repository="${REPOSITORY#*/}"
+            local query page after='' has_next next_after threads='[]' page_threads
+            local seen_cursors='[]'
+            local -a arguments
+            read -r -d '' query <<'GRAPHQL' || true
+          query($owner:String!,$repository:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repository){pullRequest(number:$number){number headRefOid reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{author{login} pullRequestReview{commit{oid}}}}}}}}}
+          GRAPHQL
+            while true; do
+              arguments=(-f query="${query}" -F owner="${owner}" -F repository="${repository}" -F number="${PR_NUMBER}")
+              if [ -n "${after}" ]; then arguments+=(-f after="${after}"); fi
+              page="$(gh api graphql "${arguments[@]}")" || return 1
+              if ! jq -e --arg after "${after}" --arg head "${EVENT_HEAD}" --argjson number "${PR_NUMBER}" '
+                (if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)
+                and .data.repository.pullRequest.number == $number
+                and .data.repository.pullRequest.headRefOid == $head
+                and (.data.repository.pullRequest.reviewThreads | type) == "object"
+                and (.data.repository.pullRequest.reviewThreads.nodes | type) == "array"
+                and (($after == ""
+                    and .data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false)
+                  or (.data.repository.pullRequest.reviewThreads.nodes | length) > 0)
+                and (.data.repository.pullRequest.reviewThreads.pageInfo | type) == "object"
+                and ((.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage | type) == "boolean")
+                and (.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false
+                  or ((.data.repository.pullRequest.reviewThreads.pageInfo.endCursor | type) == "string"
+                    and (.data.repository.pullRequest.reviewThreads.pageInfo.endCursor | length) > 0))
+                and all(.data.repository.pullRequest.reviewThreads.nodes[]?;
+                  (type == "object")
+                  and ((.isResolved | type) == "boolean")
+                  and ((.comments | type) == "object")
+                  and ((.comments.nodes | type) == "array")
+                  and ((.comments.nodes | length) > 0)
+                  and ((.comments.pageInfo | type) == "object")
+                  and ((.comments.pageInfo.hasNextPage | type) == "boolean")
+                  and (.comments.pageInfo.hasNextPage == false)
+                  and all(.comments.nodes[]?;
+                    (type == "object")
+                    and ((.author | type) == "object")
+                    and ((.author.login | type) == "string")
+                    and ((.author.login | length) > 0)
+                    and (.author.login | test("^[^[:space:]]+$"))
+                    and ((.pullRequestReview | type) == "object")
+                    and ((.pullRequestReview.commit | type) == "object")
+                    and ((.pullRequestReview.commit.oid | type) == "string")
+                    and (.pullRequestReview.commit.oid | test("^[0-9a-f]{40}$"))
+                  )
+                )
+              ' <<<"${page}" >/dev/null; then
+                return 1
+              fi
+              page_threads="$(jq -cer '.data.repository.pullRequest.reviewThreads.nodes' <<<"${page}")" || return 1
+              threads="$(jq -cer --argjson page "${page_threads}" '. + $page' <<<"${threads}")" || return 1
+              has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${page}")"
+              case "${has_next}" in
+                false) break ;;
+                true)
+                  next_after="$(jq -er '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"${page}")" || return 1
+                  if jq -e --arg next "${next_after}" --arg current "${after}" '($next == $current) or index($next)' <<<"${seen_cursors}" >/dev/null; then
+                    return 1
+                  fi
+                  seen_cursors="$(jq -cer --arg next "${next_after}" '. + [$next]' <<<"${seen_cursors}")" || return 1
+                  after="${next_after}"
+                  ;;
+                *) return 1 ;;
+              esac
+            done
+            if jq -e --arg head "${EVENT_HEAD}" '
+              any(.[]; .isResolved == false and any(.comments.nodes[];
+                (.author.login == "copilot-pull-request-reviewer" or .author.login == "copilot-pull-request-reviewer[bot]")
+                and .pullRequestReview.commit.oid == $head))
+            ' <<<"${threads}" >/dev/null; then
+              return 1
+            else
+              local finding_status=$?
+              [ "${finding_status}" -eq 1 ] || return "${finding_status}"
+            fi
+          }
+          verify_failure_publication() {
+            local check_id="$1" completed_at="$2" evidence="$3"
+            local external_id="$4" url="$5" attempt observed
+            for attempt in $(seq 1 5); do
+              if observed="$(api_read "repos/${REPOSITORY}/check-runs/${check_id}")" \
+                && jq -e \
+                  --arg completed_at "${completed_at}" \
+                  --arg evidence "${evidence}" \
+                  --arg external_id "${external_id}" \
+                  --arg head "${EVENT_HEAD}" \
+                  --arg url "${url}" \
+                  --argjson check_id "${check_id}" '
+                    .id == $check_id
+                    and .name == "Current revision review"
+                    and .app.id == 15368
+                    and .app.slug == "github-actions"
+                    and .head_sha == $head
+                    and .details_url == $url
+                    and .external_id == $external_id
+                    and .completed_at == $completed_at
+                    and .status == "completed"
+                    and .conclusion == "failure"
+                    and .output.summary == $evidence
+                  ' <<<"${observed}" >/dev/null; then
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                echo "Failure check did not converge to the exact durable binding." >&2
                 return 1
               fi
               sleep 3
@@ -1688,7 +2112,8 @@ jobs:
           publish_once() {
             local check_name="$1" external_id="$2" title="$3"
             local checks named count check_id check_url completed_at created
-            local recovered recovery_attempt updated
+            local failure_evidence final_labels_sha256 recovered recovery_attempt updated
+            local final_labels_valid final_metadata_valid final_review_valid final_threads_valid
             read_named_checks() {
               checks="$(api_read --paginate --slurp \
                 "repos/${REPOSITORY}/commits/${EVENT_HEAD}/check-runs?check_name=$(jq -rn --arg value "${check_name}" '$value|@uri')&filter=all&per_page=100")" || return 1
@@ -1704,6 +2129,57 @@ jobs:
             if [ "${count}" -gt 1 ]; then
               echo "Multiple protected ${check_name} results exist for ${EVENT_HEAD}." >&2
               exit 1
+            fi
+            if [ "${external_kind}" = copilot ] && ! validate_bound_threads; then
+              echo "Current-head review-thread evidence changed or is malformed; refusing to publish PASS." >&2
+              if [ "${count}" -eq 1 ]; then
+                final_metadata_valid=true
+                final_labels_valid=true
+                final_review_valid=true
+                final_threads_valid=false
+                if ! validate_bound_metadata_revision; then
+                  final_metadata_valid=false
+                fi
+                final_labels_sha256=''
+                if ! final_labels_sha256="$(read_labels_sha256)" \
+                  || [ "${final_labels_sha256}" != "${BOUND_LABELS_SHA256}" ]; then
+                  final_labels_valid=false
+                fi
+                if ! validate_bound_review; then
+                  final_review_valid=false
+                fi
+                check_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' <<<"${named}")"
+                check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
+                completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                failure_evidence="$(jq -cn \
+                  --arg base "${EVENT_BASE}" --arg head "${EVENT_HEAD}" \
+                  --arg reason "current-head review-thread evidence changed or is malformed" \
+                  --argjson labels_valid "${final_labels_valid}" \
+                  --argjson metadata_valid "${final_metadata_valid}" \
+                  --argjson review_valid "${final_review_valid}" \
+                  --argjson threads_valid "${final_threads_valid}" \
+                  --argjson pr_number "${PR_NUMBER}" --argjson run_id "${GITHUB_RUN_ID}" \
+                  --arg run_url "${run_url}" \
+                  '{schema:4,base_sha:$base,head_sha:$head,pull_request_number:$pr_number,producer_run_id:$run_id,reason:$reason,run_url:$run_url,metadata_valid:$metadata_valid,labels_valid:$labels_valid,review_valid:$review_valid,threads_valid:$threads_valid}')"
+                failure_external_id="mlx90-current-revision:thread-change:v1:${PR_NUMBER}:${GITHUB_RUN_ID}:${EVENT_BASE}:${EVENT_HEAD}"
+                patch_status=0
+                api_patch "repos/${REPOSITORY}/check-runs/${check_id}" \
+                  -f status=completed -f conclusion=failure \
+                  -f "completed_at=${completed_at}" -f "details_url=${check_url}" \
+                  -f "external_id=${failure_external_id}" \
+                  -f 'output[title]=Current revision review-thread evidence changed' \
+                  -f "output[summary]=${failure_evidence}" >/dev/null \
+                  || patch_status=$?
+                publication_status=0
+                verify_failure_publication "${check_id}" "${completed_at}" \
+                  "${failure_evidence}" "${failure_external_id}" "${check_url}" \
+                  || publication_status=$?
+                if [ "${patch_status}" -ne 0 ] \
+                  || [ "${publication_status}" -ne 0 ]; then
+                  return 1
+                fi
+              fi
+              return 1
             fi
             if [ "${count}" -eq 1 ]; then
               if [[ "${EVENT_ACTION}" =~ ^(edited|labeled|unlabeled)$ ]]; then
@@ -1819,6 +2295,7 @@ jobs:
           final_metadata_valid=true
           final_labels_valid=true
           final_review_valid=true
+          final_threads_valid=true
           if ! validate_bound_metadata_revision; then
             final_metadata_valid=false
           fi
@@ -1830,15 +2307,20 @@ jobs:
           if [ "${external_kind}" = copilot ] && ! validate_bound_review; then
             final_review_valid=false
           fi
+          if [ "${external_kind}" = copilot ] && ! validate_bound_threads; then
+            final_threads_valid=false
+          fi
           if [ "${final_metadata_valid}" != true ] \
             || [ "${final_labels_valid}" != true ] \
-            || [ "${final_review_valid}" != true ]; then
+            || [ "${final_review_valid}" != true ] \
+            || [ "${final_threads_valid}" != true ]; then
             failure_evidence="$(jq -cn \
               --arg base "${EVENT_BASE}" \
               --arg head "${EVENT_HEAD}" \
               --argjson labels_valid "${final_labels_valid}" \
               --argjson metadata_valid "${final_metadata_valid}" \
               --argjson review_valid "${final_review_valid}" \
+              --argjson threads_valid "${final_threads_valid}" \
               --arg reason "bound pull-request state did not remain valid during result publication" \
               --argjson pr_number "${PR_NUMBER}" \
               --argjson run_id "${GITHUB_RUN_ID}" \
@@ -1846,31 +2328,27 @@ jobs:
               '{schema:4,base_sha:$base,head_sha:$head,pull_request_number:$pr_number,
                 producer_run_id:$run_id,reason:$reason,run_url:$run_url,
                 metadata_valid:$metadata_valid,labels_valid:$labels_valid,
-                review_valid:$review_valid}')"
+                review_valid:$review_valid,threads_valid:$threads_valid}')"
             completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            invalidated="$(api_patch \
+            failure_external_id="mlx90-current-revision:binding-change:v1:${PR_NUMBER}:${GITHUB_RUN_ID}:${EVENT_BASE}:${EVENT_HEAD}"
+            patch_status=0
+            api_patch \
               "repos/${REPOSITORY}/check-runs/${published_check_id}" \
               -f status=completed \
               -f conclusion=failure \
               -f "completed_at=${completed_at}" \
               -f "details_url=${run_url}" \
-              -f "external_id=mlx90-current-revision:binding-change:v1:${PR_NUMBER}:${GITHUB_RUN_ID}:${EVENT_BASE}:${EVENT_HEAD}" \
+              -f "external_id=${failure_external_id}" \
               -f 'output[title]=Current revision binding changed during publication' \
-              -f "output[summary]=${failure_evidence}")"
-            jq -e \
-              --arg evidence "${failure_evidence}" \
-              --arg head "${EVENT_HEAD}" \
-              --argjson check_id "${published_check_id}" '
-                .id == $check_id
-                and .name == "Current revision review"
-                and .app.id == 15368
-                and .app.slug == "github-actions"
-                and .head_sha == $head
-                and .status == "completed"
-                and .conclusion == "failure"
-                and .output.summary == $evidence
-              ' <<<"${invalidated}" >/dev/null
-            echo "Bound pull-request state did not remain valid during result publication: metadata_valid=${final_metadata_valid}, labels_valid=${final_labels_valid}, review_valid=${final_review_valid}." >&2
+              -f "output[summary]=${failure_evidence}" >/dev/null \
+              || patch_status=$?
+            publication_status=0
+            verify_failure_publication "${published_check_id}" "${completed_at}" \
+              "${failure_evidence}" "${failure_external_id}" "${run_url}" \
+              || publication_status=$?
+            test "${patch_status}" -eq 0
+            test "${publication_status}" -eq 0
+            echo "Bound pull-request state did not remain valid during result publication: metadata_valid=${final_metadata_valid}, labels_valid=${final_labels_valid}, review_valid=${final_review_valid}, threads_valid=${final_threads_valid}." >&2
             exit 1
           fi
 
