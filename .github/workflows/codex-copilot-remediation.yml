@@ -231,8 +231,21 @@ jobs:
             exit 0
           fi
 
-          review_body="$(jq -r '.review.body // "" | ascii_downcase' "${GITHUB_EVENT_PATH}")"
-          if [[ "${review_body}" == *"unable to review"* || "${review_body}" == *"not able to review"* || "${review_body}" == *"quota exhausted"* || "${review_body}" == *"quota exceeded"* ]]; then
+          if ! review_body="$(jq -er '
+            if (.review | type) != "object" or (.review | has("body") | not) then
+              error("review.body is required")
+            elif (.review.body | type) == "null" then ""
+            elif (.review.body | type) == "string" then .review.body
+            else error("review.body must be null or a string")
+            end
+            | ascii_downcase
+            | gsub("wasn[\u0027\u2019]t"; "was not")
+            | gsub("\\s"; "")
+          ' "${GITHUB_EVENT_PATH}")"; then
+            echo "Copilot review body is malformed; remediation is forbidden." >&2
+            exit 1
+          fi
+          if [[ "${review_body}" == *"unabletoreview"* || "${review_body}" == *"notabletoreview"* || "${review_body}" == *"quotaexhausted"* || "${review_body}" == *"quotaexceeded"* || "${review_body}" == *"encounteredanerror"* || "${review_body}" == *"suppressedcomments"* ]]; then
             echo "Copilot review is unavailable or quota-blocked; automatic retry is forbidden."
             exit 0
           fi
@@ -242,17 +255,78 @@ jobs:
 
           read -r owner name <<<"${REPOSITORY//\// }"
           # shellcheck disable=SC2016 # GraphQL variables are intentionally literal.
-          query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{author{login} body pullRequestReview{commit{oid}}}}}}}}}'
+          query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){number headRefOid reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{author{login} body pullRequestReview{commit{oid}}}}}}}}}'
           threads='[]'
           after=''
+          seen_thread_cursors='[]'
           while true; do
             args=(-f query="${query}" -F owner="${owner}" -F name="${name}" -F number="${pr_number}")
             if [ -n "${after}" ]; then args+=(-f after="${after}"); fi
             page="$(gh api graphql "${args[@]}")"
-            threads="$(jq -c --argjson page "$(jq '.data.repository.pullRequest.reviewThreads.nodes' <<<"${page}")" '. + $page' <<<"${threads}")"
-            if [ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${page}")" != true ]; then break; fi
-            after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"${page}")"
-            test -n "${after}"
+            if ! jq -e --arg after "${after}" --arg head "${head_sha}" --argjson number "${pr_number}" '
+              (if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)
+              and
+              .data.repository.pullRequest.number == $number
+              and
+              .data.repository.pullRequest.headRefOid == $head
+              and
+              (.data.repository.pullRequest.reviewThreads | type) == "object"
+              and (.data.repository.pullRequest.reviewThreads.nodes | type) == "array"
+              and (($after == ""
+                  and .data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false)
+                or (.data.repository.pullRequest.reviewThreads.nodes | length) > 0)
+              and (.data.repository.pullRequest.reviewThreads.pageInfo | type) == "object"
+              and ((.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage | type) == "boolean")
+              and (
+                .data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false
+                or ((.data.repository.pullRequest.reviewThreads.pageInfo.endCursor | type) == "string"
+                  and (.data.repository.pullRequest.reviewThreads.pageInfo.endCursor | length) > 0)
+              )
+              and all(.data.repository.pullRequest.reviewThreads.nodes[]?;
+                (type == "object")
+                and ((.isResolved | type) == "boolean")
+                and ((.comments | type) == "object")
+                and ((.comments.nodes | type) == "array")
+                and ((.comments.nodes | length) > 0)
+                and ((.comments.pageInfo | type) == "object")
+                and ((.comments.pageInfo.hasNextPage | type) == "boolean")
+                and all(.comments.nodes[]?;
+                  (type == "object")
+                  and ((.author | type) == "object")
+                  and ((.author.login | type) == "string")
+                  and ((.author.login | length) > 0)
+                  and (.author.login | test("^[^[:space:]]+$"))
+                  and ((.pullRequestReview | type) == "object")
+                  and ((.pullRequestReview.commit | type) == "object")
+                  and ((.pullRequestReview.commit.oid | type) == "string")
+                  and (.pullRequestReview.commit.oid | test("^[0-9a-f]{40}$"))
+                  and ((.body | type) == "string")
+                )
+              )
+            ' <<<"${page}" >/dev/null; then
+              echo "Review-thread evidence is malformed; remediation is forbidden." >&2
+              exit 1
+            fi
+            page_threads="$(jq -cer '.data.repository.pullRequest.reviewThreads.nodes' <<<"${page}")"
+            threads="$(jq -cer --argjson page "${page_threads}" '. + $page' <<<"${threads}")"
+            has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${page}")"
+            case "${has_next}" in
+              false) break ;;
+              true)
+                next_after="$(jq -er '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"${page}")"
+                if jq -e --arg next "${next_after}" --arg current "${after}" \
+                  '($next == $current) or index($next)' <<<"${seen_thread_cursors}" >/dev/null; then
+                  echo "Review-thread pagination cursor did not progress; remediation is forbidden." >&2
+                  exit 1
+                fi
+                seen_thread_cursors="$(jq -cer --arg next "${next_after}" '. + [$next]' <<<"${seen_thread_cursors}")"
+                after="${next_after}"
+                ;;
+              *)
+                echo "Review-thread pagination state is malformed; remediation is forbidden." >&2
+                exit 1
+                ;;
+            esac
           done
           if ! jq -e 'all(.[]; .comments.pageInfo.hasNextPage == false)' \
             <<<"${threads}" >/dev/null; then
