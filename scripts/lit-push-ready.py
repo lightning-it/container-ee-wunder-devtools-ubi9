@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import contextlib
 import hashlib
 import json
@@ -280,6 +279,27 @@ GIT_IDENTITY_ENVIRONMENT = frozenset(
         "GIT_COMMITTER_NAME",
         "GIT_COMMITTER_EMAIL",
         "GIT_COMMITTER_DATE",
+    }
+)
+HTTPS_FETCH_ENVIRONMENT_ALLOWLIST = frozenset(
+    {
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LOGNAME",
+        "PATH",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+        "USER",
+        "XDG_CONFIG_HOME",
+        "GH_CONFIG_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
     }
 )
 
@@ -637,37 +657,27 @@ def current_branch_ref() -> str:
     return branch
 
 
-def github_https_authorization() -> str:
-    """Return a masked-process-safe GitHub Authorization header value."""
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if token is None:
+def fetch_authoritative_base(branch: str, base_ref: str) -> subprocess.CompletedProcess[str]:
+    """Fetch one governed base branch through the local GitHub helper."""
+    credential_free_environment = {
+        name: value
+        for name, value in isolated_git_environment().items()
+        if name in HTTPS_FETCH_ENVIRONMENT_ALLOWLIST or name.startswith("GIT_")
+    }
+
+    def read_remote_url(*arguments: str) -> str:
         result = run(
-            ["gh", "auth", "token", "--hostname", "github.com"],
+            ["git", "remote", "get-url", *arguments],
             capture=True,
             timeout=30,
+            env=credential_free_environment,
         )
         if result.returncode:
-            raise RuntimeError(
-                "GitHub HTTPS origin requires GH_TOKEN, GITHUB_TOKEN, or "
-                "an authenticated gh session"
-            )
-        token = result.stdout.strip()
-    if (
-        not token
-        or len(token) > 4096
-        or any(ord(character) < 32 or ord(character) == 127 for character in token)
-    ):
-        raise RuntimeError("GitHub HTTPS authentication token is invalid")
-    credentials = base64.b64encode(
-        f"x-access-token:{token}".encode("utf-8")
-    ).decode("ascii")
-    return f"AUTHORIZATION: basic {credentials}"
+            raise RuntimeError("cannot inspect governed origin URL")
+        return result.stdout.strip()
 
-
-def fetch_authoritative_base(branch: str, base_ref: str) -> subprocess.CompletedProcess[str]:
-    """Fetch one governed base branch without exposing credentials on argv."""
-    origin_url = git_output("remote", "get-url", "origin").strip()
-    push_url = git_output("remote", "get-url", "--push", "origin").strip()
+    origin_url = read_remote_url("origin")
+    push_url = read_remote_url("--push", "origin")
     fetch_remote = governed_push_remote_from_url("origin", origin_url)
     push_remote = governed_push_remote_from_url("origin", push_url)
     if fetch_remote["repository"] != push_remote["repository"]:
@@ -683,18 +693,24 @@ def fetch_authoritative_base(branch: str, base_ref: str) -> subprocess.Completed
         f"+refs/heads/{branch}:{base_ref}",
     ]
     if not origin_url.startswith("https://github.com/"):
-        return run(command, capture=True, timeout=120)
-    environment = isolated_git_environment()
-    environment.update(
+        ssh_environment = dict(credential_free_environment)
+        if "SSH_AUTH_SOCK" in os.environ:
+            ssh_environment["SSH_AUTH_SOCK"] = os.environ["SSH_AUTH_SOCK"]
+        return run(command, capture=True, timeout=120, env=ssh_environment)
+    # A credential helper may supply the existing local GitHub credential on
+    # demand. The fetch process itself must not inherit provider tokens.
+    credential_free_environment.update(
         {
-            "GIT_CONFIG_COUNT": "2",
-            # Preserve the distributed engine's existing header slot while
-            # adding the container-safe workspace binding. Several managed
-            # repositories validate this credential-placement contract.
-            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-            "GIT_CONFIG_VALUE_0": github_https_authorization(),
-            "GIT_CONFIG_KEY_1": "safe.directory",
-            "GIT_CONFIG_VALUE_1": str(ROOT),
+            "GIT_CONFIG_COUNT": "3",
+            # Let Git request the existing local credential only when the
+            # governed HTTPS fetch needs it. An empty helper resets any
+            # repository-local helper list before the governed helper is added.
+            "GIT_CONFIG_KEY_0": "credential.helper",
+            "GIT_CONFIG_VALUE_0": "",
+            "GIT_CONFIG_KEY_1": "credential.helper",
+            "GIT_CONFIG_VALUE_1": "!gh auth git-credential",
+            "GIT_CONFIG_KEY_2": "safe.directory",
+            "GIT_CONFIG_VALUE_2": str(ROOT),
         }
     )
     return subprocess.run(
@@ -707,7 +723,7 @@ def fetch_authoritative_base(branch: str, base_ref: str) -> subprocess.Completed
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         timeout=120,
-        env=environment,
+        env=credential_free_environment,
     )
 
 
@@ -1257,11 +1273,12 @@ def expected_integration_tree(change: PlannedChange) -> str:
                         # index file untouched and make the single recovery
                         # merge fail identically.
                         # Wait past the window only after all three drift
-                        # proofs pass, then force a Git 2.34-compatible rewrite
-                        # in index format version 2.  This preserves every
-                        # index entry while moving the index timestamp beyond
-                        # the racy-clean window.  Re-prove status before the
-                        # one permitted retry.
+                        # proofs pass, then force Git to restat every index
+                        # entry and rewrite the Git 2.34-compatible index
+                        # format version 2.  This preserves every index entry
+                        # while moving the index timestamp beyond the
+                        # racy-clean window.  Re-prove status before the one
+                        # permitted retry.
                         time.sleep(1.1)
                         rewritten = run(
                             [
@@ -1269,6 +1286,7 @@ def expected_integration_tree(change: PlannedChange) -> str:
                                 "-c",
                                 f"core.hooksPath={disabled_hooks}",
                                 "update-index",
+                                "--really-refresh",
                                 "--index-version",
                                 "2",
                             ],
@@ -2550,7 +2568,7 @@ def checkout_sanitized_commit(
             "could not fetch sanitized review commit: " + fetched.stdout.strip()
         )
     checked_out = run(
-        ["git", "checkout", "-q", "--detach", "FETCH_HEAD"],
+        ["git", "checkout", "-q", "--detach", commit],
         capture=True,
         cwd=destination,
     )
