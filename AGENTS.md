@@ -304,6 +304,44 @@
   run performs the full runtime sync only after the bootstrap is part of the
   target base; the two phases must never be collapsed past the 200,000-byte
   fail-closed review limit.
+- The Ansible container has one narrower pre-policy recovery phase for an
+  externally aged UBI security lock. Whenever its canonical
+  `rpm-security-updates.lock` differs while the controller would otherwise
+  perform either a policy bootstrap or a full sync, the Shared-Assets App
+  first delivers the exact dependency-closed pair of the canonical lock and
+  `container-build.yml` in a normal protected PR.
+  The workflow triggers the native build for lock changes. The controller
+  binds all source and target Git blobs, rejects symlinked or non-regular
+  destinations and every
+  additional path, and retains the native image build and HIGH/CRITICAL Trivy
+  gates. After that merge it resumes the previously classified mode: genuine
+  engine divergence still requires policy bootstrap before full sync, while
+  only the separately proven immutable-image-repin exception may resume
+  directly with full sync. This phase applies only to
+  `container-ee-wunder-ansible-ubi9` and grants no other exception.
+- A protected container bootstrap source run remains bound to its exact source
+  SHA, run and first attempt until its exact App-authored target PR has merged
+  normally. It then dispatches exactly one continuation for that same source
+  SHA and only that target repository. The continuation re-proves the protected
+  source branch, parent source run and matrix job, target PR, original base and
+  head, two-parent merge commit, GitHub-Actions actor, and first-attempt status
+  before any target mutation. Runtime-lock bootstrap may continue to policy
+  bootstrap, and policy bootstrap may continue to the full sync; a full sync
+  never dispatches another continuation. Any timeout, drift, duplicate,
+  rerun, partial input set, or unmerged/closed PR fails closed.
+  `actions: write` is forbidden at workflow scope and is allowed only on the
+  isolated post-sync continuation job; that job receives target read access
+  only and never holds the target-mutating App token used by the sync job.
+  The continuation job evaluates under `always()` with the protected `main`
+  guard so an unrelated failed matrix leg cannot strand another leg's
+  successfully created bootstrap PR; a missing or invalid per-target handoff
+  still fails that continuation leg closed.
+  An empty continuation envelope is valid only on the protected `push` event;
+  `workflow_dispatch` must provide the complete verified continuation binding
+  before any target-mutating App token is minted.
+  A continuation first mints only target `contents: read` and
+  `pull-requests: read`, verifies the exact source run and protected target
+  merge, and only then may mint the separate target-mutating sync token.
 - `container-ee-wunder-ansible-ubi9` receives its MLX-90 chain only from the
   repository-specific override. Its repo-specific `.releaserc` is a read-only
   version-and-notes plan: the release App persists the draft before it creates
