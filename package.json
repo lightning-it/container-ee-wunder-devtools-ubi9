@@ -20,7 +20,7 @@
     "node-gyp": {
       "undici": "6.28.0"
     },
-    "js-yaml": "4.3.2",
+    "js-yaml": "5.4.1",
     "npm": "11.19.1"
   },
   "private": true,
