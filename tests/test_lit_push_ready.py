@@ -1,4 +1,6 @@
 import importlib.util
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,44 +54,132 @@ class PushReadySecurityTests(unittest.TestCase):
         ):
             self.assertIn(setting, profile)
 
-    def test_https_base_fetch_uses_scoped_header_not_argv(self):
-        completed = object()
-        runner = mock.Mock(return_value=completed)
-        with mock.patch.object(
-            PUSH_READY,
-            "git_output",
-            side_effect=[
-                "https://github.com/lightning-it/example.git\n",
-                "https://github.com/lightning-it/example.git\n",
-            ],
+    def test_https_base_fetch_uses_local_credential_helper_with_scoped_token(self):
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        remote = subprocess.CompletedProcess(
+            [], 0, "https://github.com/lightning-it/example.git\n", ""
+        )
+        remote_runner = mock.Mock(side_effect=[remote, remote])
+        fetch_runner = mock.Mock(return_value=completed)
+        with mock.patch.dict(
+            os.environ,
+            {
+                **os.environ,
+                "GH_TOKEN": "preferred-gh-token",
+                "GITHUB_TOKEN": "actions-token-must-be-normalized",
+                "COPILOT_GITHUB_TOKEN": "copilot-token-must-not-reach-git",
+                "CODEX_API_KEY": "codex-key-must-not-reach-git",
+                "AWS_SECRET_ACCESS_KEY": "aws-key-must-not-reach-git",
+            },
+            clear=True,
         ), mock.patch.object(
-            PUSH_READY,
-            "github_https_authorization",
-            return_value="AUTHORIZATION: basic masked-value",
-        ), mock.patch.object(PUSH_READY.subprocess, "run", runner):
+            PUSH_READY, "run", remote_runner
+        ), mock.patch.object(
+            PUSH_READY.subprocess, "run", fetch_runner
+        ):
             result = PUSH_READY.fetch_authoritative_base(
                 "develop", "refs/remotes/origin/develop"
             )
         self.assertIs(result, completed)
-        self.assertNotIn("masked-value", " ".join(runner.call_args.args[0]))
+        self.assertEqual(2, remote_runner.call_count)
+        fetch_runner.assert_called_once()
+        command = fetch_runner.call_args.args[0]
+        environment = fetch_runner.call_args.kwargs["env"]
+        self.assertNotIn("preferred-gh-token", "\0".join(command))
+        self.assertNotIn("actions-token-must-be-normalized", "\0".join(command))
+        self.assertEqual("credential.helper", environment["GIT_CONFIG_KEY_0"])
+        self.assertEqual("", environment["GIT_CONFIG_VALUE_0"])
+        self.assertEqual("credential.helper", environment["GIT_CONFIG_KEY_1"])
         self.assertEqual(
-            "AUTHORIZATION: basic masked-value",
-            runner.call_args.kwargs["env"]["GIT_CONFIG_VALUE_0"],
+            "!gh auth git-credential", environment["GIT_CONFIG_VALUE_1"]
         )
+        self.assertEqual("safe.directory", environment["GIT_CONFIG_KEY_2"])
+        self.assertEqual(str(ROOT.resolve()), environment["GIT_CONFIG_VALUE_2"])
+        self.assertEqual("3", environment["GIT_CONFIG_COUNT"])
+        self.assertEqual("preferred-gh-token", environment["GH_TOKEN"])
+        self.assertNotIn("GITHUB_TOKEN", environment)
+        for name in (
+            "GITHUB_TOKEN",
+            "COPILOT_GITHUB_TOKEN",
+            "CODEX_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+        ):
+            self.assertNotIn(name, environment)
+        for call in remote_runner.call_args_list:
+            self.assertNotIn("GH_TOKEN", call.kwargs["env"])
+            self.assertNotIn("GITHUB_TOKEN", call.kwargs["env"])
 
-    def test_base_fetch_rejects_mismatched_fetch_and_push_repositories(self):
-        with mock.patch.object(
-            PUSH_READY,
-            "git_output",
-            side_effect=[
+    def test_https_base_fetch_normalizes_actions_token_for_gh_helper(self):
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        remote = subprocess.CompletedProcess(
+            [], 0, "https://github.com/lightning-it/example.git\n", ""
+        )
+        remote_runner = mock.Mock(side_effect=[remote, remote])
+        fetch_runner = mock.Mock(return_value=completed)
+        with mock.patch.dict(
+            os.environ,
+            {"GITHUB_TOKEN": "actions-ephemeral-token"},
+            clear=True,
+        ), mock.patch.object(
+            PUSH_READY, "run", remote_runner
+        ), mock.patch.object(
+            PUSH_READY.subprocess, "run", fetch_runner
+        ):
+            result = PUSH_READY.fetch_authoritative_base(
+                "develop", "refs/remotes/origin/develop"
+            )
+        self.assertIs(result, completed)
+        fetch_environment = fetch_runner.call_args.kwargs["env"]
+        self.assertEqual("actions-ephemeral-token", fetch_environment["GH_TOKEN"])
+        self.assertNotIn("GITHUB_TOKEN", fetch_environment)
+        for call in remote_runner.call_args_list:
+            self.assertNotIn("GH_TOKEN", call.kwargs["env"])
+            self.assertNotIn("GITHUB_TOKEN", call.kwargs["env"])
+
+    def test_https_base_fetch_rejects_empty_explicit_gh_token(self):
+        remote = subprocess.CompletedProcess(
+            [], 0, "https://github.com/lightning-it/example.git\n", ""
+        )
+        remote_runner = mock.Mock(side_effect=[remote, remote])
+        fetch_runner = mock.Mock()
+        with mock.patch.dict(
+            os.environ,
+            {"GH_TOKEN": "", "GITHUB_TOKEN": "must-not-be-used"},
+            clear=True,
+        ), mock.patch.object(
+            PUSH_READY, "run", remote_runner
+        ), mock.patch.object(
+            PUSH_READY.subprocess, "run", fetch_runner
+        ), self.assertRaisesRegex(
+            RuntimeError, "GitHub HTTPS authentication token is invalid"
+        ):
+            PUSH_READY.fetch_authoritative_base(
+                "develop", "refs/remotes/origin/develop"
+            )
+        self.assertEqual(2, remote_runner.call_count)
+        fetch_runner.assert_not_called()
+
+    def test_base_fetch_rejects_ungoverned_or_mismatched_origin_urls(self):
+        for fetch_url, push_url in (
+            ("/tmp/untrusted.git", "https://github.com/lightning-it/example.git"),
+            (
                 "git@github.com:lightning-it/other.git",
                 "https://github.com/lightning-it/example.git",
-            ],
+            ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "same governed repository"):
-                PUSH_READY.fetch_authoritative_base(
-                    "develop", "refs/remotes/origin/develop"
-                )
+            runner = mock.Mock(
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, fetch_url, ""),
+                    subprocess.CompletedProcess([], 0, push_url, ""),
+                ]
+            )
+            with self.subTest(
+                fetch_url=fetch_url, push_url=push_url
+            ), mock.patch.object(PUSH_READY, "run", runner):
+                with self.assertRaises(RuntimeError):
+                    PUSH_READY.fetch_authoritative_base(
+                        "develop", "refs/remotes/origin/develop"
+                    )
 
     def change(
         self,
