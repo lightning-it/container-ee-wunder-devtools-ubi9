@@ -18,6 +18,13 @@ SPEC.loader.exec_module(PUSH_READY)
 
 
 class PushReadySecurityTests(unittest.TestCase):
+    def test_repository_quality_timeout_matches_container_workflow_budget(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "container-ci.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("timeout-minutes: 45", workflow)
+        self.assertEqual(45 * 60, PUSH_READY.CHECK_TIMEOUT_SECONDS)
+
     def test_canonical_profile_is_the_single_full_container_ci_entrypoint(self):
         workflow = (
             ROOT / ".github" / "workflows" / "container-ci.yml"

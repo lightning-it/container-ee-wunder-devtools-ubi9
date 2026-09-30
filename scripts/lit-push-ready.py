@@ -111,7 +111,7 @@ INSTRUCTION_PATH_PATTERN = re.compile(
 MAX_CONFIG_BYTES = 1_000_000
 MAX_REVIEW_BYTES = 5_000_000
 MAX_TIMEOUT_SECONDS = 3_600
-CHECK_TIMEOUT_SECONDS = 1_800
+CHECK_TIMEOUT_SECONDS = 2_700
 AUTHORITATIVE_BASE_REFS = {
     "refs/remotes/origin/develop": "develop",
     "refs/remotes/origin/main": "main",
