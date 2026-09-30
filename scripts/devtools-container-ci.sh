@@ -458,7 +458,7 @@ run_contract_tests() {
       if [ -d tests ] \
         && find tests -type f -name 'test_*.py' -print -quit | grep -q .
       then
-        python3 -m unittest discover -s tests -p 'test_*.py'
+        python3 -B -m unittest discover -s tests -p 'test_*.py'
       fi
       # These probes execute only validators already installed in the image.
       # They never start Copilot or another local AI client, download a runtime,

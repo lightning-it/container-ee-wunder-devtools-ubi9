@@ -385,6 +385,10 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn("--pull", container_ci)
         self.assertIn("--no-cache", container_ci)
         self.assertIn("--timeout 15m0s", container_ci)
+        self.assertIn(
+            "python3 -B -m unittest discover -s tests -p 'test_*.py'",
+            container_ci,
+        )
 
         release_verify = (
             ROOT / "scripts/devtools-container-release-verify.sh"
