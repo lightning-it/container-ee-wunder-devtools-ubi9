@@ -23,13 +23,17 @@ concurrency:
 jobs:
   promote:
     # This protected source is bound only to itself. Every downstream copy is
-    # rendered to exactly one inventory-authorized target before installation;
-    # public repositories never receive the private fleet inventory.
+    # rendered to exactly one inventory-authorized target before installation.
     if: github.repository == 'lightning-it/container-ee-wunder-devtools-ubi9'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
+      - name: Reject reruns before credential minting
+        run: |
+          set -euo pipefail
+          test "${GITHUB_RUN_ATTEMPT}" -eq 1
+
       - name: Mint release automation App token
         id: release-app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -41,631 +45,447 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
 
-      - name: Resolve release automation App bot identity
-        id: release-bot
+      - name: Create or reconcile one protected promotion PR
         env:
+          APP_INSTALLATION_ID: ${{ steps.release-app.outputs.installation-id }}
           APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          bot_json="$(gh api "users/${APP_SLUG}%5Bbot%5D" 2>/dev/null || printf '{}')"
-          login="$(jq -r '.login // ""' <<<"$bot_json")"
-          bot_id="$(jq -r '.id // ""' <<<"$bot_json")"
-          if [ "$login" != "${APP_SLUG}[bot]" ] || ! [[ "$bot_id" =~ ^[0-9]+$ ]]; then
-            echo "::error::Unable to resolve the release automation App bot identity."
-            exit 1
-          fi
-          echo "login=$login" >>"$GITHUB_OUTPUT"
-          echo "email=${bot_id}+${login}@users.noreply.github.com" >>"$GITHUB_OUTPUT"
-
-      - name: Validate release bot token
-        env:
-          GH_TOKEN: ${{ steps.release-app.outputs.token }}
-        run: |
-          set -euo pipefail
-          login="$(gh api "users/lightning-it-release-automation%5Bbot%5D" --jq .login)"
-          if [ "${login}" != "lightning-it-release-automation[bot]" ]; then
-            echo "::error::Release App identity mismatch: expected lightning-it-release-automation[bot]."
-            exit 1
-          fi
-
-      - name: Create or update protected promotion
-        id: exact-review-target
-        env:
           GH_TOKEN: ${{ steps.release-app.outputs.token }}
           REPOSITORY: ${{ github.repository }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
+          test "${GITHUB_RUN_ATTEMPT}" -eq 1
           title='chore(release): promote develop to main'
-          transition_title='chore(release): promote develop to main (REP-60 protected transition)'
+          test "${APP_SLUG}" = lightning-it-release-automation
+          test "${APP_INSTALLATION_ID}" = 148019054
+          installations="$(gh api --paginate --slurp \
+            'installation/repositories?per_page=100')"
+          jq -e --arg repository "${REPOSITORY}" '
+            [.[].repositories[]?] as $repositories
+            | ($repositories | length) == 1
+            and $repositories[0].full_name == $repository
+          ' <<<"${installations}" >/dev/null
+
+          repository="$(gh api "repos/${REPOSITORY}")"
+          main="$(gh api "repos/${REPOSITORY}/branches/main")"
+          develop="$(gh api "repos/${REPOSITORY}/branches/develop")"
+          jq -e --arg repository "${REPOSITORY}" '
+            .full_name == $repository and .archived == false and .disabled == false
+          ' <<<"${repository}" >/dev/null
+          jq -e '.name == "main" and .protected == true' <<<"${main}" >/dev/null
+          jq -e '.name == "develop" and .protected == true' <<<"${develop}" >/dev/null
+          expected_base="$(jq -er .commit.sha <<<"${main}")"
+          expected_head="$(jq -er .commit.sha <<<"${develop}")"
+          [[ "${expected_base}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${expected_head}" =~ ^[0-9a-f]{40}$ ]]
+
+          head_marker="<!-- lit-promotion-head:${expected_head} -->"
+          run_marker="<!-- lit-promotion-run:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT} -->"
+          ready_marker="<!-- lit-promotion-evidence-ready:${expected_base}:${expected_head} -->"
+
+          compare="$(gh api \
+            "repos/${REPOSITORY}/compare/${expected_base}...${expected_head}")"
+          jq -e --arg base "${expected_base}" --arg head "${expected_head}" '
+            .base_commit.sha == $base
+            and .merge_base_commit.sha == $base
+            and .status == "ahead"
+            and (.ahead_by | type) == "number"
+            and (.ahead_by | isfinite)
+            and (.ahead_by | floor) == .ahead_by
+            and .ahead_by > 0
+            and (.behind_by | type) == "number"
+            and (.behind_by | isfinite)
+            and (.behind_by | floor) == .behind_by
+            and .behind_by == 0
+            and (.total_commits | type) == "number"
+            and (.total_commits | isfinite)
+            and (.total_commits | floor) == .total_commits
+            and .total_commits == .ahead_by
+            and (.commits | type) == "array"
+            and (.commits | length) == ([.total_commits, 250] | min)
+            and all(.commits[];
+              type == "object"
+              and (.sha | type) == "string"
+              and (.sha | test("^[0-9a-f]{40}$")))
+            and ([.commits[].sha] | length) ==
+              ([.commits[].sha] | unique | length)
+            and .commits[-1].sha == $head
+          ' <<<"${compare}" >/dev/null
+
           token_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
           echo "::add-mask::${token_header}"
-
+          test ! -e repository
           git init --quiet repository
-          cd repository
-          git remote add origin "https://github.com/${REPOSITORY}.git"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${token_header}" \
+          git -C repository remote add origin "https://github.com/${REPOSITORY}.git"
+          git -C repository \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${token_header}" \
             fetch --quiet --no-tags origin main develop
-
-          if ! git merge-base --is-ancestor origin/main origin/develop; then
-            echo '::error::develop does not contain the current main ancestry; wait for the protected backmerge.'
-            exit 1
-          fi
-          if ! changed_paths_text="$(git diff --name-only origin/main origin/develop --)"; then
-            echo '::error::Unable to determine the exact main-to-develop path delta.'
-            exit 1
-          fi
+          test "$(git -C repository rev-parse origin/main)" = "${expected_base}"
+          test "$(git -C repository rev-parse origin/develop)" = "${expected_head}"
           changed_paths=()
-          if [ -n "${changed_paths_text}" ]; then
-            mapfile -t changed_paths <<<"${changed_paths_text}"
-          fi
+          mapfile -t changed_paths < <(
+            git -C repository diff --name-only \
+              "${expected_base}" "${expected_head}" --
+          )
           if [ "${#changed_paths[@]}" -eq 1 ] \
-            && [ "${changed_paths[0]}" = .lit/main-ancestry.json ]; then
-            if ! main_sha="$(git rev-parse origin/main)"; then
-              echo '::error::The protected main ref is not readable.'
-              exit 1
-            fi
-            if ! outer_parents="$(git show -s --format=%P origin/develop)"; then
-              echo '::error::The protected develop tip is not readable.'
-              exit 1
-            fi
+              && [ "${changed_paths[0]}" = .lit/main-ancestry.json ]; then
+            outer_parents="$(git -C repository show -s --format=%P "${expected_head}")"
             read -r outer_develop_parent inner_merge unexpected_outer_parent \
               <<<"${outer_parents}"
             if [ -z "${outer_develop_parent}" ] \
-              || [ -z "${inner_merge}" ] \
-              || [ -n "${unexpected_outer_parent:-}" ]; then
+                || [ -z "${inner_merge}" ] \
+                || [ -n "${unexpected_outer_parent:-}" ]; then
               echo '::error::The ancestry-only develop delta is not a two-parent protected PR merge.'
               exit 1
             fi
-            if ! inner_parents="$(git show -s --format=%P "${inner_merge}")"; then
-              echo '::error::The protected inner ancestry merge is not readable.'
-              exit 1
-            fi
+            inner_parents="$(git -C repository show -s --format=%P "${inner_merge}")"
             read -r inner_develop_parent inner_main_parent unexpected_inner_parent \
               <<<"${inner_parents}"
             if [ -z "${inner_develop_parent}" ] \
-              || [ -z "${inner_main_parent}" ] \
-              || [ -n "${unexpected_inner_parent:-}" ]; then
+                || [ -z "${inner_main_parent}" ] \
+                || [ -n "${unexpected_inner_parent:-}" ]; then
               echo '::error::The protected inner ancestry merge does not have exactly two parents.'
               exit 1
             fi
-            if ! evidence="$(git show origin/develop:.lit/main-ancestry.json)"; then
-              echo '::error::The protected main-ancestry evidence is not readable.'
+            evidence="$(git -C repository show \
+              "${expected_head}:.lit/main-ancestry.json")"
+            if [ "${inner_develop_parent}" != "${outer_develop_parent}" ] \
+                || [ "${inner_main_parent}" != "${expected_base}" ] \
+                || ! jq -e \
+                  --arg repository "${REPOSITORY}" \
+                  --arg main_sha "${expected_base}" \
+                  --arg develop_parent_sha "${outer_develop_parent}" '
+                    (keys | sort) == [
+                      "develop_parent_sha", "main_sha", "purpose",
+                      "repository", "schema_version"
+                    ]
+                    and .schema_version == 1
+                    and .repository == $repository
+                    and .main_sha == $main_sha
+                    and .develop_parent_sha == $develop_parent_sha
+                    and .purpose == "Bind the reviewed main ancestry backmerge."
+                  ' <<<"${evidence}" >/dev/null; then
+              echo '::error::The ancestry-only develop delta does not match the protected backmerge contract.'
               exit 1
             fi
-            if [ "${inner_develop_parent}" = "${outer_develop_parent}" ] \
-              && [ "${inner_main_parent}" = "${main_sha}" ] \
-              && jq -e \
-                --arg repository "${REPOSITORY}" \
-                --arg main_sha "${main_sha}" \
-                --arg develop_parent_sha "${outer_develop_parent}" \
-                '(keys | sort) == ["develop_parent_sha", "main_sha", "purpose", "repository", "schema_version"]
-                 and .schema_version == 1
-                 and .repository == $repository
-                 and .main_sha == $main_sha
-                 and .develop_parent_sha == $develop_parent_sha
-                 and .purpose == "Bind the reviewed main ancestry backmerge."' \
-                <<<"${evidence}" >/dev/null; then
-              echo 'Only the exact protected main-ancestry evidence changed; no promotion or AI review is needed.'
-              exit 0
-            fi
-            echo '::error::The ancestry-only develop delta does not match the protected backmerge contract.'
-            exit 1
-          fi
-          if git diff --quiet origin/main origin/develop; then
-            echo 'main and develop have identical content; no promotion is needed.'
+            echo 'Only exact protected ancestry evidence changed; no promotion is needed.'
             exit 0
           fi
 
-          expected_base="$(git rev-parse origin/main)"
-          expected_head="$(git rev-parse origin/develop)"
-          head_marker="<!-- lit-promotion-head:${expected_head} -->"
-          run_marker="<!-- lit-promotion-run:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT} -->"
-          pending_marker="<!-- lit-promotion-dispatch-pending:${expected_base}:${expected_head} -->"
-          dispatch_review=false
-          open_promotions="$(gh api --paginate --slurp \
+          body_detail='The organization Required Workflow aggregates exact ingress evidence;'
+          body_detail="${body_detail} it does not request a second AI review of the cumulative diff."
+          body_text="$(printf '%s\n%s\n%s' \
+            '<!-- lit-protected-promotion:v2 -->' \
+            'Automated protected promotion of changes already reviewed on develop.' \
+            "${body_detail}")"
+          ready_body="$(printf '%s\n%s\n%s\n%s' \
+            "${head_marker}" "${run_marker}" "${ready_marker}" "${body_text}")"
+          pulls="$(gh api --paginate --slurp \
             "repos/${REPOSITORY}/pulls?state=open&per_page=100")"
-          open_candidates="$(jq -c \
-            --arg head "${expected_head}" \
-            --arg marker "${head_marker}" \
-            --arg repository "${REPOSITORY}" '[
-              add[] | select(
-                .user.login == "lightning-it-release-automation[bot]"
-                and .base.repo.full_name == $repository
-                and .head.repo.full_name == $repository
-                and (
-                  (.base.ref == "main" and .head.ref == "develop")
-                  or ([((.body // "") | split("\n")[]) |
-                    select(. == $marker)] == [$marker])
-                  or (
-                    [((.body // "") | split("\n")[]) |
-                      select(startswith("<!-- lit-promotion-head:"))] == []
-                    and .head.sha == $head
-                  )
-                )
-              )
-            ]' <<<"${open_promotions}")"
-          open_count="$(jq 'length' <<<"${open_candidates}")"
-          if [ "${open_count}" -gt 1 ]; then
-            echo '::error::Multiple Release-App promotion candidates are open.'
-            exit 1
-          fi
-          pr_number="$(jq -r '.[0].number // empty' <<<"${open_candidates}")"
-          if [ -n "${pr_number}" ]; then
-            existing="$(gh pr view "${pr_number}" \
-              --repo "${REPOSITORY}" \
-              --json author,baseRefName,baseRefOid,body,headRefName,headRefOid,headRepositoryOwner,state)"
-            if ! jq -e \
-              '.author.login == "app/lightning-it-release-automation"' \
-              <<<"${existing}" >/dev/null; then
-              echo '::error::Open develop-to-main PR is not Release-App-owned.'
-              exit 1
-            fi
-            if ! jq -e --arg owner "${REPOSITORY_OWNER}" '
-                .baseRefName == "main"
-                and .headRefName == "develop"
-                and .headRepositoryOwner.login == $owner
-                and .state == "OPEN"
-              ' <<<"${existing}" >/dev/null; then
-              close_comment='Closing a retargeted or detached promotion PR; '
-              close_comment+='its marked develop head remains consumed.'
-              gh pr close "${pr_number}" \
-                --repo "${REPOSITORY}" --comment "${close_comment}"
-              pr_number=''
-            elif ! jq -e --arg marker "${head_marker}" '
-              [(.body // "") | split("\n")[] |
-                select(startswith("<!-- lit-promotion-head:"))] == [$marker]
-            ' <<<"${existing}" >/dev/null; then
-              close_comment='Closing consumed or stale promotion PR; '
-              close_comment+='a fresh PR will bind the new develop head.'
-              gh pr close "${pr_number}" \
-                --repo "${REPOSITORY}" --comment "${close_comment}"
-              pr_number=''
-            else
-              state_markers="$(jq -c '[
-                (.body // "") | split("\n")[] |
-                select(startswith("<!-- lit-promotion-dispatch-"))
-              ]' <<<"${existing}")"
-              run_markers="$(jq -c '[
-                (.body // "") | split("\n")[] |
-                select(startswith("<!-- lit-promotion-run:"))
-              ]' <<<"${existing}")"
-              if ! state_binding="$(jq -er '
-                  if length != 1 then error("invalid state marker count")
-                  else .[0] | capture(
-                    "^<!-- lit-promotion-dispatch-"
-                    + "(?<state>pending|failed|succeeded):"
-                    + "(?<base>[0-9a-f]{40}):(?<head>[0-9a-f]{40}) -->$"
-                  ) end
-                ' <<<"${state_markers}")" \
-                || ! jq -e '
-                  length == 1
-                  and (.[0] | test(
-                    "^<!-- lit-promotion-run:[1-9][0-9]*:[1-9][0-9]* -->$"
-                  ))
-                ' <<<"${run_markers}" >/dev/null; then
-                malformed_comment='Closing a malformed or unfinalized promotion; '
-                malformed_comment+='the same develop head remains consumed and cannot be retried.'
-                gh pr close "${pr_number}" --repo "${REPOSITORY}" \
-                  --comment "${malformed_comment}"
-                malformed_error='::error::Recovered a malformed promotion state; '
-                malformed_error+='advance develop before creating another promotion.'
-                echo "${malformed_error}"
-                exit 1
-              fi
-              stored_state="$(jq -r .state <<<"${state_binding}")"
-              stored_base="$(jq -r .base <<<"${state_binding}")"
-              stored_head="$(jq -r .head <<<"${state_binding}")"
-              jq -e \
-                  --arg expected_head "${expected_head}" \
-                  --arg stored_head "${stored_head}" \
-                  --arg owner "${REPOSITORY_OWNER}" '
-                  .baseRefName == "main"
-                  and (.baseRefOid | test("^[0-9a-f]{40}$"))
-                  and .headRefName == "develop"
-                  and .headRefOid == $expected_head
-                  and $stored_head == $expected_head
-                  and .headRepositoryOwner.login == $owner
-                  and .state == "OPEN"' \
-                <<<"${existing}" | grep -qx true
-              if [ "${stored_state}" = succeeded ]; then
-                jq -e --arg stored_base "${stored_base}" \
-                  '.baseRefOid == $stored_base' <<<"${existing}" | grep -qx true
-              else
-                failure_marker="<!-- lit-promotion-dispatch-failed:${stored_base}:${stored_head} -->"
-                updated_body="$(jq -er \
-                  --arg failure_marker "${failure_marker}" '
-                  (.body // "") | split("\n") |
-                  map(if startswith("<!-- lit-promotion-dispatch-")
-                      then $failure_marker else . end) | join("\n")
-                ' <<<"${existing}")"
-                marker_persisted=false
-                for attempt in $(seq 1 5); do
-                  if gh api --method PATCH \
-                    "repos/${REPOSITORY}/pulls/${pr_number}" \
-                    -f "body=${updated_body}" >/dev/null; then
-                    marker_persisted=true
-                    break
-                  fi
-                  if [ "${attempt}" -lt 5 ]; then sleep 2; fi
-                done
-                if [ "${marker_persisted}" != true ]; then
-                  echo '::error::Unable to persist the recovered promotion failure tombstone.'
-                  exit 1
-                fi
-                recovery_comment='Closing the exact pending or failed promotion tombstone; '
-                recovery_comment+='the same develop head remains consumed and cannot be retried.'
-                gh pr close "${pr_number}" --repo "${REPOSITORY}" \
-                  --comment "${recovery_comment}"
-                recovery_error='::error::Recovered an open incomplete promotion; '
-                recovery_error+='advance develop before creating another promotion.'
-                echo "${recovery_error}"
-                exit 1
-              fi
-            fi
-          fi
-          if [ -z "${pr_number}" ]; then
-            closed_promotions="$(gh api --paginate --slurp \
-              "repos/${REPOSITORY}/pulls?state=closed&per_page=100")"
-            malformed_closed="$(jq -c \
-              --arg head "${expected_head}" \
-              --arg marker "${head_marker}" \
-              --arg repository "${REPOSITORY}" '[
-                add[] | select(
-                  .user.login == "lightning-it-release-automation[bot]"
-                  and .base.repo.full_name == $repository
-                  and .head.repo.full_name == $repository
-                ) | . as $promotion |
-                ([((.body // "") | split("\n")[]) |
-                  select(startswith("<!-- lit-promotion-head:"))]) as $markers |
-                select(
-                  (($markers | length) > 1
-                   or (($markers | length) == 1
-                       and ($markers[0] | test(
-                         "^<!-- lit-promotion-head:[0-9a-f]{40} -->$"
-                       ) | not)))
-                  and ($promotion.head.sha == $head
-                       or ($markers | index($marker)) != null)
-                ) | .number
-              ] | unique' <<<"${closed_promotions}")"
-            if [ "$(jq 'length' <<<"${malformed_closed}")" -ne 0 ]; then
-              echo '::error::Malformed closed promotion head-marker history blocks this develop head.'
-              exit 1
-            fi
-            closed_same_head="$(jq -c \
-              --arg head "${expected_head}" \
-              --arg marker "${head_marker}" \
-              --arg repository "${REPOSITORY}" '[
-                add[] | select(
-                  .user.login == "lightning-it-release-automation[bot]"
-                  and .base.repo.full_name == $repository
-                  and .head.repo.full_name == $repository
-                  and (
-                    [((.body // "") | split("\n")[]) |
-                      select(. == $marker)] == [$marker]
-                    or (
-                      [((.body // "") | split("\n")[]) |
-                        select(startswith("<!-- lit-promotion-head:"))] == []
-                      and .head.sha == $head
-                    )
-                  )
-                ) | .number
-              ] | unique' <<<"${closed_promotions}")"
-            if [ "$(jq 'length' <<<"${closed_same_head}")" -ne 0 ]; then
-              consumed_error='::error::This develop head was already consumed by a closed promotion PR; '
-              consumed_error+='advance develop before creating another promotion.'
-              echo "${consumed_error}"
-              exit 1
-            fi
-            {
-              echo "cleanup_planned_base=${expected_base}"
-              echo "cleanup_planned_head=${expected_head}"
-              echo "cleanup_required=true"
-            } >>"${GITHUB_OUTPUT}"
-            body="${head_marker}"$'\n'"${run_marker}"$'\n'"${pending_marker}"$'\n\n'
-            body+='Automated protected promotion of reviewed changes from develop to main.'
-            created="$(gh api --method POST "repos/${REPOSITORY}/pulls" \
-              -f "base=main" \
-              -f "head=develop" \
+          jq -e '
+            type == "array"
+            and length > 0
+            and all(.[]; type == "array")
+            and all(.[][];
+              type == "object"
+              and (.number | type) == "number"
+              and (.state | type) == "string"
+              and (.draft | type) == "boolean"
+              and (.title | type) == "string"
+              and ((.body == null) or ((.body | type) == "string"))
+              and (.user | type) == "object"
+              and (.user.login | type) == "string"
+              and (.user.id | type) == "number"
+              and (.user.type | type) == "string"
+              and (.base | type) == "object"
+              and (.base.ref | type) == "string"
+              and (.base.sha | type) == "string"
+              and (.base.repo | type) == "object"
+              and (.base.repo.full_name | type) == "string"
+              and (.head | type) == "object"
+              and (.head.ref | type) == "string"
+              and (.head.sha | type) == "string"
+              and (.head | has("repo"))
+              and ((.head.repo == null) or (
+                (.head.repo | type) == "object"
+                and (.head.repo.full_name | type) == "string")))
+          ' <<<"${pulls}" >/dev/null
+          candidates="$(jq -c \
+            --arg body_text "${body_text}" \
+            --arg title "${title}" '
+            [.[][]
+              | select(.user.login == "lightning-it-release-automation[bot]")
+              | select(.user.id == 307565056 and .user.type == "Bot")
+              | select(
+                  .title == $title
+                  or ((.body // "") | endswith("\n" + $body_text))
+                )]
+          ' <<<"${pulls}")"
+          count="$(jq 'length' <<<"${candidates}")"
+          test "${count}" -le 1
+          created=false
+          create_promotion_pr() {
+            created_response="$(gh api --method POST "repos/${REPOSITORY}/pulls" \
               -f "title=${title}" \
-              -f "body=${body}")"
-            pr_number="$(jq -er '.number | select(type == "number")' <<<"${created}")"
-            created_base="$(jq -er '.base.sha | select(test("^[0-9a-f]{40}$"))' <<<"${created}")"
-            created_head="$(jq -er '.head.sha | select(test("^[0-9a-f]{40}$"))' <<<"${created}")"
-            if [ "${created_base}" != "${expected_base}" ] \
-              || [ "${created_head}" != "${expected_head}" ]; then
-              echo '::error::Created promotion bindings differ from the protected planned revision.'
-              exit 1
-            fi
-            {
-              echo "cleanup_pr_number=${pr_number}"
-              echo "cleanup_expected_base=${created_base}"
-              echo "cleanup_expected_head=${created_head}"
-            } >>"${GITHUB_OUTPUT}"
-            dispatch_review=true
-          fi
-
-          promotion="$(gh pr view "${pr_number}" \
-            --repo "${REPOSITORY}" \
-            --json author,baseRefName,baseRefOid,headRefName,headRefOid,headRepositoryOwner,isDraft,title)"
-          promotion_title="$(jq -r .title <<<"${promotion}")"
-          if [ "${REPOSITORY}" = lightning-it/shared-assets-lit ] \
-            && [ "${pr_number}" = 1047 ] \
-            && [ "${promotion_title}" = "${transition_title}" ]; then
-            # Normalize the already-open bootstrap PR. The App may edit its own
-            # title, but it intentionally never changes Draft/Ready state.
-            gh api --method PATCH "repos/${REPOSITORY}/pulls/${pr_number}" \
-              -f "title=${title}" >/dev/null
-            promotion="$(gh pr view "${pr_number}" \
-              --repo "${REPOSITORY}" \
-              --json author,baseRefName,baseRefOid,headRefName,headRefOid,headRepositoryOwner,isDraft,title)"
-          fi
-          jq -e \
-              --arg expected_base "${expected_base}" \
-              --arg expected_head "${expected_head}" \
-              --arg owner "${REPOSITORY_OWNER}" \
-              --arg title "${title}" \
-              '.author.login == "app/lightning-it-release-automation"
-               and .baseRefName == "main"
-               and .baseRefOid == $expected_base
-               and .headRefName == "develop"
-               and .headRefOid == $expected_head
-               and .headRepositoryOwner.login == $owner
-               and .isDraft == false
-               and .title == $title' \
-              <<<"${promotion}" \
-            | grep -qx true
-          {
-            echo "pr_number=${pr_number}"
-            echo "base_ref=$(jq -r .baseRefName <<<"${promotion}")"
-            echo "expected_base=${expected_base}"
-            echo "expected_head=${expected_head}"
-            echo "dispatch_review=${dispatch_review}"
-          } >>"${GITHUB_OUTPUT}"
-          if [ "${dispatch_review}" = true ]; then
-            echo "Promotion PR ${pr_number} is ready for protected Human approval and its one Exact-Revision review."
+              -f head=develop \
+              -f base=main \
+              -f "body=${ready_body}")"
+            pr_number="$(jq -er '.number | select(type == "number")' <<<"${created_response}")"
+            created=true
+          }
+          if [ "${count}" -eq 0 ]; then
+            create_promotion_pr
           else
-            echo "Promotion PR ${pr_number} already exists; automatic review redispatch is forbidden."
+            pr_number="$(jq -er '.[0].number' <<<"${candidates}")"
           fi
+          [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]
 
-      - name: Mint protected review dispatch token
-        if: steps.exact-review-target.outputs.dispatch_review == 'true'
-        id: review-dispatch-app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-actions: write
-          permission-contents: read
-
-      - name: Dispatch protected Exact-Revision review
-        if: steps.exact-review-target.outputs.dispatch_review == 'true'
-        env:
-          GH_TOKEN: ${{ steps.review-dispatch-app.outputs.token }}
-          REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.exact-review-target.outputs.pr_number }}
-          BASE_REF: ${{ steps.exact-review-target.outputs.base_ref }}
-          EXPECTED_BASE: ${{ steps.exact-review-target.outputs.expected_base }}
-          EXPECTED_HEAD: ${{ steps.exact-review-target.outputs.expected_head }}
-        run: |
-          set -euo pipefail
-          [[ "${EXPECTED_BASE}" =~ ^[0-9a-f]{40}$ ]]
-          [[ "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ ]]
-          gh workflow run release-bot-exact-head-review.yml \
-            --repo "${REPOSITORY}" \
-            --ref "${BASE_REF}" \
-            -f "pr_number=${PR_NUMBER}" \
-            -f "base_ref=${BASE_REF}" \
-            -f "expected_base=${EXPECTED_BASE}" \
-            -f "expected_head=${EXPECTED_HEAD}"
-
-      - name: Finalize accepted Exact-Revision review dispatch
-        if: steps.exact-review-target.outputs.dispatch_review == 'true'
-        env:
-          GH_TOKEN: ${{ steps.release-app.outputs.token }}
-          REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.exact-review-target.outputs.pr_number }}
-          EXPECTED_BASE: ${{ steps.exact-review-target.outputs.expected_base }}
-          EXPECTED_HEAD: ${{ steps.exact-review-target.outputs.expected_head }}
-        run: |
-          set -euo pipefail
-          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-          [[ "${EXPECTED_BASE}" =~ ^[0-9a-f]{40}$ ]]
-          [[ "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ ]]
-          head_marker="<!-- lit-promotion-head:${EXPECTED_HEAD} -->"
-          run_marker="<!-- lit-promotion-run:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT} -->"
-          pending_marker="<!-- lit-promotion-dispatch-pending:${EXPECTED_BASE}:${EXPECTED_HEAD} -->"
-          success_marker="<!-- lit-promotion-dispatch-succeeded:${EXPECTED_BASE}:${EXPECTED_HEAD} -->"
-          promotion="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          jq -e \
+          live="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}")"
+          if [ "${created}" != true ]; then
+            if ! jq -e \
               --arg repository "${REPOSITORY}" \
-              --arg head_marker "${head_marker}" \
-              --arg run_marker "${run_marker}" \
-              --arg pending_marker "${pending_marker}" \
-              --arg base "${EXPECTED_BASE}" \
-              --arg head "${EXPECTED_HEAD}" '
-              .user.login == "lightning-it-release-automation[bot]"
-              and .state == "open"
-              and .base.repo.full_name == $repository
-              and .base.ref == "main"
-              and .base.sha == $base
-              and .head.repo.full_name == $repository
-              and .head.ref == "develop"
-              and .head.sha == $head
-              and [(.body // "") | split("\n")[] |
-                select(startswith("<!-- lit-promotion-head:"))] == [$head_marker]
-              and [(.body // "") | split("\n")[] |
-                select(startswith("<!-- lit-promotion-run:"))] == [$run_marker]
-              and [(.body // "") | split("\n")[] |
-                select(startswith("<!-- lit-promotion-dispatch-"))] == [$pending_marker]' \
-            <<<"${promotion}" | grep -qx true
-          updated_body="$(jq -er \
-            --arg pending_marker "${pending_marker}" \
-            --arg success_marker "${success_marker}" '
-            (.body // "") | split("\n") |
-            map(if . == $pending_marker then $success_marker else . end) |
-            join("\n")
-          ' <<<"${promotion}")"
-          dispatch_finalized=false
-          for attempt in $(seq 1 5); do
-            if gh api --method PATCH \
-              "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              -f "body=${updated_body}" >/dev/null; then
-              dispatch_finalized=true
-              break
-            fi
-            if [ "${attempt}" -lt 5 ]; then sleep 2; fi
-          done
-          if [ "${dispatch_finalized}" != true ]; then
-            echo '::error::Unable to persist the accepted review-dispatch binding.'
-            exit 1
-          fi
-
-      - name: Close unusable promotion after dispatch failure
-        if: failure() && steps.release-app.outputs.token != ''
-        env:
-          GH_TOKEN: ${{ steps.release-app.outputs.token }}
-          REPOSITORY: ${{ github.repository }}
-          CAPTURED_PR_NUMBER: ${{ steps.exact-review-target.outputs.cleanup_pr_number }}
-          CAPTURED_BASE: ${{ steps.exact-review-target.outputs.cleanup_expected_base }}
-          CAPTURED_HEAD: ${{ steps.exact-review-target.outputs.cleanup_expected_head }}
-          PLANNED_BASE: ${{ steps.exact-review-target.outputs.cleanup_planned_base }}
-          PLANNED_HEAD: ${{ steps.exact-review-target.outputs.cleanup_planned_head }}
-          CLEANUP_REQUIRED: ${{ steps.exact-review-target.outputs.cleanup_required }}
-        run: |
-          set -euo pipefail
-          if [ "${CLEANUP_REQUIRED}" != true ]; then
-            echo 'No promotion create attempt occurred in this failed workflow run.'
-            exit 0
-          fi
-          if ! [[ "${PLANNED_BASE}" =~ ^[0-9a-f]{40}$ ]] \
-            || ! [[ "${PLANNED_HEAD}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo '::error::Promotion cleanup lacks the pre-create protected bindings.'
-            exit 1
-          fi
-          EXPECTED_BASE="${PLANNED_BASE}"
-          EXPECTED_HEAD="${PLANNED_HEAD}"
-          if [ -n "${CAPTURED_BASE}" ] || [ -n "${CAPTURED_HEAD}" ]; then
-            if ! [[ "${CAPTURED_BASE}" =~ ^[0-9a-f]{40}$ ]] \
-              || ! [[ "${CAPTURED_HEAD}" =~ ^[0-9a-f]{40}$ ]] \
-              || [ "${CAPTURED_BASE}" != "${PLANNED_BASE}" ] \
-              || [ "${CAPTURED_HEAD}" != "${PLANNED_HEAD}" ]; then
-              echo '::error::Creation-response bindings differ from the protected planned revision.'
+              --arg title "${title}" '
+                .state == "open"
+                and .user.login == "lightning-it-release-automation[bot]"
+                and .user.id == 307565056
+                and .user.type == "Bot"
+                and .title == $title
+                and .base.ref == "main"
+                and .base.repo.full_name == $repository
+                and .head.ref == "develop"
+                and .head.repo != null
+                and .head.repo.full_name == $repository
+              ' <<<"${live}" >/dev/null; then
+              echo '::error::Existing controller-owned promotion PR was retargeted or detached.'
               exit 1
             fi
-            EXPECTED_BASE="${CAPTURED_BASE}"
-            EXPECTED_HEAD="${CAPTURED_HEAD}"
-          fi
-          if [ -n "${CAPTURED_PR_NUMBER}" ] \
-            && ! [[ "${CAPTURED_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
-            echo '::error::Creation-response PR number is malformed.'
-            exit 1
-          fi
-          run_marker="<!-- lit-promotion-run:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT} -->"
-          head_marker="<!-- lit-promotion-head:${EXPECTED_HEAD} -->"
-          promotion=''
-          for attempt in $(seq 1 5); do
-            if open_promotions="$(gh api --paginate --slurp \
-              "repos/${REPOSITORY}/pulls?state=open&per_page=100")"; then
-              cleanup_candidates="$(jq -c \
-                --arg marker "${run_marker}" \
-                --arg repository "${REPOSITORY}" '[
-                  add[] | select(
-                    .user.login == "lightning-it-release-automation[bot]"
-                    and .base.repo.full_name == $repository
-                    and .head.repo.full_name == $repository
-                    and [(.body // "") | split("\n")[] |
-                      select(. == $marker)] == [$marker]
-                  )
-                ]' <<<"${open_promotions}")"
-              cleanup_count="$(jq 'length' <<<"${cleanup_candidates}")"
-              if [ "${cleanup_count}" -gt 1 ]; then
-                echo '::error::Failed workflow run resolved to an ambiguous promotion PR set.'
-                exit 1
-              fi
-              if [ "${cleanup_count}" -eq 1 ]; then
-                promotion="$(jq -c '.[0]' <<<"${cleanup_candidates}")"
-                break
-              fi
+            stale_binding="$(jq -er \
+              --arg body_text "${body_text}" \
+              --arg expected_base "${expected_base}" \
+              --arg expected_head "${expected_head}" '
+                ((.body // "") | split("\n")) as $lines
+                | select(($lines | length) == 6)
+                | ($lines[0] | capture(
+                  "^<!-- lit-promotion-head:(?<head>[0-9a-f]{40}) -->$"
+                )) as $head_marker
+                | ($lines[1] | capture(
+                  "^<!-- lit-promotion-run:[1-9][0-9]*:"
+                  + "(?<attempt>[1-9][0-9]*) -->$"
+                )) as $run
+                | ($lines[2] | capture(
+                  "^<!-- lit-promotion-evidence-(?<state>pending|ready):"
+                  + "(?<base>[0-9a-f]{40}):(?<head>[0-9a-f]{40}) -->$"
+                )) as $evidence
+                | select($head_marker.head == $evidence.head)
+                | select($evidence.state == "pending" or $run.attempt == "1")
+                | select(($lines[3:] | join("\n")) == $body_text)
+                | select(
+                  $evidence.state == "pending"
+                  or $evidence.base != $expected_base
+                  or $evidence.head != $expected_head
+                )
+                | [$evidence.state, $evidence.base, $evidence.head] | @tsv
+              ' <<<"${live}" || true)"
+            if [ -n "${stale_binding}" ]; then
+              read -r stale_kind stale_base stale_head <<<"${stale_binding}"
+              [[ "${stale_kind}" =~ ^(pending|ready)$ ]]
+              [[ "${stale_base}" =~ ^[0-9a-f]{40}$ ]]
+              [[ "${stale_head}" =~ ^[0-9a-f]{40}$ ]]
+              stale_body="$(jq -er '.body | select(type == "string")' <<<"${live}")"
+              stale_live_base="$(jq -er '
+                .base.sha | select(test("^[0-9a-f]{40}$"))
+              ' <<<"${live}")"
+              stale_live_head="$(jq -er '
+                .head.sha | select(test("^[0-9a-f]{40}$"))
+              ' <<<"${live}")"
+              jq -e \
+                --arg body "${stale_body}" \
+                --arg repository "${REPOSITORY}" \
+                --arg title "${title}" \
+                --argjson number "${pr_number}" '
+                  .number == $number
+                  and .state == "open"
+                  and .draft == false
+                  and .user.login == "lightning-it-release-automation[bot]"
+                  and .user.id == 307565056
+                  and .user.type == "Bot"
+                  and .base.ref == "main"
+                  and .base.repo.full_name == $repository
+                  and .head.ref == "develop"
+                  and .head.repo.full_name == $repository
+                  and .title == $title
+                  and .body == $body
+                ' <<<"${live}" >/dev/null
+              closed="$(gh api --method PATCH \
+                "repos/${REPOSITORY}/pulls/${pr_number}" -f state=closed)"
+              jq -e \
+                --arg base "${stale_live_base}" \
+                --arg body "${stale_body}" \
+                --arg head "${stale_live_head}" \
+                --arg repository "${REPOSITORY}" \
+                --arg title "${title}" \
+                --argjson number "${pr_number}" '
+                  .number == $number
+                  and .state == "closed"
+                  and .user.login == "lightning-it-release-automation[bot]"
+                  and .user.id == 307565056
+                  and .user.type == "Bot"
+                  and .base.ref == "main"
+                  and .base.sha == $base
+                  and .base.repo.full_name == $repository
+                  and .head.ref == "develop"
+                  and .head.sha == $head
+                  and .head.repo.full_name == $repository
+                  and .title == $title
+                  and .body == $body
+                ' <<<"${closed}" >/dev/null
+              echo "Closed ${stale_kind} legacy/stale promotion PR #${pr_number} bound to ${stale_base}..${stale_head}."
+              create_promotion_pr
+              [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]
+              live="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}")"
             fi
-            if [ "${attempt}" -lt 5 ]; then sleep 2; fi
-          done
-          if [ -z "${promotion}" ] && [ -n "${CAPTURED_PR_NUMBER}" ]; then
-            promotion="$(gh api \
-              "repos/${REPOSITORY}/pulls/${CAPTURED_PR_NUMBER}" 2>/dev/null || true)"
-          fi
-          if [ -z "${promotion}" ]; then
-            echo '::error::The attempted promotion could not be recovered after bounded discovery.'
-            exit 1
-          fi
-          captured_number=0
-          if [ -n "${CAPTURED_PR_NUMBER}" ]; then
-            captured_number="${CAPTURED_PR_NUMBER}"
           fi
           jq -e \
-              --arg repository "${REPOSITORY}" \
-              --arg run_marker "${run_marker}" \
-              --arg head_marker "${head_marker}" \
-              --arg base "${EXPECTED_BASE}" \
-              --arg head "${EXPECTED_HEAD}" \
-              --argjson captured_number "${captured_number}" '
-              .user.login == "lightning-it-release-automation[bot]"
+            --arg base "${expected_base}" \
+            --arg head "${expected_head}" \
+            --arg repository "${REPOSITORY}" \
+            --arg title "${title}" \
+            --argjson number "${pr_number}" '
+              .number == $number
               and .state == "open"
-              and .base.repo.full_name == $repository
+              and .draft == false
+              and .user.login == "lightning-it-release-automation[bot]"
+              and .user.id == 307565056
+              and .user.type == "Bot"
               and .base.ref == "main"
               and .base.sha == $base
-              and .head.repo.full_name == $repository
+              and .base.repo.full_name == $repository
               and .head.ref == "develop"
               and .head.sha == $head
-              and (
-                (.number == $captured_number and $captured_number != 0)
-                or (
-                  [(.body // "") | split("\n")[] |
-                    select(startswith("<!-- lit-promotion-head:"))] == [$head_marker]
-                  and [(.body // "") | split("\n")[] |
-                    select(startswith("<!-- lit-promotion-run:"))] == [$run_marker]
-                )
-              )' \
-            <<<"${promotion}" | grep -qx true
-          PR_NUMBER="$(jq -er '.number | select(type == "number")' <<<"${promotion}")"
-          failure_marker="<!-- lit-promotion-dispatch-failed:${EXPECTED_BASE}:${EXPECTED_HEAD} -->"
-          updated_body="$(jq -er --arg marker "${failure_marker}" '
-            (.body // "") | split("\n") |
-            map(select(startswith("<!-- lit-promotion-dispatch-") | not)) |
-            . + [$marker] | join("\n")
-          ' <<<"${promotion}")"
-          marker_persisted=false
-          for attempt in $(seq 1 5); do
-            if gh api --method PATCH "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              -f "body=${updated_body}" >/dev/null; then
-              marker_persisted=true
-              break
-            fi
-            if [ "${attempt}" -lt 5 ]; then sleep 2; fi
-          done
-          if [ "${marker_persisted}" != true ]; then
-            echo '::error::Unable to persist the promotion failure tombstone.'
-            exit 1
-          fi
-          promotion_closed=false
-          for attempt in $(seq 1 5); do
-            if gh api --method PATCH "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              -f "state=closed" >/dev/null; then
-              promotion_closed=true
-              break
-            fi
-            if [ "${attempt}" -lt 5 ]; then sleep 2; fi
-          done
-          if [ "${promotion_closed}" != true ]; then
-            echo '::error::Unable to close the failed promotion after persisting its tombstone.'
-            exit 1
-          fi
-          echo '::error::Closed the failed promotion; a fresh PR bound to a new develop head is required.'
-          exit 1
+              and .head.repo.full_name == $repository
+              and .title == $title
+            ' <<<"${live}" >/dev/null
 
-  # The protected Exact-Revision producer owns the one verifier handoff after
-  # it has published a terminal neutral result. A promotion-level helper would
-  # race that producer and is therefore intentionally forbidden here.
+          if [ "${created}" = true ]; then
+            jq -e --arg ready_body "${ready_body}" \
+              '.body == $ready_body' <<<"${live}" >/dev/null
+            bound_run_marker="${run_marker}"
+          elif jq -e \
+              --arg head_marker "${head_marker}" \
+              --arg ready_marker "${ready_marker}" \
+              --arg body_text "${body_text}" '
+              ((.body // "") | split("\n")) as $lines
+              | ($lines | length) == 6
+              and $lines[0] == $head_marker
+              and ($lines[1] |
+                test("^<!-- lit-promotion-run:[1-9][0-9]*:1 -->$"))
+              and $lines[2] == $ready_marker
+              and ($lines[3:] | join("\n")) == $body_text
+            ' <<<"${live}" >/dev/null; then
+            echo "Promotion PR #${pr_number} already has exact ready evidence."
+            bound_run_marker="$(jq -er '
+              (.body // "") | split("\n")[1]
+              | select(test(
+                "^<!-- lit-promotion-run:[1-9][0-9]*:1 -->$"
+              ))
+            ' <<<"${live}")"
+          else
+            echo '::error::Existing promotion evidence is failed, stale, or malformed.'
+            exit 1
+          fi
+
+          ready_body="$(printf '%s\n%s\n%s\n%s' \
+            "${head_marker}" "${bound_run_marker}" \
+            "${ready_marker}" "${body_text}")"
+
+          latest_main="$(gh api "repos/${REPOSITORY}/branches/main")"
+          latest_develop="$(gh api "repos/${REPOSITORY}/branches/develop")"
+          latest="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}")"
+          live_main_sha="$(jq -er '
+            select(.name == "main" and .protected == true)
+            | .commit.sha | select(test("^[0-9a-f]{40}$"))
+          ' <<<"${latest_main}")"
+          live_develop_sha="$(jq -er '
+            select(.name == "develop" and .protected == true)
+            | .commit.sha | select(test("^[0-9a-f]{40}$"))
+          ' <<<"${latest_develop}")"
+          jq -e \
+            --arg base "${expected_base}" \
+            --arg body "${ready_body}" \
+            --arg head "${expected_head}" \
+            --arg repository "${REPOSITORY}" \
+            --arg title "${title}" \
+            --argjson number "${pr_number}" '
+              .number == $number
+              and .state == "open"
+              and .draft == false
+              and .user.login == "lightning-it-release-automation[bot]"
+              and .user.id == 307565056
+              and .user.type == "Bot"
+              and .base.ref == "main"
+              and .base.sha == $base
+              and .base.repo.full_name == $repository
+              and .head.ref == "develop"
+              and .head.sha == $head
+              and .head.repo.full_name == $repository
+              and .title == $title
+              and .body == $body
+            ' <<<"${latest}" >/dev/null
+          if [ "${live_main_sha}" != "${expected_base}" ] \
+              || [ "${live_develop_sha}" != "${expected_head}" ]; then
+            closed="$(gh api --method PATCH \
+              "repos/${REPOSITORY}/pulls/${pr_number}" -f state=closed)"
+            jq -e \
+              --arg base "${expected_base}" \
+              --arg body "${ready_body}" \
+              --arg head "${expected_head}" \
+              --argjson number "${pr_number}" '
+                .number == $number
+                and .state == "closed"
+                and .base.sha == $base
+                and .head.sha == $head
+                and .body == $body
+              ' <<<"${closed}" >/dev/null
+            echo '::error::Protected branch drift closed the exact promotion PR.'
+            exit 1
+          fi
+
+          finalized="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}")"
+          jq -e \
+            --arg ready_body "${ready_body}" \
+            --arg base "${expected_base}" \
+            --arg head "${expected_head}" '
+              .state == "open"
+              and .base.sha == $base
+              and .head.sha == $head
+              and .body == $ready_body
+            ' <<<"${finalized}" >/dev/null
+          final_main="$(gh api "repos/${REPOSITORY}/branches/main")"
+          final_develop="$(gh api "repos/${REPOSITORY}/branches/develop")"
+          final_main_sha="$(jq -er '
+            select(.name == "main" and .protected == true)
+            | .commit.sha | select(test("^[0-9a-f]{40}$"))
+          ' <<<"${final_main}")"
+          final_develop_sha="$(jq -er '
+            select(.name == "develop" and .protected == true)
+            | .commit.sha | select(test("^[0-9a-f]{40}$"))
+          ' <<<"${final_develop}")"
+          if [ "${final_main_sha}" != "${expected_base}" ] \
+              || [ "${final_develop_sha}" != "${expected_head}" ]; then
+            closed="$(gh api --method PATCH \
+              "repos/${REPOSITORY}/pulls/${pr_number}" -f state=closed)"
+            jq -e \
+              --arg base "${expected_base}" \
+              --arg body "${ready_body}" \
+              --arg head "${expected_head}" \
+              --argjson number "${pr_number}" '
+                .number == $number
+                and .state == "closed"
+                and .base.sha == $base
+                and .head.sha == $head
+                and .body == $body
+              ' <<<"${closed}" >/dev/null
+            echo '::error::Protected branch drift closed the finalized stale promotion PR.'
+            exit 1
+          fi
+          echo "Promotion PR #${pr_number} is bound to ${expected_base}..${expected_head}."
