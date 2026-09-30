@@ -148,21 +148,31 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertNotIn("ARG PNPM_VERSION=", dockerfile)
         self.assertIn("dependencies.pnpm", dockerfile)
         self.assertIn('corepack "pnpm@${pnpm_version}" install', dockerfile)
-        self.assertEqual(
-            "5.3.0",
-            pnpm_workspace["overrides"]["markdownlint-cli2>js-yaml"],
-        )
+        expected_security_versions = {
+            "adm-zip": "0.6.1",
+            "brace-expansion": "5.0.11",
+            "js-yaml": "4.3.2",
+            "smol-toml": "1.7.1",
+            "undici": "6.28.1",
+        }
+        for package, version in expected_security_versions.items():
+            self.assertEqual(version, container_package["dependencies"][package])
+            self.assertEqual(version, pnpm_workspace["overrides"][package])
         for package in ("brace-expansion", "ip-address", "tar"):
             version = container_package["dependencies"][package]
             self.assertRegex(version, r"^\d+\.\d+\.\d+$")
             self.assertEqual(version, pnpm_workspace["overrides"][package])
             self.assertIn(package, dockerfile)
-        for package, version in {"pacote": "21.5.1", "undici": "6.27.0"}.items():
+        for package, version in {"pacote": "21.5.1"}.items():
             self.assertEqual(version, container_package["dependencies"][package])
             self.assertEqual(version, pnpm_workspace["overrides"][package])
         self.assertIn(
             "node_modules/npm-website/node_modules/${package}", dockerfile
         )
+        self.assertIn("for pnpm_tree in", dockerfile)
+        self.assertIn("node_modules/pnpm/dist", dockerfile)
+        self.assertIn("node_modules/pnpm/artifacts/exe/dist", dockerfile)
+        self.assertIn('= "6.28.1"', dockerfile)
         self.assertEqual(1440, pnpm_workspace["minimumReleaseAge"])
         self.assertTrue(pnpm_workspace["minimumReleaseAgeStrict"])
         self.assertFalse(pnpm_workspace["trustLockfile"])
