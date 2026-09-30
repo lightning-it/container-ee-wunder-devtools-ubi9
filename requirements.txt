@@ -18,6 +18,10 @@ antsibull-changelog==0.35.1
 # Version 50.0.0 fixes CVE-2026-69247 in PKCS#7 EnvelopedData decryption.
 cryptography==50.0.0
 
+# HashiCorp Vault Python client required by community.hashi_vault lookups and
+# modules executed from the controller execution environment.
+hvac==2.4.0
+
 # ---------------------------------------------------------------------------
 # YAML linting (allow patch/minor, forbid major)
 # ---------------------------------------------------------------------------
@@ -48,6 +52,8 @@ molecule-plugins==25.8.12
 docker==7.2.0
 requests>=2.31.0,<3.0.0
 requests-unixsocket>=0.3.0,<1.0.0
+# Version 2.8.0 fixes CVE-2026-97687 and CVE-2026-97689.
+urllib3==2.8.0
 
 # ---------------------------------------------------------------------------
 # VMware SDK (only needed if devtools runs VMware modules/tests)

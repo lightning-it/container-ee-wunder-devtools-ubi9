@@ -301,11 +301,13 @@
   not depend on an unowned downstream build-context file.
   The protected Shared-Assets App distributes the complete repository-specific
   surfaces byte-for-byte. Do not hand-edit or duplicate those files downstream.
-- `container-ee-wunder-devtools-ubi9` receives its pipeline-only
-  `.lit/push-ready.json`, Dockerfile-specific `renovate.json`, and clean,
-  pull-through `scripts/devtools-container-ci.sh` from its repository-specific
-  override. Make those changes in `shared-assets-lit` first; never hand-edit
-  the downstream managed copies.
+- `container-ee-wunder-devtools-ubi9` receives its exact `Dockerfile`,
+  pipeline-only `.lit/push-ready.json`, Dockerfile-specific `renovate.json`,
+  and clean, pull-through `scripts/devtools-container-ci.sh` from its
+  repository-specific override. Every new immutable Dockerfile pin and its
+  Renovate manager must land in that canonical unit together. Make those
+  changes in `shared-assets-lit` first; never hand-edit the downstream managed
+  copies.
 - When any managed container repository's installed push-ready engine or
   `.github/workflows/current-revision-rerun.yml` differs from the protected
   canonical blob, the shared-assets App first opens a policy-only bootstrap

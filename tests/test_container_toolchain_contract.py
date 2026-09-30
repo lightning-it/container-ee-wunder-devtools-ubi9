@@ -104,6 +104,21 @@ class ContainerToolchainContractTests(unittest.TestCase):
                 f"{requirement.name} lock version {locked_version} must satisfy "
                 f"the direct constraint {requirement.specifier}",
             )
+        self.assertIn(
+            "hvac",
+            direct_requirements,
+            "the controller EE must declare the HashiCorp Vault client directly",
+        )
+        self.assertEqual(
+            Version("2.4.0"),
+            locked_versions.get("hvac"),
+            "the controller EE must include the pinned HashiCorp Vault client",
+        )
+        self.assertEqual(
+            Version("2.8.0"),
+            locked_versions.get("urllib3"),
+            "the controller EE must retain the fixed urllib3 release",
+        )
         for name in ("renovate", "markdownlint-cli2", "prettier"):
             version = container_package["dependencies"][name]
             self.assertRegex(version, r"^\d+\.\d+\.\d+$")

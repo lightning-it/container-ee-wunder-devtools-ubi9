@@ -96,7 +96,7 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4
         with:
-          driver-opts: image=docker.io/moby/buildkit:buildx-stable-1@sha256:040d34121c27906c4ff9ac152a30d52bf2c5d328d3bb748916bb3d2743c02528
+          driver-opts: image=docker.io/moby/buildkit:buildx-stable-1@sha256:98cc6a3fc46220d00f8224ae483f3274fc874e9be8d7dd1e2e2c5481209228b5
 
       - name: Log in to Quay.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4
