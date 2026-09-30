@@ -187,6 +187,77 @@ jobs:
           base_ref="$(jq -er '.base.ref | select(. == "develop" or . == "main")' <<<"${pr}")"
           head_ref="$(jq -er '.head.ref | select(type == "string" and length > 0)' <<<"${pr}")"
           head_repository="$(jq -er '.head.repo.full_name | select(type == "string" and length > 0)' <<<"${pr}")"
+          attempt_one_inventory_deadline_ms=''
+          monotonic_millis() {
+            local fraction uptime value whole
+            read -r uptime _ </proc/uptime
+            [[ "${uptime}" =~ ^([0-9]+)\.([0-9]+)$ ]]
+            whole="${BASH_REMATCH[1]}"
+            fraction="${BASH_REMATCH[2]}000"
+            fraction="${fraction:0:3}"
+            value=$((10#${whole} * 1000 + 10#${fraction}))
+            [[ "${value}" =~ ^[0-9]+$ ]]
+            printf '%s\n' "${value}"
+          }
+          gh_api_read() {
+            local operation now remaining duration owner repository query
+            local -a gh_args
+            [ "$#" -ge 1 ] || return 64
+            operation="$1"
+            shift
+            case "${operation}" in
+              current-pr)
+                [ "$#" -eq 0 ] || return 64
+                gh_args=("repos/${REPOSITORY}/pulls/${PR_NUMBER}")
+                ;;
+              metadata-revision)
+                [ "$#" -eq 0 ] || return 64
+                owner="${REPOSITORY%%/*}"
+                repository="${REPOSITORY#*/}"
+                read -r -d '' query <<'GRAPHQL' || true
+          query($owner: String!, $repository: String!, $number: Int!) {
+            repository(owner: $owner, name: $repository) {
+              pullRequest(number: $number) { number lastEditedAt }
+            }
+          }
+          GRAPHQL
+                gh_args=(
+                  graphql
+                  -f "query=${query}"
+                  -F "owner=${owner}"
+                  -F "repository=${repository}"
+                  -F "number=${PR_NUMBER}"
+                )
+                ;;
+              attempt-one-jobs)
+                [ "$#" -eq 2 ] || return 64
+                [[ "$1" =~ ^[1-9][0-9]*$ ]] || return 64
+                [ "$2" = "repos/${REPOSITORY}/actions/runs/$1/attempts/1/jobs?filter=all&per_page=100" ] \
+                  || return 64
+                gh_args=(
+                  --paginate
+                  --slurp
+                  "$2"
+                )
+                ;;
+              *)
+                echo "Rejected unsupported read-only GitHub API operation: ${operation}" >&2
+                return 64
+                ;;
+            esac
+            if [ -z "${attempt_one_inventory_deadline_ms}" ]; then
+              gh api "${gh_args[@]}"
+              return
+            fi
+            now="$(monotonic_millis)"
+            remaining=$((attempt_one_inventory_deadline_ms - now))
+            if [ "${remaining}" -le 0 ]; then
+              echo "Required verifier job inventory exceeded its monotonic deadline before another API read." >&2
+              return 124
+            fi
+            duration="$(awk -v millis="${remaining}" 'BEGIN { printf "%.3fs\n", millis / 1000 }')"
+            timeout --foreground --signal=KILL "${duration}" gh api "${gh_args[@]}"
+          }
           labels_sha256_from_pr() {
             local labels_json pr_json="$1"
             if ! jq -e \
@@ -212,20 +283,8 @@ jobs:
             printf '%s' "${labels_json}" | sha256sum | cut -d ' ' -f 1
           }
           read_metadata_revision() {
-            local owner="${REPOSITORY%%/*}" repository="${REPOSITORY#*/}"
-            local query response
-            read -r -d '' query <<'GRAPHQL' || true
-          query($owner: String!, $repository: String!, $number: Int!) {
-            repository(owner: $owner, name: $repository) {
-              pullRequest(number: $number) { number lastEditedAt }
-            }
-          }
-          GRAPHQL
-            response="$(gh api graphql \
-              -f query="${query}" \
-              -F owner="${owner}" \
-              -F repository="${repository}" \
-              -F number="${PR_NUMBER}")"
+            local response
+            response="$(gh_api_read metadata-revision)"
             jq -er \
               --argjson number "${PR_NUMBER}" '
                 select(((.errors // []) | length) == 0)
@@ -262,7 +321,7 @@ jobs:
             ' <<<"${pages}"
           }
           revalidate_pr_metadata() {
-            local current_pr; current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+            local current_pr; current_pr="$(gh_api_read current-pr)"
             test "$(labels_sha256_from_pr "${current_pr}")" = "${live_labels_sha256}"
             test "$(read_metadata_revision)" = "${live_last_edited_at}"
           }
@@ -777,6 +836,7 @@ jobs:
             --arg head_repository "${head_repository}" \
             --arg head_sha "${EXPECTED_HEAD}" \
             --arg repository "${REPOSITORY}" \
+            --arg workflow_name "Protected current-revision evidence verifier" \
             --argjson pr_number "${PR_NUMBER}" '
               [.[].workflow_runs[]? |
                 select(.event == "pull_request_target") |
@@ -787,6 +847,22 @@ jobs:
                 select(.head_branch == $head_ref and .head_sha == $head_sha) |
                 select(.repository.full_name == $repository) |
                 select(.head_repository.full_name == $head_repository) |
+                # GitHub can re-associate the mutable pull_requests entry of
+                # an older same-head run with a newer PR. The dynamic run title
+                # remains bound to the PR that actually created the run.
+                select(
+                  .display_title == ("Protected current revision PR #"
+                    + ($pr_number | tostring) + " opened " + $head_sha)
+                  or .display_title == ("Protected current revision PR #"
+                    + ($pr_number | tostring) + " synchronize " + $head_sha)
+                  or .display_title == ("Protected current revision PR #"
+                    + ($pr_number | tostring) + " reopened " + $head_sha)
+                  or .display_title == ("Protected current revision PR #"
+                    + ($pr_number | tostring) + " ready_for_review " + $head_sha)
+                  or .display_title == ("Protected current revision PR #"
+                    + ($pr_number | tostring) + " edited " + $head_sha)
+                ) |
+                select(.name == .display_title or .name == $workflow_name) |
                 select((.pull_requests | length) == 1) |
                 select(.pull_requests[0].number == $pr_number) |
                 select(.pull_requests[0].url == ($api_url + "/repos/" + $repository
@@ -946,8 +1022,59 @@ jobs:
             echo "Protected verifier already consumed its single rerun; no further retry is allowed."
             exit 0
           fi
-          attempt_one_jobs_pages="$(gh api --paginate --slurp \
-            "repos/${REPOSITORY}/actions/runs/${run_id}/attempts/1/jobs?filter=all&per_page=100")"
+          # A newly published synthetic check can appear in the jobs array a
+          # few seconds before GitHub updates the response's total_count. Wait
+          # only for that read-only inventory to become internally complete;
+          # no rerun request is made until the full strict topology below has
+          # been validated.
+          attempt_one_jobs_pages=''
+          attempt_one_inventory_converged=false
+          attempt_one_inventory_deadline_ms=$(( $(monotonic_millis) + 20000 ))
+          for attempt_one_inventory_attempt in $(seq 1 20); do
+            attempt_one_jobs_pages="$(gh_api_read attempt-one-jobs "${run_id}" \
+              "repos/${REPOSITORY}/actions/runs/${run_id}/attempts/1/jobs?filter=all&per_page=100")"
+            jq -e '
+              type == "array"
+              and length > 0
+              and all(.[];
+                type == "object"
+                and (.total_count | type) == "number"
+                and (.total_count | floor) == .total_count
+                and .total_count > 0
+                and .total_count <= 1000
+                and (.jobs | type) == "array")
+            ' <<<"${attempt_one_jobs_pages}" >/dev/null
+            attempt_one_job_count="$(jq '[.[].jobs[]] | length' \
+              <<<"${attempt_one_jobs_pages}")"
+            if jq -e \
+                --argjson job_count "${attempt_one_job_count}" '
+                  all(.[]; .total_count == $job_count)
+                ' <<<"${attempt_one_jobs_pages}" >/dev/null; then
+              attempt_one_inventory_converged=true
+              break
+            fi
+            revalidate_pr_metadata
+            attempt_one_inventory_now="$(monotonic_millis)"
+            attempt_one_inventory_remaining=$((
+              attempt_one_inventory_deadline_ms - attempt_one_inventory_now
+            ))
+            if [ "${attempt_one_inventory_attempt}" -eq 20 ] \
+                || [ "${attempt_one_inventory_remaining}" -le 0 ]; then
+              echo "Required verifier job inventory did not converge to its declared total." >&2
+              exit 1
+            fi
+            attempt_one_inventory_sleep="$(awk \
+              -v millis="${attempt_one_inventory_remaining}" '
+                BEGIN {
+                  if (millis > 1000) millis = 1000
+                  printf "%.3f\n", millis / 1000
+                }
+              ')"
+            sleep "${attempt_one_inventory_sleep}"
+          done
+          attempt_one_inventory_deadline_ms=''
+          test "${attempt_one_inventory_converged}" = true
+          # Validate only the converged attempt-one inventory.
           jq -e '
             type == "array"
             and length > 0
@@ -955,6 +1082,8 @@ jobs:
               type == "object"
               and (.total_count | type) == "number"
               and (.jobs | type) == "array")
+            and (([.[].jobs[]] | length) as $job_count
+              | all(.[]; .total_count == $job_count))
             and all(.[].jobs[];
               type == "object"
               and (.id | type) == "number" and .id > 0
@@ -972,20 +1101,64 @@ jobs:
           # Only API-published neutral checks are admissible without a runner.
           # The centrally protected immutable v5-successor authorization is
           # an optional, known skipped job on unrelated repositories/PRs. It
-          # is never review evidence and no other synthetic job is admitted.
-          synthetic_evidence_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Current revision review" or .name == "Protected current-revision verifier")]' <<<"${attempt_one_jobs}")
+          # is never review evidence. Routed S0 jobs are accepted only as skipped.
+          synthetic_evidence_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Current revision review" or .name == "Protected current-revision verifier") | select(.run_attempt == 1 and .status == "completed" and .conclusion == "success")]' <<<"${attempt_one_jobs}")
+          test "$(jq 'length' <<<"${synthetic_evidence_jobs}")" -le 2
           synthetic_authorization_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Authorize exact Supplementary catch-up v5 successor") | select(.run_attempt == 1 and .status == "completed" and .conclusion == "skipped")]' <<<"${attempt_one_jobs}")
           test "$(jq 'length' <<<"${synthetic_authorization_jobs}")" -le 1
+          synthetic_promotion_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Verify aggregated develop-to-main promotion evidence") | select(.run_attempt == 1 and .status == "completed" and .conclusion == "skipped")]' <<<"${attempt_one_jobs}")
+          test "$(jq 'length' <<<"${synthetic_promotion_jobs}")" -le 1
           runner_backed_jobs=$(jq -c \
             '[.[] | select(.runner_id != null or (.steps | length) > 0)]' \
             <<<"${attempt_one_jobs}")
-          test "$(jq 'length' <<<"${attempt_one_jobs}")" -eq \
-            "$(jq -n --argjson authorization "${synthetic_authorization_jobs}" --argjson evidence "${synthetic_evidence_jobs}" --argjson runners "${runner_backed_jobs}" '(($authorization | length) + ($evidence | length) + ($runners | length))')"
-          test "$(jq 'length' <<<"${runner_backed_jobs}")" -eq 1
-          rerunnable_jobs=$(jq -c '[.[] | select(.name == "Required current-revision workflow") | select(.runner_id != null and (.steps | length) > 0) | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${runner_backed_jobs}")
+          # Bind one of the two known protected topologies before choosing a job.
+          # Job reruns also rerun dependent jobs: select the failed legacy verifier,
+          # not the terminal aggregator whose failed dependency would stay failed.
+          jq -e '
+            all(.[]; .run_attempt == 1)
+            and ((map(.id) | unique | length) == length)
+            and ((map(.name) | unique | length) == length)
+          ' <<<"${attempt_one_jobs}" >/dev/null
+          if jq -e 'any(.[]; .name == "Route protected current-revision verification")' \
+              <<<"${attempt_one_jobs}" >/dev/null; then
+            jq -e \
+              --argjson evidence "${synthetic_evidence_jobs}" \
+              --argjson authorization "${synthetic_authorization_jobs}" \
+              --argjson promotion "${synthetic_promotion_jobs}" '
+                def runner($name; $conclusion):
+                  [.[] | select(.name == $name and .runner_id != null
+                    and (.steps | length) > 0 and .conclusion == $conclusion)]
+                  | length == 1;
+                def skipped($name):
+                  [.[] | select(.name == $name and .runner_id == null
+                    and (.steps | length) == 0 and .conclusion == "skipped")]
+                  | length == 1;
+                length == (6 + ($evidence | length) + ($authorization | length)
+                  + ($promotion | length))
+                and runner("Route protected current-revision verification"; "success")
+                and runner("Legacy protected current-revision verifier"; "failure")
+                and runner("Required current-revision workflow"; "failure")
+                and skipped("Reserve protected S0 feature-to-main verification")
+                and skipped("Verify protected S0 feature-to-main input")
+                and skipped("Finalize the protected S0 feature-to-main result")
+            ' <<<"${attempt_one_jobs}" >/dev/null
+            rerunnable_jobs=$(jq -c '[.[] | select(.name == "Legacy protected current-revision verifier") | select(.runner_id != null and (.steps | length) > 0) | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${runner_backed_jobs}")
+          else
+            test "$(jq 'length' <<<"${attempt_one_jobs}")" -eq \
+              "$(jq -n --argjson authorization "${synthetic_authorization_jobs}" --argjson evidence "${synthetic_evidence_jobs}" --argjson promotion "${synthetic_promotion_jobs}" --argjson runners "${runner_backed_jobs}" '(($authorization | length) + ($evidence | length) + ($promotion | length) + ($runners | length))')"
+            test "$(jq 'length' <<<"${runner_backed_jobs}")" -eq 1
+            rerunnable_jobs=$(jq -c '[.[] | select(.name == "Required current-revision workflow") | select(.runner_id != null and (.steps | length) > 0) | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${runner_backed_jobs}")
+          fi
           test "$(jq 'length' <<<"${rerunnable_jobs}")" -eq 1
           required_job_id="$(jq -er '.[0].id | select(type == "number" and . > 0)' \
             <<<"${rerunnable_jobs}")"
+          revalidate_pr_metadata
+          attempt_one_inventory_deadline_ms=$(( $(monotonic_millis) + 5000 ))
+          final_attempt_one_jobs_pages="$(gh_api_read attempt-one-jobs "${run_id}" \
+            "repos/${REPOSITORY}/actions/runs/${run_id}/attempts/1/jobs?filter=all&per_page=100")"
+          attempt_one_inventory_deadline_ms=''
+          test "$(jq -cS '.' <<<"${final_attempt_one_jobs_pages}")" = \
+            "$(jq -cS '.' <<<"${attempt_one_jobs_pages}")"
           revalidate_pr_metadata
           if ! gh api --method POST \
               "repos/${REPOSITORY}/actions/jobs/${required_job_id}/rerun" >/dev/null; then

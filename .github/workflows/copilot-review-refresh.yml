@@ -190,7 +190,7 @@ jobs:
               -F number="${PR_NUMBER}")"
             jq -er \
               --argjson number "${PR_NUMBER}" '
-                select(((.errors // []) | length) == 0)
+                select(if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)
                 | select(.data.repository.pullRequest.number == $number)
                 | .data.repository.pullRequest.lastEditedAt
                 | if . == null then "null"
@@ -276,8 +276,6 @@ jobs:
             required_runs_pages="$(gh api --paginate --slurp \
               "${runs_url}?event=pull_request_target&head_sha=${HEAD_SHA}&per_page=100")"
             # Live run 33655265312 attempt 2 proves GitHub preserves the PR
-            # author in actor and sets triggering_actor to github-actions[bot]
-            # when the protected helper reruns the failed verifier job.
             required_runs="$(jq -c \
               --arg api_url "${GITHUB_API_URL}" \
               --arg author "${PR_AUTHOR}" \
@@ -396,12 +394,6 @@ jobs:
           }
 
           if [ "${REVIEW_ID}" -eq 0 ]; then
-            # The first immutable main trust-root PR cannot publish a neutral
-            # review result until the independently protected organization
-            # Required Workflow has accepted its dependency-closed handoff.
-            # When that verifier advanced after attempt one failed, this
-            # protected default-branch controller may rerun only the exact
-            # failed job. It neither requests AI nor creates/updates a check.
             test "${EVIDENCE_COMMENT_ID}" -eq 0
             test "${GITHUB_ACTOR}" = litroc
             test "${PR_AUTHOR}" = litroc
@@ -518,9 +510,6 @@ jobs:
               | length == 0
             ' <<<"${reservation_pages}" >/dev/null
 
-            # Re-read every mutable binding immediately before the sole state
-            # transition. A moved default branch, PR, or consumed verifier
-            # attempt fails closed.
             current_default="$(gh api \
               "repos/${REPOSITORY}/branches/${default_branch}")"
             jq -e --arg head "${CONTROLLER_SHA}" '
@@ -553,8 +542,6 @@ jobs:
                 and .triggering_actor.login == $author
               ' <<<"${current_failed_run}" >/dev/null
 
-            # The failed job has only one retry. Re-prove the external,
-            # protected organization verifier immediately before consuming it.
             verify_external_required_workflow
             if ! has_live_write_permission "${GITHUB_ACTOR}"; then
               echo "Dispatch actor lost current write permission before bootstrap verifier rerun." >&2
@@ -708,10 +695,6 @@ jobs:
                 test "$(jq 'length' <<<"${producer_failures}")" -eq 0 \
                   || return 1
               else
-                # A neutral PASS is published before this one downstream
-                # helper runs. Accept an overall failed producer only when
-                # that exact runner-backed helper is the sole failed job and
-                # its exact verifier-rerun step is the sole failed step.
                 producer_helper_failures="$(jq -c '
                   [.[] |
                     select(.name == "Request protected verifier re-evaluation / Re-run the one protected verifier attempt") |
@@ -766,9 +749,6 @@ jobs:
                 fi
               fi
             }
-            # Managed distribution has its own evidence kind. The sync App may
-            # never satisfy the Copilot branch, and inside lightning-it/.github
-            # it is accepted only as ancestry-backmerge.
             if ! jq -e \
               --arg author "${PR_AUTHOR}" \
               --arg base "${BASE_SHA}" \
@@ -854,39 +834,109 @@ jobs:
           fi
           if [ "${neutral_count}" -eq 1 ]; then
             read -r owner name <<<"${REPOSITORY//\// }"
-            # shellcheck disable=SC2016  # GraphQL variables must stay literal.
-            query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{author{login} pullRequestReview{commit{oid}}}}}}}}}'
-            threads='[]'
-            after=''
-            while true; do
+            # shellcheck disable=SC2016
+            query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{author{login} pullRequestReview{commit{oid}}}}}}}}}'
+            thread_snapshot=''
+            for thread_snapshot_attempt in 1 2; do
+              threads='[]'
+              after=''
+              seen_thread_cursors='[]'
+              while true; do
               args=(-f query="${query}" -F owner="${owner}" -F name="${name}" -F number="${PR_NUMBER}")
               if [ -n "${after}" ]; then args+=(-f after="${after}"); fi
               page="$(gh api graphql "${args[@]}")"
-              page_threads="$(jq '.data.repository.pullRequest.reviewThreads.nodes' <<<"${page}")"
-              threads="$(jq -c --argjson page "${page_threads}" '. + $page' <<<"${threads}")"
-              if [ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${page}")" != true ]; then break; fi
-              after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"${page}")"
-              test -n "${after}"
-            done
-            incomplete="$(jq '[.[] |
-              select(.isResolved == false) |
+              if ! jq -e --arg head "${HEAD_SHA}" '
+                (if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)
+                and
+                .data.repository.pullRequest.headRefOid == $head
+                and
+                (.data.repository.pullRequest.reviewThreads | type) == "object"
+                and (.data.repository.pullRequest.reviewThreads.nodes | type) == "array"
+                and (.data.repository.pullRequest.reviewThreads.pageInfo | type) == "object"
+                and ((.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage | type) == "boolean")
+                and (
+                  .data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false
+                  or ((.data.repository.pullRequest.reviewThreads.pageInfo.endCursor | type) == "string"
+                    and (.data.repository.pullRequest.reviewThreads.pageInfo.endCursor | length) > 0)
+                )
+                and all(.data.repository.pullRequest.reviewThreads.nodes[]?;
+                  (type == "object")
+                  and ((.isResolved | type) == "boolean")
+                  and ((.comments | type) == "object")
+                  and ((.comments.nodes | type) == "array")
+                  and ((.comments.nodes | length) > 0)
+                  and ((.comments.pageInfo | type) == "object")
+                  and ((.comments.pageInfo.hasNextPage | type) == "boolean")
+                  and all(.comments.nodes[]?;
+                    (type == "object")
+                    and ((.author | type) == "object")
+                    and ((.author.login | type) == "string")
+                    and ((.author.login | length) > 0)
+                    and (.author.login | test("^[^[:space:]]+$"))
+                    and ((.pullRequestReview | type) == "object")
+                    and ((.pullRequestReview.commit | type) == "object")
+                    and ((.pullRequestReview.commit.oid | type) == "string")
+                    and (.pullRequestReview.commit.oid | test("^[0-9a-f]{40}$"))
+                  )
+                )
+              ' <<<"${page}" >/dev/null; then
+                echo "Review-thread evidence is malformed; refusing to preserve PASS." >&2
+                require_failed_required_workflow
+                exit 1
+              fi
+              page_threads="$(jq -cer '.data.repository.pullRequest.reviewThreads.nodes' <<<"${page}")"
+              threads="$(jq -cer --argjson page "${page_threads}" '. + $page' <<<"${threads}")"
+              has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${page}")"
+              case "${has_next}" in
+                false) break ;;
+                true)
+                  next_after="$(jq -er '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"${page}")"
+                  if jq -e --arg next "${next_after}" --arg current "${after}" \
+                    '($next == $current) or index($next)' <<<"${seen_thread_cursors}" >/dev/null; then
+                    echo "Review-thread pagination cursor did not progress; refusing to preserve PASS." >&2
+                    require_failed_required_workflow
+                    exit 1
+                  fi
+                  seen_thread_cursors="$(jq -cer --arg next "${next_after}" '. + [$next]' <<<"${seen_thread_cursors}")"
+                  after="${next_after}"
+                  ;;
+                *)
+                  echo "Review-thread pagination state is malformed; refusing to preserve PASS." >&2
+                  require_failed_required_workflow
+                  exit 1
+                  ;;
+              esac
+              done
+              incomplete="$(jq '[.[] |
               select(.comments.pageInfo.hasNextPage == true)] | length' <<<"${threads}")"
-            if [ "${incomplete}" -gt 0 ]; then
-              echo "Unresolved review-thread comments exceed the verified page; refusing to preserve PASS." >&2
+              if [ "${incomplete}" -gt 0 ]; then
+              echo "Review-thread comments exceed the verified page; refusing to preserve PASS." >&2
               require_failed_required_workflow
               exit 1
-            fi
-            unresolved="$(jq --arg head "${HEAD_SHA}" '[.[] |
+              fi
+              unresolved="$(jq --arg head "${HEAD_SHA}" '[.[] |
               select(.isResolved == false) |
               select(any(.comments.nodes[];
                 (.author.login == "copilot-pull-request-reviewer"
                   or .author.login == "copilot-pull-request-reviewer[bot]")
                 and .pullRequestReview.commit.oid == $head))] | length' <<<"${threads}")"
-            if [ "${unresolved}" -gt 0 ]; then
+              if [ "${unresolved}" -gt 0 ]; then
               echo "Current-head Copilot findings invalidate the neutral PASS." >&2
               require_failed_required_workflow
               exit 1
-            fi
+              fi
+              observed_snapshot="$(jq -cS . <<<"${threads}" | sha256sum | cut -d' ' -f1)"
+              [[ "${observed_snapshot}" =~ ^[0-9a-f]{64}$ ]]
+              if [ "${thread_snapshot_attempt}" -eq 1 ]; then
+                thread_snapshot="${observed_snapshot}"
+                continue
+              fi
+              if [ "${observed_snapshot}" != "${thread_snapshot}" ]; then
+                echo "Review-thread evidence changed between snapshots; refusing to preserve PASS." >&2
+                require_failed_required_workflow
+                exit 1
+              fi
+            done
             current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
             test "$(labels_sha256_from_pr "${current_pr}")" = "${PR_LABELS_SHA256}"
             test "$(read_metadata_revision)" = "${PR_LAST_EDITED_AT}"
@@ -898,10 +948,6 @@ jobs:
           trigger_occurred_at=''
           EVIDENCE_COMMENT_AUTHOR=''
           if [ "${EVIDENCE_COMMENT_ID}" -gt 0 ]; then
-            # A protected dispatch may cite one immutable maintainer reply after
-            # the bounded verifier exhausted its resolution wait. The reply,
-            # parent finding, review, complete thread set, base and head are
-            # all re-read before the verifier-only rerun.
             if ! has_live_write_permission "${GITHUB_ACTOR}"; then
               echo "Dispatch actor lacks current write permission." >&2
               exit 1
@@ -973,35 +1019,112 @@ jobs:
             test "${PARENT_REVIEW_ID}" = "${REVIEW_ID}"
 
             read -r owner name <<<"${REPOSITORY//\// }"
-            # shellcheck disable=SC2016  # GraphQL variables stay literal.
+            # shellcheck disable=SC2016
             resolved_query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:100){pageInfo{hasNextPage} nodes{databaseId author{login} pullRequestReview{databaseId commit{oid}}}}}}}}}'
-            threads='[]'
-            after=''
-            while true; do
-              arguments=(-f query="${resolved_query}" -F owner="${owner}" \
-                -F name="${name}" -F number="${PR_NUMBER}")
-              if [ -n "${after}" ]; then arguments+=(-f after="${after}"); fi
-              page="$(gh api graphql "${arguments[@]}")"
-              jq -e --arg head "${HEAD_SHA}" \
-                '.data.repository.pullRequest.headRefOid == $head' \
-                <<<"${page}" >/dev/null
-              page_threads="$(jq \
-                '.data.repository.pullRequest.reviewThreads.nodes' \
-                <<<"${page}")"
-              threads="$(jq -c --argjson page "${page_threads}" \
-                '. + $page' <<<"${threads}")"
-              if [ "$(jq -r \
-                  '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' \
-                  <<<"${page}")" != true ]; then
-                break
+            collect_resolved_threads() {
+              local after='' arguments has_next next_after page page_threads
+              local seen_thread_cursors='[]' collected_threads='[]'
+              while true; do
+                arguments=(-f query="${resolved_query}" -F owner="${owner}" \
+                  -F name="${name}" -F number="${PR_NUMBER}")
+                if [ -n "${after}" ]; then arguments+=(-f after="${after}"); fi
+                if ! page="$(gh api graphql "${arguments[@]}")"; then
+                  echo "Resolved review-thread API request failed; no rerun is authorized." >&2
+                  return 1
+                fi
+                if ! jq -e --arg head "${HEAD_SHA}" \
+                  '.data.repository.pullRequest.headRefOid == $head' \
+                  <<<"${page}" >/dev/null; then
+                  echo "Resolved review-thread head changed; no rerun is authorized." >&2
+                  return 1
+                fi
+                if ! resolved_thread_page_is_valid "${page}"; then
+                  echo "Resolved review-thread evidence is malformed; no rerun is authorized." >&2
+                  return 1
+                fi
+                page_threads="$(jq -cer '.data.repository.pullRequest.reviewThreads.nodes' <<<"${page}")"
+                collected_threads="$(jq -cer --argjson page "${page_threads}" '. + $page' <<<"${collected_threads}")"
+                has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"${page}")"
+                case "${has_next}" in
+                  false) break ;;
+                  true)
+                    if ! next_resolved_thread_cursor \
+                      "${page}" "${after}" "${seen_thread_cursors}"; then
+                      return 1
+                    fi
+                    next_after="${RESOLVED_THREAD_NEXT_CURSOR}"
+                    seen_thread_cursors="${RESOLVED_THREAD_SEEN_CURSORS}"
+                    after="${next_after}"
+                    ;;
+                  *)
+                    echo "Resolved review-thread pagination state is malformed; no rerun is authorized." >&2
+                    return 1
+                    ;;
+                esac
+              done
+              if ! jq -e \
+                'all(.[]; .comments.pageInfo.hasNextPage == false)' \
+                <<<"${collected_threads}" >/dev/null; then
+                echo "Resolved review-thread comments exceed the verified page; no rerun is authorized." >&2
+                return 1
               fi
-              after="$(jq -r \
-                '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' \
-                <<<"${page}")"
-              test -n "${after}"
-            done
-            jq -e 'all(.[]; .comments.pageInfo.hasNextPage == false)' \
-              <<<"${threads}" >/dev/null
+              printf '%s' "${collected_threads}"
+            }
+            resolved_thread_page_is_valid() {
+              local page="$1"
+              jq -e '
+                (if has("errors") then ((.errors | type) == "array" and (.errors | length) == 0) else true end)
+                and (.data.repository.pullRequest.reviewThreads | type) == "object"
+                and (.data.repository.pullRequest.reviewThreads.nodes | type) == "array"
+                and (.data.repository.pullRequest.reviewThreads.pageInfo | type) == "object"
+                and ((.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage | type) == "boolean")
+              ' <<<"${page}" >/dev/null || return 1
+              jq -e '
+                .data.repository.pullRequest.reviewThreads.pageInfo as $page_info
+                | $page_info.hasNextPage == false
+                  or (($page_info.endCursor | type) == "string"
+                    and ($page_info.endCursor | length) > 0)
+              ' <<<"${page}" >/dev/null || return 1
+              jq -e '
+                all(.data.repository.pullRequest.reviewThreads.nodes[]?;
+                  (type == "object")
+                  and ((.isResolved | type) == "boolean")
+                  and ((.comments | type) == "object")
+                  and ((.comments.nodes | type) == "array")
+                  and ((.comments.nodes | length) > 0)
+                  and ((.comments.pageInfo | type) == "object")
+                  and ((.comments.pageInfo.hasNextPage | type) == "boolean")
+                )
+              ' <<<"${page}" >/dev/null || return 1
+              jq -e '
+                all(.data.repository.pullRequest.reviewThreads.nodes[]?.comments.nodes[]?;
+                  (type == "object")
+                  and ((.author | type) == "object")
+                  and ((.author.login | type) == "string")
+                  and ((.author.login | length) > 0)
+                  and (.author.login | test("^[^[:space:]]+$"))
+                  and ((.databaseId | type) == "number" and .databaseId > 0)
+                  and ((.pullRequestReview | type) == "object")
+                  and ((.pullRequestReview.databaseId | type) == "number"
+                    and .pullRequestReview.databaseId > 0)
+                  and ((.pullRequestReview.commit | type) == "object")
+                  and ((.pullRequestReview.commit.oid | type) == "string")
+                  and (.pullRequestReview.commit.oid | test("^[0-9a-f]{40}$"))
+                )
+              ' <<<"${page}" >/dev/null
+            }
+            next_resolved_thread_cursor() {
+              local page="$1" after="$2" seen_thread_cursors="$3" next_after
+              next_after="$(jq -er '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"${page}")"
+              if jq -e --arg next "${next_after}" --arg current "${after}" \
+                '($next == $current) or index($next)' <<<"${seen_thread_cursors}" >/dev/null; then
+                echo "Resolved review-thread pagination cursor did not progress; no rerun is authorized." >&2
+                return 1
+              fi
+              RESOLVED_THREAD_NEXT_CURSOR="${next_after}"
+              RESOLVED_THREAD_SEEN_CURSORS="$(jq -cer --arg next "${next_after}" '. + [$next]' <<<"${seen_thread_cursors}")"
+            }
+            threads="$(collect_resolved_threads)"
             if ! jq -e \
               --arg head "${HEAD_SHA}" \
               --argjson parent_id "${parent_id}" \
@@ -1025,6 +1148,9 @@ jobs:
               echo "Resolved-thread evidence is incomplete or non-authorizing; no rerun is authorized."
               exit 0
             fi
+            RESOLVED_THREAD_SNAPSHOT="$(jq -cS . <<<"${threads}" \
+              | sha256sum | cut -d' ' -f1)"
+            [[ "${RESOLVED_THREAD_SNAPSHOT}" =~ ^[0-9a-f]{64}$ ]]
             rerun_reason=resolved-finding
             trigger_occurred_at="${EVIDENCE_COMMENT_CREATED_AT}"
           else
@@ -1035,53 +1161,121 @@ jobs:
             rerun_reason=manual-delayed-review
           fi
 
-          # A missing neutral result may be recovered only from one exact
-          # delayed review or one resolved-finding evidence reply. Both paths
-          # reuse the original review and rerun only the verifier job.
           test "${PR_AUTHOR}" != 'lightning-it-release-automation[bot]'
           test "${PR_AUTHOR}" != 'lightning-it-shared-assets-sync[bot]'
           [[ "${CONTROLLER_SHA}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${REVIEW_ID}" =~ ^[1-9][0-9]*$ ]]
 
-          review_pages="$(gh api --paginate --slurp \
-            "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
-          current_head_reviews="$(jq -c --arg head "${HEAD_SHA}" '
-            [add[]? |
-              select(.commit_id == $head) |
-              select(.user.login == "copilot-pull-request-reviewer"
-                or .user.login == "copilot-pull-request-reviewer[bot]")]
-          ' <<<"${review_pages}")"
-          test "$(jq 'length' <<<"${current_head_reviews}")" -eq 1
-          test "$(jq -er '.[0].id' <<<"${current_head_reviews}")" = "${REVIEW_ID}"
-          review="$(gh api \
-            "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}")"
-          REVIEW_COMMIT_SHA="$(jq -er \
-            '.commit_id | select(type == "string" and test("^[0-9a-f]{40}$"))' \
-            <<<"${review}")"
+          review_body_is_usable() {
+            review_payload="$(cat)"
+            review_comment_pages="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}/comments?per_page=100")"
+            normalized_review_body="$(jq -ers --argjson review_id "${REVIEW_ID}" '
+              .[0] as $review | .[1] as $pages |
+              if (($review | type) == "object") and ($review | has("body"))
+                and (($review.body == null) or (($review.body | type) == "string"))
+                and (($pages | type) == "array")
+                and (($pages | length) > 0)
+                and all($pages[]?; type == "array")
+                and all($pages[][]?;
+                  (type == "object") and ((.body | type) == "string")
+                  and .pull_request_review_id == $review_id)
+              then ([($review.body // "")] + [$pages[][]? | .body]
+                | map(
+                    ascii_downcase
+                    | gsub("wasn[\u0027\u2019]t"; "was not")
+                    | gsub("\\p{White_Space}"; "")
+                  )) as $parts
+                | if any($parts[]; length > 0) then ($parts | join("|"))
+                  else error("review content is empty") end
+              else error("review body or inline comments are malformed")
+              end
+            ' <(printf '%s\n' "${review_payload}") \
+              <(printf '%s\n' "${review_comment_pages}"))"
+            case "${normalized_review_body}" in
+              *unabletoreviewthispullrequest*|*wasnotabletoreviewthispullrequest*|*nofilestoreview*|*abletoreviewanyfiles*|*quotaexhausted*|*quotaexceeded*|*premiumrequestquota*|*premiumrequestsquota*|*suppressedcomment*|*encounteredanerror*)
+                return 1
+                ;;
+            esac
+          }
+
+          bound_review_is_usable() {
+            bound_review="$(cat)"
+            jq -e \
+              --arg head "${HEAD_SHA}" \
+              --arg submitted "${REVIEW_SUBMITTED_AT}" \
+              --argjson review_id "${REVIEW_ID}" '
+                .id == $review_id
+                and .commit_id == $head
+                and .submitted_at == $submitted
+                and (.user.login == "copilot-pull-request-reviewer"
+                  or .user.login == "copilot-pull-request-reviewer[bot]")
+                and .user.type == "Bot"
+                and (.state == "COMMENTED" or .state == "APPROVED")
+              ' <<<"${bound_review}" >/dev/null
+            review_body_is_usable <<<"${bound_review}"
+          }
+
+          review_pages_are_well_formed() {
+            jq -e '
+              (type == "array") and all(.[]?; type == "array")
+              and all(.[][]?;
+                (type == "object")
+                and ((.id | type) == "number") and (.id > 0)
+                and ((.node_id | type) == "string") and (.node_id | length) > 0
+                and ((.user | type) == "object")
+                and ((.user.login | type) == "string")
+                and ((.user.login | length) > 0)
+                and (.user.login | test("^[^[:space:]]+$"))
+                and ((.commit_id | type) == "string")
+                and (.commit_id | test("^[0-9a-f]{40}$"))
+                and ((.state | type) == "string")
+                and (.state == "PENDING" or .state == "COMMENTED"
+                  or .state == "APPROVED" or .state == "CHANGES_REQUESTED"
+                  or .state == "DISMISSED")
+                and has("body")
+                and (.body == null or ((.body | type) == "string")))
+            ' >/dev/null
+          }
+
+          read_bound_review() {
+            for review_attempt in $(seq 1 10); do
+              if ! pages="$(gh api --paginate --slurp \
+                  "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then
+                pages=''
+              elif ! review_pages_are_well_formed <<<"${pages}"; then
+                echo "REST review collection is malformed; no rerun is authorized." >&2
+                return 1
+              else
+                matches="$(jq -c --arg head "${HEAD_SHA}" '
+                  [.[][] | select(.commit_id == $head)
+                    | select(.user.login == "copilot-pull-request-reviewer"
+                      or .user.login == "copilot-pull-request-reviewer[bot]")]
+                  ' <<<"${pages}")"
+                count="$(jq 'length' <<<"${matches}")"
+                if [ "${count}" -eq 1 ]; then
+                  test "$(jq -er '.[0].id' <<<"${matches}")" = "${REVIEW_ID}"
+                  gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}"
+                  return
+                elif [ "${count}" -gt 1 ]; then
+                  echo "Multiple current-head Copilot reviews; no rerun is authorized." >&2
+                  return 1
+                fi
+              fi
+              if [ "${review_attempt}" -eq 10 ]; then
+                echo "The bound Copilot review did not converge in the REST API." >&2
+                return 1
+              fi
+              sleep 3
+            done
+          }
+
+          review="$(read_bound_review)"
           REVIEW_SUBMITTED_AT="$(jq -er \
             '.submitted_at | select(type == "string" and length > 0)' \
             <<<"${review}")"
-          test "${REVIEW_COMMIT_SHA}" = "${HEAD_SHA}"
-          jq -e \
-            --arg head "${HEAD_SHA}" \
-            --arg submitted "${REVIEW_SUBMITTED_AT}" \
-            --argjson review_id "${REVIEW_ID}" '
-              .id == $review_id
-              and .user.login == "copilot-pull-request-reviewer[bot]"
-              and .user.type == "Bot"
-              and .commit_id == $head
-              and (.state == "COMMENTED" or .state == "APPROVED")
-              and .submitted_at == $submitted
-              and ((.body // "") | ascii_downcase |
-                (contains("unable to review this pull request") | not)
-                and (contains("premium request quota") | not)
-                and (contains("premium requests quota") | not)
-                and (contains("encountered an error") | not)
-                and (contains("suppressed comment") | not))
-            ' <<<"${review}" >/dev/null
+          bound_review_is_usable <<<"${review}"
           if [ "${rerun_reason}" = manual-delayed-review ]; then
-            # Bind the ordering check and published evidence to the timestamp
-            # re-read from the authoritative Reviews API, not the event copy.
             trigger_occurred_at="${REVIEW_SUBMITTED_AT}"
           fi
           test -n "${trigger_occurred_at}"
@@ -1134,8 +1328,6 @@ jobs:
                 .id == $run_id
                 and .event == "workflow_dispatch"
                 and .path == ".github/workflows/codex-copilot-remediation.yml"
-                # GitHub keeps the workflow name static while workflow_dispatch
-                # supplies the immutable per-run display title.
                 and .name == "Codex Copilot remediation"
                 and .display_title == $title
                 and .head_branch == $branch
@@ -1256,11 +1448,6 @@ jobs:
           test "$(date -u -d "${trigger_occurred_at}" +%s)" -gt \
             "$(date -u -d "${first_verifier_completed_at}" +%s)"
 
-          # GitHub documents Pull requests: read as one of the alternative
-          # permission sets for this PR timeline endpoint. Do not broaden the
-          # job to Issues: read; the existing least-privilege grant is enough.
-          # Live proof: run 32605566329 completed this API call with the job
-          # token and failed later at the independent provenance predicate.
           timeline="$(gh api --paginate --slurp \
             -H 'Accept: application/vnd.github+json' \
             "repos/${REPOSITORY}/issues/${PR_NUMBER}/timeline?per_page=100")"
@@ -1295,11 +1482,8 @@ jobs:
               | length == 1
             ' <<<"${timeline}" >/dev/null
 
-          # This controller has only Checks: read. It must never create,
-          # update, rename, invalidate, or complete a check. The protected
-          # workflow-dispatch run and its immutable step summary are the audit
-          # record; the sole state mutation below is the exact failed verifier
-          # job rerun.
+          current_review="$(read_bound_review)"
+          bound_review_is_usable <<<"${current_review}"
           current_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
           test "$(labels_sha256_from_pr "${current_pr}")" = "${PR_LABELS_SHA256}"
           test "$(read_metadata_revision)" = "${PR_LAST_EDITED_AT}"
@@ -1308,11 +1492,20 @@ jobs:
           jq -e --arg head "${CONTROLLER_SHA}" '
             .protected == true and .commit.sha == $head
           ' <<<"${current_default}" >/dev/null
+          final_rerun_review_pages="$(gh api --paginate --slurp \
+            "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
+          review_pages_are_well_formed <<<"${final_rerun_review_pages}"
+          final_rerun_current_head_reviews="$(jq -ce --arg head "${HEAD_SHA}" '
+            [.[][] | select(.commit_id == $head)
+              | select(.user.login == "copilot-pull-request-reviewer"
+                or .user.login == "copilot-pull-request-reviewer[bot]")]
+            ' <<<"${final_rerun_review_pages}")"
+          jq -e --argjson review_id "${REVIEW_ID}" \
+            'length == 1 and .[0].id == $review_id' \
+            <<<"${final_rerun_current_head_reviews}" >/dev/null
           current_review="$(gh api \
             "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews/${REVIEW_ID}")"
-          test "$(jq -er .commit_id <<<"${current_review}")" = "${HEAD_SHA}"
-          test "$(jq -er .submitted_at <<<"${current_review}")" = \
-            "${REVIEW_SUBMITTED_AT}"
+          bound_review_is_usable <<<"${current_review}"
           if [ "${EVIDENCE_COMMENT_ID}" -gt 0 ] \
             && ! has_live_write_permission "${EVIDENCE_COMMENT_AUTHOR}"; then
             echo "Evidence reply author lost current write permission before verifier rerun." >&2
@@ -1322,12 +1515,19 @@ jobs:
             echo "Dispatch actor lost current write permission before verifier rerun." >&2
             exit 1
           fi
+          if [ "${EVIDENCE_COMMENT_ID}" -gt 0 ]; then
+            final_resolved_threads="$(collect_resolved_threads)"
+            final_resolved_snapshot="$(jq -cS . <<<"${final_resolved_threads}" \
+              | sha256sum | cut -d' ' -f1)"
+            [[ "${final_resolved_snapshot}" =~ ^[0-9a-f]{64}$ ]]
+            if [ "${final_resolved_snapshot}" != "${RESOLVED_THREAD_SNAPSHOT}" ]; then
+              echo "Resolved review-thread evidence changed before verifier rerun; no rerun is authorized." >&2
+              exit 1
+            fi
+          fi
           gh api --method POST \
             "repos/${REPOSITORY}/actions/jobs/${verifier_job_id}/rerun" >/dev/null
           rerun_observed=false
-          # GitHub can acknowledge the job rerun before the incremented run
-          # attempt becomes visible through the Actions API. Observe for at
-          # most 60 seconds, then remain fail-closed.
           for attempt in $(seq 1 30); do
             producer_after="$(gh api \
               "repos/${REPOSITORY}/actions/runs/${producer_run_id}")"
