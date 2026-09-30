@@ -92,7 +92,6 @@ docker run --rm \
   "${trivy_workspace_args[@]}" \
   "$trivy_image" image \
   --cache-dir /tmp/trivy-cache \
-  --timeout 15m0s \
   --scanners vuln \
   --ignore-unfixed \
   "${trivy_ignore_args[@]}" \
@@ -107,7 +106,6 @@ docker run --rm \
   "${trivy_workspace_args[@]}" \
   "$trivy_image" image \
   --cache-dir /tmp/trivy-cache \
-  --timeout 15m0s \
   --scanners vuln,license \
   --format cyclonedx \
   "${trivy_ignore_args[@]}" \

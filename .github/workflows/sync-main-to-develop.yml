@@ -130,6 +130,56 @@ jobs:
           develop_short="$(git rev-parse --short=12 origin/develop)"
           main_sha="$(git rev-parse origin/main)"
           develop_sha="$(git rev-parse origin/develop)"
+          associated_main_pulls="$(gh api --paginate --slurp \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${REPOSITORY}/commits/${main_sha}/pulls?per_page=100")"
+          jq -e '
+            type == "array"
+            and length > 0
+            and all(.[]; type == "array")
+            and all(.[][];
+              type == "object"
+              and (.state | type) == "string"
+              and ((.merged_at == null) or ((.merged_at | type) == "string"))
+              and ((.merge_commit_sha == null) or ((.merge_commit_sha | type) == "string"))
+              and (.title | type) == "string"
+              and (.user | type) == "object"
+              and (.user.login | type) == "string"
+              and (.user.id | type) == "number"
+              and (.user.type | type) == "string"
+              and (.base | type) == "object"
+              and (.base.ref | type) == "string"
+              and (.base.repo | type) == "object"
+              and (.base.repo.full_name | type) == "string"
+              and (.head | type) == "object"
+              and (.head.ref | type) == "string"
+              and (.head.repo | type) == "object"
+              and (.head.repo.full_name | type) == "string")
+          ' <<<"${associated_main_pulls}" >/dev/null
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+          release_sources="$(jq -c \
+            --arg main_sha "${main_sha}" \
+            --arg repository "${REPOSITORY}" \
+            --arg semver "${semver}" '
+              [.[][]
+                | select(.state == "closed" and .merged_at != null)
+                | select(.merge_commit_sha == $main_sha)
+                | select(.user.login == "lightning-it-release-automation[bot]")
+                | select(.user.id == 307565056 and .user.type == "Bot")
+                | select(.base.ref == "main")
+                | select(.base.repo.full_name == $repository)
+                | select(.head.repo.full_name == $repository)
+                | select(.head.ref | startswith("release/v"))
+                | select(.head.ref | ltrimstr("release/v") | test($semver))
+                | select(.title | startswith("Release v"))
+                | select(.title | ltrimstr("Release v") | test($semver))]
+            ' <<<"${associated_main_pulls}")"
+          if [ "$(jq 'length' <<<"${release_sources}")" -eq 1 ]; then
+            echo 'Current main was produced by the collection release controller.'
+            echo 'The release-published back-sync is the single owner of main-to-develop convergence.'
+            exit 0
+          fi
+          test "$(jq 'length' <<<"${release_sources}")" -eq 0
           evidence_path='.lit/main-ancestry.json'
           repository_name="${REPOSITORY#*/}"
           repository_branch_name="${repository_name#.}"
