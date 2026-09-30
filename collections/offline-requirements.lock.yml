@@ -58,10 +58,10 @@ collections:
     sha256: "f91f6f4761cce1cdea052a5e64e22beabb04dcc8f213729d0bc1c2835ab12ebd"
     size: 268821
   - name: lit.foundational
-    version: "1.32.0"
-    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/lit-foundational-1.32.0.tar.gz"
-    sha256: "755e7aac974e833c0f60a0f30e06e75e4dcc24c2b029063cdd7215ff3841dcba"
-    size: 236720
+    version: "1.35.0"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/lit-foundational-1.35.0.tar.gz"
+    sha256: "2fa89ea4b4e1346092d1816e7aa09d513c8440e91c47a33c67d5c54ba451f888"
+    size: 300546
   - name: lit.rhel
     version: "1.17.1"
     url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/lit-rhel-1.17.1.tar.gz"
