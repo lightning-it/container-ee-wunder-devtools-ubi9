@@ -40,6 +40,9 @@ This repository follows the Lightning IT shared release and quality model.
 - Release images are built only from trusted `main` releases.
 - Quay.io credentials are read only by the trusted release workflow.
 - Images are tagged with immutable version tags, git SHA tags, and `latest` for stable `main` releases.
+- The runtime includes the pinned HashiCorp Vault Python client (`hvac`); its
+  `urllib3` dependency is explicitly pinned and vulnerability-scanned before
+  publication.
 - Container validation includes build, start, smoke, healthcheck where applicable, labels, and vulnerability scanning.
 - Every release records the immutable image digest and attaches a CycloneDX SBOM, SLSA provenance statement, checksum manifest, and Sigstore bundle.
 - The immutable GitHub Release contains at least these required consumer-verifiable evidence assets:
