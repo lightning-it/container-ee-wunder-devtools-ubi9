@@ -29,7 +29,7 @@ ARG GO_X_CRYPTO_VERSION=0.55.0
 ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.56.0
 ARG GO_X_TEXT_VERSION=0.39.0
-ARG GO_GRPC_VERSION=1.83.1
+ARG GO_GRPC_VERSION=1.83.2
 ARG ORAS_GO_VERSION=2.6.2
 
 # hadolint ignore=DL3002
@@ -192,7 +192,7 @@ RUN source /usr/local/lib/container-download-verified.sh && \
       --frozen-lockfile --ignore-scripts --strict-peer-dependencies \
       --store-dir /tmp/pnpm-store && \
     for npm_tree in npm npm-website; do \
-      for package in brace-expansion ip-address tar; do \
+      for package in brace-expansion ip-address tar undici; do \
         version="$(/opt/node/bin/node -p \
           'require(process.argv[1]).version' \
           "/opt/node-toolchain/node_modules/${package}/package.json")" && \
@@ -202,10 +202,10 @@ RUN source /usr/local/lib/container-download-verified.sh && \
         test "$(/opt/node/bin/node -p \
           'require(process.argv[1]).version' \
           "/opt/node-toolchain/node_modules/${npm_tree}/node_modules/${package}/package.json")" \
-          = "${version}"; \
+          = "${version}" || exit 1; \
       done; \
     done && \
-    for package in pacote undici; do \
+    for package in pacote; do \
       version="$(/opt/node/bin/node -p \
         'require(process.argv[1]).version' \
         "/opt/node-toolchain/node_modules/${package}/package.json")" && \
@@ -215,7 +215,21 @@ RUN source /usr/local/lib/container-download-verified.sh && \
       test "$(/opt/node/bin/node -p \
         'require(process.argv[1]).version' \
         "/opt/node-toolchain/node_modules/npm-website/node_modules/${package}/package.json")" \
-        = "${version}"; \
+          = "${version}" || exit 1; \
+    done && \
+    undici_version="$(/opt/node/bin/node -p \
+      "require('/opt/node-toolchain/package.json').dependencies.undici")" && \
+    [[ "$undici_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
+    for pnpm_tree in \
+      /opt/node-toolchain/node_modules/pnpm/dist \
+      /opt/node-toolchain/node_modules/pnpm/artifacts/exe/dist; do \
+      rm -rf "${pnpm_tree}/node_modules/undici" && \
+      cp -aL /opt/node-toolchain/node_modules/undici \
+        "${pnpm_tree}/node_modules/undici" && \
+      test "$(/opt/node/bin/node -p \
+        'require(process.argv[1]).version' \
+        "${pnpm_tree}/node_modules/undici/package.json")" \
+        = "${undici_version}" || exit 1; \
     done && \
     rm -rf /opt/node/lib/node_modules/npm && \
     rm -f /opt/node/bin/npm /opt/node/bin/npx /opt/node/bin/pnpm && \

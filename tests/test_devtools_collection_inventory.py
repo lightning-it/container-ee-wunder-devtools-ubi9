@@ -76,9 +76,9 @@ EXPECTED = {
         268821,
     ),
     "lit.foundational": (
-        "1.32.0",
-        "755e7aac974e833c0f60a0f30e06e75e4dcc24c2b029063cdd7215ff3841dcba",
-        236720,
+        "1.35.0",
+        "2fa89ea4b4e1346092d1816e7aa09d513c8440e91c47a33c67d5c54ba451f888",
+        300546,
     ),
     "lit.rhel": (
         "1.17.1",
@@ -179,7 +179,7 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("ARG GO_GRPC_VERSION=1.83.1", dockerfile)
+        self.assertIn("ARG GO_GRPC_VERSION=1.83.2", dockerfile)
         self.assertEqual(
             2,
             dockerfile.count(

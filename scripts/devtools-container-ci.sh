@@ -458,7 +458,7 @@ run_contract_tests() {
       if [ -d tests ] \
         && find tests -type f -name 'test_*.py' -print -quit | grep -q .
       then
-        python3 -m unittest discover -s tests -p 'test_*.py'
+        python3 -B -m unittest discover -s tests -p 'test_*.py'
       fi
       # These probes execute only validators already installed in the image.
       # They never start Copilot or another local AI client, download a runtime,
@@ -547,6 +547,7 @@ run_vulnerability_scan() {
     "${nested_socket_args[@]}" \
     "$trivy_image" image \
       --cache-dir /var/cache/trivy \
+      --timeout 15m0s \
       --scanners vuln \
       --ignore-unfixed \
       ${trivy_ignore_args[@]+"${trivy_ignore_args[@]}"} \
