@@ -32,16 +32,16 @@ case "$target_arch" in
     renovate_default="docker.io/renovate/renovate:43.288.0@sha256:bcde7a061ab42d1ae6d4500769d80727e5694bb889dbcbf1005e9f4e741ab76d"
     trivy_default="docker.io/aquasec/trivy:0.74.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9"
     hadolint_image="docker.io/hadolint/hadolint:v2.15.1@sha256:fdf19d026b54834f88c62774fdf2a61ff3b586a42632e5070674d41a796bfdf3"
-    docker_cli_image="docker.io/library/docker:29-cli@sha256:e650b7a58d7f56be91d4f7be799196380a3bbc1bcbc41f1f4dff1b36ac309e1e"
-    node_image="docker.io/library/node:24-bookworm@sha256:107ceb6ad85808049dccef12414bf17b08eceb299eaf755c0339dc5fc8958d6b"
+    docker_cli_image="docker.io/library/docker:29-cli@sha256:6602978e2be3c20e530e33773b8cadcef5fe998a71a534ee24516f1176973cdf"
+    node_image="docker.io/library/node:24-bookworm@sha256:5a750d3be5e5c80275f8c9a5367c3aed99c2875656590c8d0701c7ee687f5f0a"
     ;;
   arm64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:33ffa3f1ad576165ea9c26f726884defdc411fb1fcb9ccc6a117b2f554ba1723"
     renovate_default="docker.io/renovate/renovate:43.288.0@sha256:63067f15fdb44df7a55a1e65e34df93c8c8dab930677d0a46de8086c6d5b0703"
     trivy_default="docker.io/aquasec/trivy:0.74.0@sha256:55ad20f8a239a3e95427e60b8aaea38788550c18a3f1772976bebf732e6ae166"
     hadolint_image="docker.io/hadolint/hadolint:v2.15.1@sha256:84179f01a1034d34ea470f1808f055f0a02195ba0e0038d097f8384ae878383f"
-    docker_cli_image="docker.io/library/docker:29-cli@sha256:d7ee65bd10b7f794c6bba9ce66cf0ec83f4cb9a606f68b2a804b11ceb00d60cb"
-    node_image="docker.io/library/node:24-bookworm@sha256:b75abb8396290a89c61cfafa80a153b5d660d89c786919cb6745fb0ccc3bb171"
+    docker_cli_image="docker.io/library/docker:29-cli@sha256:f22a431fe849b5cf84d972490b088ccfde70e190af8dae693f8fd0f533fd40fa"
+    node_image="docker.io/library/node:24-bookworm@sha256:91882e0e5959240d4413fc42c180022bbdd09c5491e00e75faa6c100d8d7751b"
     ;;
 esac
 actionlint_image="${ACTIONLINT_IMAGE:-$actionlint_default}"
