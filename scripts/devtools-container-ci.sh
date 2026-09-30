@@ -547,6 +547,7 @@ run_vulnerability_scan() {
     "${nested_socket_args[@]}" \
     "$trivy_image" image \
       --cache-dir /var/cache/trivy \
+      --timeout 15m0s \
       --scanners vuln \
       --ignore-unfixed \
       ${trivy_ignore_args[@]+"${trivy_ignore_args[@]}"} \

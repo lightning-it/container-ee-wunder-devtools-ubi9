@@ -374,6 +374,12 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn("docker buildx build --load", container_ci)
         self.assertIn("--pull", container_ci)
         self.assertIn("--no-cache", container_ci)
+        self.assertIn("--timeout 15m0s", container_ci)
+
+        release_verify = (
+            ROOT / "scripts/devtools-container-release-verify.sh"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(2, release_verify.count("--timeout 15m0s"))
 
     def test_documented_boundary_has_no_host_runtime_fallback(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
