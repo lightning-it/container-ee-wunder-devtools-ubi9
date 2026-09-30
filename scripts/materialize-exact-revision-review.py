@@ -287,11 +287,11 @@ def validated_runner_temp() -> Path:
         fail("RUNNER_TEMP must identify an absolute directory.")
     if not runner_temp.is_dir():
         fail("RUNNER_TEMP must identify an existing directory.")
-    directory, _, _ = open_owned_parent_directory(
+    directory = open_owned_parent_directory(
         runner_temp / ".mlx90-runner-temp-anchor",
         "RUNNER_TEMP directory",
         "Protected temporary workspace creation",
-    )
+    )[0]
     cleanup_errors = close_descriptor_after_error(
         directory,
         "Validated RUNNER_TEMP directory",
