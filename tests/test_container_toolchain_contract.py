@@ -192,6 +192,20 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "node_modules/${npm_tree}/node_modules/${package}",
             dockerfile,
         )
+
+        self.assertIn(
+            "ARG CENTOS_STREAM_COMPOSE=CentOS-Stream-9-20260927.0",
+            dockerfile,
+        )
+        for repository in ("BaseOS", "AppStream", "CRB"):
+            self.assertIn(
+                "baseurl=https://composes.stream.centos.org/stream-9/production/"
+                "${CENTOS_STREAM_COMPOSE}/compose/"
+                f"{repository}/\\$basearch/os/",
+                dockerfile,
+            )
+        self.assertNotIn("baseurl=https://mirror.stream.centos.org", dockerfile)
+        self.assertNotIn("metalink=https://mirrors.centos.org", dockerfile)
         self.assertEqual(
             1,
             dockerfile.count("PATH=/opt/java/bin:/opt/node/bin:$PATH"),
