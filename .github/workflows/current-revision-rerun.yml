@@ -755,8 +755,12 @@ jobs:
           # protected non-local workflow URL, exact PR/base/head binding, and
           # unique run are sufficient to identify the only rerunnable job; the
           # second attempt still owns the complete final verification.
+          # GitHub omits organization Required Workflow runs when the REST
+          # list endpoint receives an event filter, even though each returned
+          # run still reports event=pull_request_target. Select by the exact
+          # PR head here and enforce the event below from the response body.
           required_runs_pages="$(gh api --paginate --slurp \
-            "repos/${REPOSITORY}/actions/runs?event=pull_request_target&head_sha=${EXPECTED_HEAD}&per_page=100")"
+            "repos/${REPOSITORY}/actions/runs?head_sha=${EXPECTED_HEAD}&per_page=100")"
           jq -e '
             type == "array"
             and length > 0
