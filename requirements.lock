@@ -469,6 +469,10 @@ humanize==4.16.0 \
     --hash=sha256:353eb2f34c09d098b2880eee8bef21832eae6d174f48c5762fff7e5fcb74d01d \
     --hash=sha256:7dc2244a2f84a4bfb1d36c37bac80cd78e35cdc5c119206d87b018e1445f3a3f
     # via copr-cli
+hvac==2.4.0 \
+    --hash=sha256:008db5efd8c2f77bd37d2368ea5f713edceae1c65f11fd608393179478649e0f \
+    --hash=sha256:e0056ad9064e7923e874e6769015b032580b639e29246f5ab1044f7959c1c7e0
+    # via -r requirements.txt
 identify==2.6.19 \
     --hash=sha256:20e6a87f786f768c092a721ad107fc9df0eb89347be9396cadf3f4abbd1fb78a \
     --hash=sha256:6be5020c38fcb07da56c53733538a3081ea5aa70d36a156f83044bfbf9173842
@@ -1127,6 +1131,7 @@ requests==2.34.2 \
     #   -r requirements.txt
     #   copr
     #   docker
+    #   hvac
     #   requests-toolbelt
     #   requests-unixsocket
 requests-toolbelt==1.0.0 \
@@ -1350,10 +1355,11 @@ typing-inspection==0.4.2 \
     --hash=sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7 \
     --hash=sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464
     # via pydantic
-urllib3==2.7.0 \
-    --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
-    --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
+urllib3==2.8.0 \
+    --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
+    --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63
     # via
+    #   -r requirements.txt
     #   docker
     #   requests
 uv==0.12.5 \
