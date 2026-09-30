@@ -13,7 +13,22 @@
   "schedule": [],
   "rebaseWhen": "behind-base-branch",
   "prConcurrentLimit": 5,
+  "customDatasources": {
+    "centosStream9ProductionCompose": {
+      "defaultRegistryUrlTemplate": "https://composes.stream.centos.org/stream-9/production/",
+      "format": "html"
+    }
+  },
   "customManagers": [
+    {
+      "customType": "regex",
+      "description": "CentOS Stream 9 production compose pin in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+CENTOS_STREAM_COMPOSE=CentOS-Stream-9-(?<currentValue>[0-9]{8}\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "custom.centosStream9ProductionCompose",
+      "depNameTemplate": "centos-stream-9-production-compose",
+      "versioningTemplate": "loose"
+    },
     {
       "customType": "regex",
       "description": "pip version pin in Dockerfile",
@@ -159,6 +174,12 @@
     }
   ],
   "packageRules": [
+    {
+      "description": "Extract dated CentOS Stream 9 production compose versions",
+      "matchDatasources": ["custom.centosStream9ProductionCompose"],
+      "extractVersion": "^CentOS-Stream-9-(?<version>[0-9]{8}\\.[0-9]+)/$",
+      "schedule": ["before 5am on monday"]
+    },
     {
       "description": "Do not update Renovate configuration dependencies",
       "matchManagers": ["renovate-config"],
