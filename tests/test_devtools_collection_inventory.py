@@ -179,7 +179,7 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("ARG GO_GRPC_VERSION=1.83.1", dockerfile)
+        self.assertIn("ARG GO_GRPC_VERSION=1.83.2", dockerfile)
         self.assertEqual(
             2,
             dockerfile.count(
