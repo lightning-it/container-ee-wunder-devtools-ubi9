@@ -202,7 +202,7 @@ RUN source /usr/local/lib/container-download-verified.sh && \
         test "$(/opt/node/bin/node -p \
           'require(process.argv[1]).version' \
           "/opt/node-toolchain/node_modules/${npm_tree}/node_modules/${package}/package.json")" \
-          = "${version}"; \
+          = "${version}" || exit 1; \
       done; \
     done && \
     for package in pacote; do \
@@ -215,8 +215,11 @@ RUN source /usr/local/lib/container-download-verified.sh && \
       test "$(/opt/node/bin/node -p \
         'require(process.argv[1]).version' \
         "/opt/node-toolchain/node_modules/npm-website/node_modules/${package}/package.json")" \
-          = "${version}"; \
+          = "${version}" || exit 1; \
     done && \
+    undici_version="$(/opt/node/bin/node -p \
+      "require('/opt/node-toolchain/package.json').dependencies.undici")" && \
+    [[ "$undici_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
     for pnpm_tree in \
       /opt/node-toolchain/node_modules/pnpm/dist \
       /opt/node-toolchain/node_modules/pnpm/artifacts/exe/dist; do \
@@ -225,7 +228,8 @@ RUN source /usr/local/lib/container-download-verified.sh && \
         "${pnpm_tree}/node_modules/undici" && \
       test "$(/opt/node/bin/node -p \
         'require(process.argv[1]).version' \
-        "${pnpm_tree}/node_modules/undici/package.json")" = "6.28.1"; \
+        "${pnpm_tree}/node_modules/undici/package.json")" \
+        = "${undici_version}" || exit 1; \
     done && \
     rm -rf /opt/node/lib/node_modules/npm && \
     rm -f /opt/node/bin/npm /opt/node/bin/npx /opt/node/bin/pnpm && \

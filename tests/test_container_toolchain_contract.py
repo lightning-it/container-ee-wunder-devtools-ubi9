@@ -170,9 +170,15 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "node_modules/npm-website/node_modules/${package}", dockerfile
         )
         self.assertIn("for pnpm_tree in", dockerfile)
-        self.assertIn("node_modules/pnpm/dist", dockerfile)
-        self.assertIn("node_modules/pnpm/artifacts/exe/dist", dockerfile)
-        self.assertIn('= "6.28.1"', dockerfile)
+        for bundled_path in (
+            "node_modules/pnpm/dist",
+            "node_modules/pnpm/artifacts/exe/dist",
+        ):
+            self.assertIn(bundled_path, dockerfile)
+        self.assertIn("dependencies.undici", dockerfile)
+        self.assertIn('= "${undici_version}" || exit 1', dockerfile)
+        self.assertNotIn('= "6.28.1"', dockerfile)
+        self.assertGreaterEqual(dockerfile.count("|| exit 1;"), 3)
         self.assertEqual(1440, pnpm_workspace["minimumReleaseAge"])
         self.assertTrue(pnpm_workspace["minimumReleaseAgeStrict"])
         self.assertFalse(pnpm_workspace["trustLockfile"])
