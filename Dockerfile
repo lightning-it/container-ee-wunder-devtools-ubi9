@@ -192,7 +192,7 @@ RUN source /usr/local/lib/container-download-verified.sh && \
       --frozen-lockfile --ignore-scripts --strict-peer-dependencies \
       --store-dir /tmp/pnpm-store && \
     for npm_tree in npm npm-website; do \
-      for package in brace-expansion ip-address tar; do \
+      for package in brace-expansion ip-address tar undici; do \
         version="$(/opt/node/bin/node -p \
           'require(process.argv[1]).version' \
           "/opt/node-toolchain/node_modules/${package}/package.json")" && \
@@ -205,7 +205,7 @@ RUN source /usr/local/lib/container-download-verified.sh && \
           = "${version}"; \
       done; \
     done && \
-    for package in pacote undici; do \
+    for package in pacote; do \
       version="$(/opt/node/bin/node -p \
         'require(process.argv[1]).version' \
         "/opt/node-toolchain/node_modules/${package}/package.json")" && \

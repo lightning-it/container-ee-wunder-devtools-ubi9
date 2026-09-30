@@ -158,7 +158,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
         for package, version in expected_security_versions.items():
             self.assertEqual(version, container_package["dependencies"][package])
             self.assertEqual(version, pnpm_workspace["overrides"][package])
-        for package in ("brace-expansion", "ip-address", "tar"):
+        for package in ("brace-expansion", "ip-address", "tar", "undici"):
             version = container_package["dependencies"][package]
             self.assertRegex(version, r"^\d+\.\d+\.\d+$")
             self.assertEqual(version, pnpm_workspace["overrides"][package])
