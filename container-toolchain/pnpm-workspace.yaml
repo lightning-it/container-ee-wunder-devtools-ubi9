@@ -11,10 +11,13 @@ verifyStoreIntegrity: true
 strictStorePkgContentCheck: true
 overrides:
   adm-zip: 0.6.1
-  brace-expansion: 5.0.11
+  brace-expansion: 5.0.12
   ip-address: 10.5.0
   js-yaml: 4.3.2
   pacote: 21.5.1
   smol-toml: 1.7.1
   tar: 7.5.22
   undici: 6.28.1
+minimumReleaseAgeExclude:
+  # Renovate security update: brace-expansion@5.0.12
+  - brace-expansion@5.0.12
