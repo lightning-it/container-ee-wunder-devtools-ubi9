@@ -104,6 +104,21 @@ class ContainerToolchainContractTests(unittest.TestCase):
                 f"{requirement.name} lock version {locked_version} must satisfy "
                 f"the direct constraint {requirement.specifier}",
             )
+        self.assertIn(
+            "hvac",
+            direct_requirements,
+            "the controller EE must declare the HashiCorp Vault client directly",
+        )
+        self.assertEqual(
+            Version("2.4.0"),
+            locked_versions.get("hvac"),
+            "the controller EE must include the pinned HashiCorp Vault client",
+        )
+        self.assertEqual(
+            Version("2.8.0"),
+            locked_versions.get("urllib3"),
+            "the controller EE must retain the fixed urllib3 release",
+        )
         for name in ("renovate", "markdownlint-cli2", "prettier"):
             version = container_package["dependencies"][name]
             self.assertRegex(version, r"^\d+\.\d+\.\d+$")
@@ -129,7 +144,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2",
             "ARG GO_VERSION=1.26.7",
             "ARG GO_X_MOD_VERSION=0.40.0",
-            "ARG GO_GRPC_VERSION=1.83.1",
+            "ARG GO_GRPC_VERSION=1.83.2",
             "ARG TF_SOURCE_COMMIT=87488977e32a400445e0c0b4d95c0713a5eee941",
             "ARG TF_SOURCE_SHA256=b4036b35e69a57e4a4b83bafba337a5c8e3ab2c0b1812df92528dec0958ed61e",
             "ARG DOCKER_SOURCE_COMMIT=a7dcaa6fdb6ed04aacbfdc76357fdae01605609e",
@@ -148,21 +163,37 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertNotIn("ARG PNPM_VERSION=", dockerfile)
         self.assertIn("dependencies.pnpm", dockerfile)
         self.assertIn('corepack "pnpm@${pnpm_version}" install', dockerfile)
-        self.assertEqual(
-            "5.3.0",
-            pnpm_workspace["overrides"]["markdownlint-cli2>js-yaml"],
-        )
-        for package in ("brace-expansion", "ip-address", "tar"):
+        expected_security_versions = {
+            "adm-zip": "0.6.1",
+            "brace-expansion": "5.0.11",
+            "js-yaml": "4.3.2",
+            "smol-toml": "1.7.1",
+            "undici": "6.28.1",
+        }
+        for package, version in expected_security_versions.items():
+            self.assertEqual(version, container_package["dependencies"][package])
+            self.assertEqual(version, pnpm_workspace["overrides"][package])
+        for package in ("brace-expansion", "ip-address", "tar", "undici"):
             version = container_package["dependencies"][package]
             self.assertRegex(version, r"^\d+\.\d+\.\d+$")
             self.assertEqual(version, pnpm_workspace["overrides"][package])
             self.assertIn(package, dockerfile)
-        for package, version in {"pacote": "21.5.1", "undici": "6.27.0"}.items():
+        for package, version in {"pacote": "21.5.1"}.items():
             self.assertEqual(version, container_package["dependencies"][package])
             self.assertEqual(version, pnpm_workspace["overrides"][package])
         self.assertIn(
             "node_modules/npm-website/node_modules/${package}", dockerfile
         )
+        self.assertIn("for pnpm_tree in", dockerfile)
+        for bundled_path in (
+            "node_modules/pnpm/dist",
+            "node_modules/pnpm/artifacts/exe/dist",
+        ):
+            self.assertIn(bundled_path, dockerfile)
+        self.assertIn("dependencies.undici", dockerfile)
+        self.assertIn('= "${undici_version}" || exit 1', dockerfile)
+        self.assertNotIn('= "6.28.1"', dockerfile)
+        self.assertGreaterEqual(dockerfile.count("|| exit 1;"), 3)
         self.assertEqual(1440, pnpm_workspace["minimumReleaseAge"])
         self.assertTrue(pnpm_workspace["minimumReleaseAgeStrict"])
         self.assertFalse(pnpm_workspace["trustLockfile"])
@@ -374,6 +405,16 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn("docker buildx build --load", container_ci)
         self.assertIn("--pull", container_ci)
         self.assertIn("--no-cache", container_ci)
+        self.assertIn("--timeout 15m0s", container_ci)
+        self.assertIn(
+            "python3 -B -m unittest discover -s tests -p 'test_*.py'",
+            container_ci,
+        )
+
+        release_verify = (
+            ROOT / "scripts/devtools-container-release-verify.sh"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(2, release_verify.count("--timeout 15m0s"))
 
     def test_documented_boundary_has_no_host_runtime_fallback(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

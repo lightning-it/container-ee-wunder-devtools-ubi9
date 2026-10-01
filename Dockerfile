@@ -29,7 +29,7 @@ ARG GO_X_CRYPTO_VERSION=0.55.0
 ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.56.0
 ARG GO_X_TEXT_VERSION=0.39.0
-ARG GO_GRPC_VERSION=1.83.1
+ARG GO_GRPC_VERSION=1.83.2
 ARG ORAS_GO_VERSION=2.6.2
 
 # hadolint ignore=DL3002
@@ -192,7 +192,7 @@ RUN source /usr/local/lib/container-download-verified.sh && \
       --frozen-lockfile --ignore-scripts --strict-peer-dependencies \
       --store-dir /tmp/pnpm-store && \
     for npm_tree in npm npm-website; do \
-      for package in brace-expansion ip-address tar; do \
+      for package in brace-expansion ip-address tar undici; do \
         version="$(/opt/node/bin/node -p \
           'require(process.argv[1]).version' \
           "/opt/node-toolchain/node_modules/${package}/package.json")" && \
@@ -202,10 +202,10 @@ RUN source /usr/local/lib/container-download-verified.sh && \
         test "$(/opt/node/bin/node -p \
           'require(process.argv[1]).version' \
           "/opt/node-toolchain/node_modules/${npm_tree}/node_modules/${package}/package.json")" \
-          = "${version}"; \
+          = "${version}" || exit 1; \
       done; \
     done && \
-    for package in pacote undici; do \
+    for package in pacote; do \
       version="$(/opt/node/bin/node -p \
         'require(process.argv[1]).version' \
         "/opt/node-toolchain/node_modules/${package}/package.json")" && \
@@ -215,7 +215,21 @@ RUN source /usr/local/lib/container-download-verified.sh && \
       test "$(/opt/node/bin/node -p \
         'require(process.argv[1]).version' \
         "/opt/node-toolchain/node_modules/npm-website/node_modules/${package}/package.json")" \
-        = "${version}"; \
+          = "${version}" || exit 1; \
+    done && \
+    undici_version="$(/opt/node/bin/node -p \
+      "require('/opt/node-toolchain/package.json').dependencies.undici")" && \
+    [[ "$undici_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
+    for pnpm_tree in \
+      /opt/node-toolchain/node_modules/pnpm/dist \
+      /opt/node-toolchain/node_modules/pnpm/artifacts/exe/dist; do \
+      rm -rf "${pnpm_tree}/node_modules/undici" && \
+      cp -aL /opt/node-toolchain/node_modules/undici \
+        "${pnpm_tree}/node_modules/undici" && \
+      test "$(/opt/node/bin/node -p \
+        'require(process.argv[1]).version' \
+        "${pnpm_tree}/node_modules/undici/package.json")" \
+        = "${undici_version}" || exit 1; \
     done && \
     rm -rf /opt/node/lib/node_modules/npm && \
     rm -f /opt/node/bin/npm /opt/node/bin/npx /opt/node/bin/pnpm && \
@@ -409,34 +423,35 @@ LABEL org.opencontainers.image.source="https://github.com/lightning-it/container
 
 ARG ANSIBLE_CORE_VERSION=2.21.1
 ARG PIP_VERSION=25.3
-ARG CENTOS_STREAM_VERSION=9-stream
+ARG CENTOS_STREAM_COMPOSE=CentOS-Stream-9-20260927.0
 
 USER 0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Base tools you *actually* need at runtime.
-# UBI 9 does not publish qemu-img/libguestfs packages. Use a narrow CentOS
-# Stream 9 overlay only for VM image tooling so public GitHub builds do not
-# depend on RHEL host entitlement.
+# UBI 9 does not publish qemu-img/libguestfs packages. Use one immutable,
+# official CentOS Stream 9 production compose only for VM image tooling so
+# public GitHub builds neither depend on RHEL host entitlement nor race mutable
+# mirror metadata.
 RUN dnf -y update && \
     printf '%s\n' \
-      "[centos-stream-${CENTOS_STREAM_VERSION}-baseos]" \
-      "name=CentOS Stream ${CENTOS_STREAM_VERSION} BaseOS" \
-      "baseurl=https://mirror.stream.centos.org/${CENTOS_STREAM_VERSION}/BaseOS/\$basearch/os/" \
+      "[centos-stream-compose-baseos]" \
+      "name=CentOS Stream 9 immutable production compose BaseOS" \
+      "baseurl=https://composes.stream.centos.org/stream-9/production/${CENTOS_STREAM_COMPOSE}/compose/BaseOS/\$basearch/os/" \
       "enabled=0" \
       "gpgcheck=1" \
       "gpgkey=https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official" \
       "" \
-      "[centos-stream-${CENTOS_STREAM_VERSION}-appstream]" \
-      "name=CentOS Stream ${CENTOS_STREAM_VERSION} AppStream" \
-      "baseurl=https://mirror.stream.centos.org/${CENTOS_STREAM_VERSION}/AppStream/\$basearch/os/" \
+      "[centos-stream-compose-appstream]" \
+      "name=CentOS Stream 9 immutable production compose AppStream" \
+      "baseurl=https://composes.stream.centos.org/stream-9/production/${CENTOS_STREAM_COMPOSE}/compose/AppStream/\$basearch/os/" \
       "enabled=0" \
       "gpgcheck=1" \
       "gpgkey=https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official" \
       "" \
-      "[centos-stream-${CENTOS_STREAM_VERSION}-crb]" \
-      "name=CentOS Stream ${CENTOS_STREAM_VERSION} CRB" \
-      "baseurl=https://mirror.stream.centos.org/${CENTOS_STREAM_VERSION}/CRB/\$basearch/os/" \
+      "[centos-stream-compose-crb]" \
+      "name=CentOS Stream 9 immutable production compose CRB" \
+      "baseurl=https://composes.stream.centos.org/stream-9/production/${CENTOS_STREAM_COMPOSE}/compose/CRB/\$basearch/os/" \
       "enabled=0" \
       "gpgcheck=1" \
       "gpgkey=https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official" \
@@ -445,9 +460,9 @@ RUN dnf -y update && \
       bash git openssh-clients rsync which findutils ca-certificates \
       rpm-build && \
     dnf -y install --allowerasing --setopt=install_weak_deps=False \
-      --enablerepo="centos-stream-${CENTOS_STREAM_VERSION}-baseos" \
-      --enablerepo="centos-stream-${CENTOS_STREAM_VERSION}-appstream" \
-      --enablerepo="centos-stream-${CENTOS_STREAM_VERSION}-crb" \
+      --enablerepo="centos-stream-compose-baseos" \
+      --enablerepo="centos-stream-compose-appstream" \
+      --enablerepo="centos-stream-compose-crb" \
       qemu-img guestfs-tools libguestfs && \
     old_node_rpms=() && \
     for package in nodejs nodejs-docs nodejs-full-i18n nodejs-libs npm; do \
