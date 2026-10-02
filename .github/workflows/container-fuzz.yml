@@ -33,6 +33,7 @@ permissions:
 
 jobs:
   fuzz:
+    timeout-minutes: 90
     name: fast-check container policy fuzzing
     runs-on: ubuntu-latest
     permissions:

@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   scorecard:
+    timeout-minutes: 60
     name: OpenSSF Scorecard
     runs-on: ubuntu-24.04
     permissions:
@@ -46,6 +47,7 @@ jobs:
           if-no-files-found: error
 
   upload-sarif:
+    timeout-minutes: 10
     name: Upload Scorecard SARIF
     runs-on: ubuntu-24.04
     needs: scorecard
