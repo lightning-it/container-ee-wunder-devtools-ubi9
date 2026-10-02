@@ -5,8 +5,7 @@
 ---
 name: Protected Exact-Revision Codex review
 run-name: >-
-  Exact-Revision Codex PR #${{ inputs.pr_number }}
-  ${{ inputs.expected_base }}..${{ inputs.expected_head }}
+  ${{ inputs.bounded_mode == 'unit' && format('Bounded review unit {0}:{1}:{2}', inputs.bounded_parent_run_id, inputs.bounded_ordinal, inputs.bounded_manifest_sha256) || format('Exact-Revision Codex PR #{0} {1}..{2}', inputs.pr_number, inputs.expected_base, inputs.expected_head) }}
 
 on:
   workflow_dispatch:
@@ -27,13 +26,34 @@ on:
         description: Frozen full pull-request head SHA
         required: true
         type: string
+      bounded_mode:
+        description: Explicit bounded runtime mode; legacy retains the existing review path
+        type: choice
+        default: legacy
+        options: [legacy, parent, unit]
+      bounded_parent_run_id:
+        description: Protected parent run for a bounded unit
+        type: string
+        default: ''
+      bounded_ordinal:
+        description: Zero-based bounded unit ordinal
+        type: string
+        default: ''
+      bounded_manifest_sha256:
+        description: Complete protected coverage manifest digest
+        type: string
+        default: ''
+      bounded_permit_id:
+        description: Native once-only unit permit issued by the parent
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
   group: >-
-    exact-revision-codex-${{ github.repository }}-${{ inputs.pr_number }}-${{ inputs.expected_head }}
+    ${{ inputs.bounded_mode == 'parent' && format('bounded-review-parent-{0}', github.repository) || inputs.bounded_mode == 'unit' && format('bounded-review-worker-{0}', github.repository) || format('exact-revision-codex-{0}-{1}-{2}', github.repository, inputs.pr_number, inputs.expected_head) }}
   cancel-in-progress: false
 
 # The workflow is accepted only as a Release-App-authenticated dispatch from the
@@ -73,7 +93,7 @@ jobs:
       contents: read
       pull-requests: read
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: ${{ inputs.bounded_mode == 'parent' && 55 || 25 }}
 
     env:
       BASE_REF: ${{ inputs.base_ref }}
@@ -85,6 +105,11 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       TRIGGER: app_dispatch
       TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      BOUNDED_MODE: ${{ inputs.bounded_mode || 'legacy' }}
+      BOUNDED_PARENT_RUN_ID: ${{ inputs.bounded_parent_run_id }}
+      BOUNDED_ORDINAL: ${{ inputs.bounded_ordinal }}
+      BOUNDED_MANIFEST_SHA256: ${{ inputs.bounded_manifest_sha256 }}
+      BOUNDED_PERMIT_ID: ${{ inputs.bounded_permit_id }}
 
     steps:
       - name: Load the complete protected review-asset closure
@@ -101,6 +126,16 @@ jobs:
           test "${DISPATCH_BASE_SHA}" = "${EXPECTED_BASE}"
           test "${TRUSTED_WORKFLOW_SHA}" = "${EXPECTED_BASE}"
           test "${TRUSTED_WORKFLOW_SHA}" = "${DISPATCH_BASE_SHA}"
+          bounded_args=()
+          case "${BOUNDED_MODE}" in
+            legacy) ;;
+            parent|unit)
+              test "${REPOSITORY}" = lightning-it/shared-assets-lit
+              test "${BASE_REF}" = develop
+              bounded_args=(--bounded-runtime)
+              ;;
+            *) exit 1 ;;
+          esac
           install -d -m 0700 trusted-controller
           load_protected_asset() {
             local destination path payload
@@ -126,7 +161,17 @@ jobs:
             scripts/materialize-exact-revision-review.py \
             trusted-controller/materialize.py
           chmod 0500 trusted-controller/materialize.py
-          python3 trusted-controller/materialize.py materialize \
+          if [ "${BOUNDED_MODE}" != legacy ]; then
+            for asset in \
+              bounded_review.py bounded_review_store.py bounded_review_provider.py \
+              bounded_review_transport.py bounded_review_runtime.py bounded_review_jobs.py \
+              bounded_review_dispatch.py bounded_review_gateway.py bounded_review_admission.py \
+              bounded_review_config.py bounded_review_controller.py materialize-exact-revision-review.py; do
+              load_protected_asset "scripts/${asset}" "trusted-controller/${asset}"
+              chmod 0400 "trusted-controller/${asset}"
+            done
+          fi
+          python3 trusted-controller/materialize.py materialize "${bounded_args[@]}" \
             --repository "${REPOSITORY}" \
             --pull-request "${PR_NUMBER}" \
             --base-ref "${BASE_REF}" \
@@ -153,6 +198,9 @@ jobs:
             trusted-controller/copilot-review.yml
           test -s exact-revision-review/review-prompt.md
           jq -e '.type == "object"' exact-revision-review/review-schema.json >/dev/null
+          if [ "${BOUNDED_MODE}" != legacy ]; then
+            python3 trusted-controller/bounded_review_controller.py prepare
+          fi
           python3 trusted-controller/materialize.py bind-assets \
             --repository "${REPOSITORY}" \
             --pull-request "${PR_NUMBER}" \
@@ -179,6 +227,7 @@ jobs:
             trusted-controller/workflow.yml
 
       - name: Reserve one immutable review input or reuse its protected PASS
+        if: inputs.bounded_mode != 'unit'
         id: dedupe
         env:
           GH_TOKEN: ${{ github.token }}
@@ -501,6 +550,7 @@ jobs:
             ' <<<"${reservation}" >/dev/null
 
       - name: Reserve neutral result before protected review
+        if: inputs.bounded_mode != 'unit'
         id: neutral
         env:
           GH_TOKEN: ${{ github.token }}
@@ -655,20 +705,94 @@ jobs:
               and .output.summary == $summary
             ' <<<"${created}" >/dev/null
 
+      - name: Reserve global bounded-review admission
+        if: inputs.bounded_mode == 'parent' && steps.dedupe.outputs.reuse != 'true'
+        id: bounded-admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOUNDED_INPUT_CHECK_ID: ${{ steps.dedupe.outputs.check_id }}
+        run: python3 trusted-controller/bounded_review_controller.py admit
+
+      - name: Mint bounded unit dispatch token
+        if: inputs.bounded_mode == 'parent' && steps.dedupe.outputs.reuse != 'true'
+        id: bounded-dispatch-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: write
+          permission-contents: read
+
+      - name: Review bounded units serially
+        if: inputs.bounded_mode == 'parent' && steps.dedupe.outputs.reuse != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOUNDED_DISPATCH_TOKEN: ${{ steps.bounded-dispatch-app.outputs.token }}
+        run: python3 trusted-controller/bounded_review_controller.py units
+
+      - name: Install the protected bounded subject gateway
+        if: inputs.bounded_mode != 'legacy' && inputs.bounded_mode != '' && steps.dedupe.outputs.reuse != 'true'
+        id: bounded-subject
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 trusted-controller/bounded_review_controller.py subject
+          sudo -n python3 -E -s trusted-controller/bounded_review_controller.py install
+          root="/run/bounded-review-${GITHUB_RUN_ID}"
+          port="$(jq -er .port "${root}/public/port.json")"
+          [[ "${port}" =~ ^[1-9][0-9]*$ ]]
+          {
+            echo "endpoint=http://127.0.0.1:${port}/responses"
+            echo "prompt=${root}/public/prompt.md"
+            echo "schema=${root}/public/schema.json"
+            echo "directory=${root}/public"
+            echo "installed=true"
+          } >>"${GITHUB_OUTPUT}"
+
       - name: Run protected history-free Exact-Revision Codex review
         if: steps.dedupe.outputs.reuse != 'true'
         uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: exact-revision-review/review-prompt.md
+          responses-api-endpoint: ${{ steps.bounded-subject.outputs.endpoint }}
+          codex-version: ${{ steps.bounded-subject.outputs.installed == 'true' && '0.160.0' || '' }}
+          model: ${{ steps.bounded-subject.outputs.installed == 'true' && 'gpt-5.4-mini-2026-03-17' || '' }}
+          effort: ${{ steps.bounded-subject.outputs.installed == 'true' && 'high' || '' }}
+          prompt-file: ${{ steps.bounded-subject.outputs.prompt || 'exact-revision-review/review-prompt.md' }}
           output-file: exact-revision-review/result.json
-          output-schema-file: exact-revision-review/review-schema.json
-          working-directory: exact-revision-review
+          output-schema-file: ${{ steps.bounded-subject.outputs.schema || 'exact-revision-review/review-schema.json' }}
+          working-directory: ${{ steps.bounded-subject.outputs.directory || 'exact-revision-review' }}
           permission-profile: :read-only
           safety-strategy: drop-sudo
-          codex-args: '["--ephemeral"]'
+          codex-args: >-
+            ${{ steps.bounded-subject.outputs.installed == 'true' && '["--ephemeral","-c","web_search=\"disabled\""]' || '["--ephemeral"]' }}
           allow-bots: "true"
           allow-bot-users: lightning-it-release-automation
+
+      - name: Collect the protected bounded subject receipt
+        if: always() && steps.bounded-subject.outputs.installed == 'true'
+        id: bounded-collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 "/run/bounded-review-${GITHUB_RUN_ID}/code/bounded_review_controller.py" collect
+
+      - name: Finalize the protected bounded subject
+        if: inputs.bounded_mode != 'legacy' && steps.dedupe.outputs.reuse != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 "/run/bounded-review-${GITHUB_RUN_ID}/code/bounded_review_controller.py" finalize
+
+      - name: Publish bounded coverage and provider accounting
+        if: inputs.bounded_mode == 'parent' && steps.dedupe.outputs.reuse != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bounded-coverage-${{ github.run_id }}
+          path: bounded-state/coverage-artifact/coverage.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Re-prove exact revision and enforce the Codex verdict
         env:
@@ -677,6 +801,21 @@ jobs:
           EXPECTED_NEUTRAL_EXTERNAL_ID: ${{ steps.neutral.outputs.external_id }}
         run: |
           set -euo pipefail
+          bounded_args=()
+          if [ "${BOUNDED_MODE}" != legacy ]; then
+            bounded_args=(--bounded-runtime)
+            if [ "${{ steps.dedupe.outputs.reuse }}" = 'true' ]; then
+              python3 trusted-controller/bounded_review_controller.py verify
+            else
+              if [ "${BOUNDED_MODE}" = parent ]; then
+                python3 "/run/bounded-review-${GITHUB_RUN_ID}/code/bounded_review_controller.py" published
+              fi
+              python3 "/run/bounded-review-${GITHUB_RUN_ID}/code/bounded_review_controller.py" verify
+            fi
+            if [ "${BOUNDED_MODE}" = unit ]; then
+              exit 0
+            fi
+          fi
           api_patch() {
             local attempt output
             for attempt in $(seq 1 5); do
@@ -691,7 +830,7 @@ jobs:
               sleep 5
             done
           }
-          python3 trusted-controller/materialize.py verify \
+          python3 trusted-controller/materialize.py verify "${bounded_args[@]}" \
             --repository "${REPOSITORY}" \
             --pull-request "${PR_NUMBER}" \
             --base-ref "${BASE_REF}" \
@@ -863,6 +1002,52 @@ jobs:
           done
           test -n "${neutral}"
           test -n "${completed_at}"
+
+      - name: Publish bound unit receipt
+        if: always() && inputs.bounded_mode == 'unit' && steps.bounded-collect.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bounded-review-${{ inputs.bounded_manifest_sha256 }}-${{ inputs.bounded_ordinal }}
+          path: |
+            /run/bounded-review-${{ github.run_id }}/public/bounded-review-receipt.json
+            /run/bounded-review-${{ github.run_id }}/public/failure.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Prepare bounded controller settlement
+        if: always() && inputs.bounded_mode == 'parent' && steps.bounded-admission.outcome == 'success'
+        id: bounded-settlement
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          controller=trusted-controller/bounded_review_controller.py
+          if [ -e "/run/bounded-review-${GITHUB_RUN_ID}/code/bounded_review_controller.py" ]; then
+            controller="/run/bounded-review-${GITHUB_RUN_ID}/code/bounded_review_controller.py"
+          fi
+          python3 "${controller}" settlement
+
+      - name: Publish bounded controller receipt
+        if: always() && steps.bounded-settlement.outcome == 'success'
+        id: bounded-publisher
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bounded-controller-${{ github.run_id }}
+          path: bounded-state/controller-artifact/controller-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Release proven bounded controller reservation
+        if: always() && steps.bounded-publisher.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          controller=trusted-controller/bounded_review_controller.py
+          if [ -e "/run/bounded-review-${GITHUB_RUN_ID}/code/bounded_review_controller.py" ]; then
+            controller="/run/bounded-review-${GITHUB_RUN_ID}/code/bounded_review_controller.py"
+          fi
+          python3 "${controller}" release
 
       - name: Fail-close an unfinished protected reservation
         if: >-
@@ -1066,7 +1251,7 @@ jobs:
   request-protected-verifier-reevaluation:
     name: Request protected verifier re-evaluation
     needs: exact-revision-codex-review
-    if: needs.exact-revision-codex-review.result == 'success'
+    if: inputs.bounded_mode != 'unit' && needs.exact-revision-codex-review.result == 'success'
     permissions:
       actions: write
       contents: read

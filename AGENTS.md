@@ -1,5 +1,51 @@
 # AGENTS.md
 
+<!-- LIT REP-40 delivery efficiency: start -->
+
+## AI delivery efficiency contract (mandatory)
+
+- Optimize every task for the smallest safe, usable live result. Keep optional
+  hardening, penetration tests, migrations, and documentation perfection out of
+  the critical path and track them as separate work items.
+- Before editing, state the bounded deliverable, real blockers, stop conditions,
+  and time budget. After 90 minutes without a new usable verified state, stop
+  before creating more work and simplify, split, or escalate the blocker.
+- Collect and deduplicate every known finding for the current head into one
+  correction set. A finding does not automatically justify its own commit,
+  pull request, successor, agent, or full validation run.
+- Run the directly affected suite and workflow first. Run exactly one complete
+  push-ready validation only after those targeted checks pass. Repeat the full
+  validation only after it found a concrete defect, that defect was corrected,
+  and the correction was reproduced by the targeted check.
+- Re-read mutable state exactly once at the final mutation boundary. Remove
+  duplicate full validation that does not add an independent security property.
+- A stale head or run must stop immediately as `stale / not applicable`; it must
+  not continue polling, request another review, publish evidence, or consume
+  runner time for an obsolete revision.
+- Move large inline workflow programs into small separately linted and tested
+  scripts when a linter exceeds 60 seconds, exhibits path explosion, or the
+  security boundary can no longer be tested locally.
+- Keep at most one active implementation pull request per goal. Where the
+  governing workflow permits successor heads, two consecutive reviewed heads
+  with new correction findings exhaust the normal correction budget; do not
+  create another equivalent successor without simplifying or splitting the
+  design and recording the new bounded work item.
+- Deterministic checks, formatting, inventory, and polling must not invoke AI.
+  Use the least expensive model and reasoning level that is sufficient; reserve
+  higher reasoning for new architecture, security, or root-cause decisions.
+- Measure success by lead time to a usable merge, runner minutes, AI/token cost,
+  number of reviewed heads, and new verified state—not by turns, artifacts, or
+  apparent activity.
+- This contract never permits bypass, force/direct push, manual rerun, fabricated
+  evidence, or weaker required checks. The Exact-Revision textual review-unit
+  boundary remains `1..199999` bytes unless a separate benchmarked ADR changes it.
+
+Authority: [LIT-ENG-ADR-REP-40](https://wiki.cloud.l-it.io/wiki/spaces/LIT/pages/2878440201),
+Amendment 2026-09-12. Delivery and fleet rollout are tracked in LI-206; stale-run
+termination is tracked in LI-204.
+
+<!-- LIT REP-40 delivery efficiency: end -->
+
 ## Shared-assets ownership
 
 - This repository receives centrally managed baseline files from `lightning-it/shared-assets-lit`.
