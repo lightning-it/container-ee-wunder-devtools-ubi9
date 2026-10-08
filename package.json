@@ -21,6 +21,8 @@
       "undici": "6.28.1"
     },
     "js-yaml": "4.3.2",
+    "simple-git": "4.0.2",
+    "@simple-git/argv-parser": "2.0.1",
     "npm": "11.19.1"
   },
   "private": true,
