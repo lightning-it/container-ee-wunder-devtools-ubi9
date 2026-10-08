@@ -7,7 +7,6 @@
     "conventional-changelog-conventionalcommits": "9.3.1",
     "fast-check": "4.9.0",
     "markdownlint-cli2": "0.23.2",
-    "renovate": "43.288.0",
     "semantic-release": "^25.0.0"
   },
   "overrides": {
@@ -21,8 +20,6 @@
       "undici": "6.28.1"
     },
     "js-yaml": "4.3.2",
-    "simple-git": "4.0.2",
-    "@simple-git/argv-parser": "2.0.1",
     "npm": "11.19.1"
   },
   "private": true,

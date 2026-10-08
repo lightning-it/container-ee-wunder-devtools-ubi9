@@ -40,6 +40,7 @@ COPY scripts/container-download-verified.sh /usr/local/lib/container-download-ve
 COPY scripts/container-build-go-tool.sh /usr/local/lib/container-build-go-tool.sh
 COPY scripts/container-build-compose.sh /usr/local/lib/container-build-compose.sh
 COPY container-toolchain/package.json container-toolchain/pnpm-lock.yaml container-toolchain/pnpm-workspace.yaml /opt/node-toolchain/
+COPY container-toolchain/patches/renovate@43.288.0.patch /opt/node-toolchain/patches/renovate@43.288.0.patch
 
 RUN dnf -y update && \
     dnf -y install --allowerasing ca-certificates curl tar xz && \
@@ -487,6 +488,7 @@ COPY --from=tools /opt/node-toolchain /opt/node-toolchain
 COPY --from=vnu-builder /opt/vnu/vnu.jar /opt/vnu/vnu.jar
 COPY --from=vnu-builder /opt/java /opt/java
 COPY scripts/devtools-node-selector.sh /usr/local/bin/devtools-node-selector.sh
+COPY scripts/verify-renovate-git-runtime.mjs /usr/local/lib/verify-renovate-git-runtime.mjs
 COPY scripts/vnu /usr/local/bin/vnu
 ENV JAVA_HOME=/opt/java \
     PATH=/opt/java/bin:/opt/node/bin:$PATH
@@ -510,6 +512,7 @@ RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     shellcheck --version && actionlint --version && pre-commit --version && \
     ruff --version && mypy --version && uv --version && \
     renovate-config-validator --version && \
+    node /usr/local/lib/verify-renovate-git-runtime.mjs && \
     markdownlint-cli2 --version && prettier --version && pnpm --version && \
     java -version && vnu --version && \
     helm version --short && gh --version && \

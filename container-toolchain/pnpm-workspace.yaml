@@ -20,3 +20,5 @@ overrides:
   smol-toml: 1.7.1
   tar: 7.5.22
   undici: 6.28.1
+patchedDependencies:
+  renovate@43.288.0: patches/renovate@43.288.0.patch

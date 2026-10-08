@@ -16,6 +16,9 @@ overrides:
   tar: 7.5.22
   undici: 6.28.1
 
+patchedDependencies:
+  renovate@43.288.0: 5b07f0494279b32bdaf562625810a3d9ae608b56aea0b8eeb83c4ee510ae753c
+
 importers:
 
   .:
@@ -52,7 +55,7 @@ importers:
         version: 3.9.6
       renovate:
         specifier: 43.288.0
-        version: 43.288.0(supports-color@7.2.0)(typanion@3.14.0)
+        version: 43.288.0(patch_hash=5b07f0494279b32bdaf562625810a3d9ae608b56aea0b8eeb83c4ee510ae753c)(supports-color@7.2.0)(typanion@3.14.0)
       smol-toml:
         specifier: 1.7.1
         version: 1.7.1
@@ -5423,7 +5426,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  renovate@43.288.0(supports-color@7.2.0)(typanion@3.14.0):
+  renovate@43.288.0(patch_hash=5b07f0494279b32bdaf562625810a3d9ae608b56aea0b8eeb83c4ee510ae753c)(supports-color@7.2.0)(typanion@3.14.0):
     dependencies:
       '@aws-sdk/client-codecommit': 3.1075.0
       '@aws-sdk/client-ec2': 3.1075.0
