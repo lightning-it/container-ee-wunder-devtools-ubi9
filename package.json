@@ -7,6 +7,7 @@
     "conventional-changelog-conventionalcommits": "9.3.1",
     "fast-check": "4.9.0",
     "markdownlint-cli2": "0.23.2",
+    "renovate": "43.288.0",
     "semantic-release": "^25.0.0"
   },
   "overrides": {
