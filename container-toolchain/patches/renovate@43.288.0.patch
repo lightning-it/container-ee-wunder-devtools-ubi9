@@ -1,0 +1,6 @@
+diff --git a/dist/util/git/config.js b/dist/util/git/config.js
+index a6c3cab5fc156954c3c99d029b7fb2e7381bf4c6..96c8acefcbd06688719528e74c148296dcae3ba9 100644
+--- a/dist/util/git/config.js
++++ b/dist/util/git/config.js
+@@ -21,0 +22 @@ function simpleGitConfig() {
++		allowEnvironment: ["GIT_SSH_COMMAND"],
