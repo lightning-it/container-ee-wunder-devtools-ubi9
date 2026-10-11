@@ -59,6 +59,11 @@ class ContainerToolchainContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        pnpm_lock = yaml.safe_load(
+            (ROOT / "container-toolchain/pnpm-lock.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
 
         locked_versions = {}
         for match in re.finditer(
@@ -142,7 +147,10 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ARG VNU_JRE_VERSION=17.0.20_8",
             "ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27",
             "ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2",
-            "ARG GO_VERSION=1.26.7",
+            "ARG GO_VERSION=1.26.9",
+            "ARG GO_X_CRYPTO_VERSION=0.57.0",
+            "ARG GO_X_NET_VERSION=0.60.0",
+            "ARG GO_X_TEXT_VERSION=0.42.0",
             "ARG GO_X_MOD_VERSION=0.40.0",
             "ARG GO_GRPC_VERSION=1.83.2",
             "ARG TF_SOURCE_COMMIT=87488977e32a400445e0c0b4d95c0713a5eee941",
@@ -160,6 +168,28 @@ class ContainerToolchainContractTests(unittest.TestCase):
         )
         pnpm_version = container_package["dependencies"]["pnpm"]
         self.assertEqual(f"pnpm@{pnpm_version}", container_package["packageManager"])
+        self.assertEqual("44.145.2", container_package["dependencies"]["renovate"])
+        self.assertEqual(
+            "44.145.2",
+            pnpm_lock["importers"]["."]["dependencies"]["renovate"]["specifier"],
+        )
+        expected_renovate_security_overrides = {
+            "handlebars": "4.7.10",
+            "simple-git": "4.0.2",
+            "@simple-git/argv-parser": "2.0.1",
+        }
+        for package, version in expected_renovate_security_overrides.items():
+            self.assertEqual(version, pnpm_workspace["overrides"][package])
+            self.assertEqual(version, pnpm_lock["overrides"][package])
+            self.assertIn(f"{package}@{version}", pnpm_lock["packages"])
+            self.assertTrue(
+                any(
+                    snapshot == f"{package}@{version}"
+                    or snapshot.startswith(f"{package}@{version}(")
+                    for snapshot in pnpm_lock["snapshots"]
+                ),
+                f"pnpm lock must retain the {package}@{version} snapshot",
+            )
         self.assertNotIn("ARG PNPM_VERSION=", dockerfile)
         self.assertIn("dependencies.pnpm", dockerfile)
         self.assertIn('corepack "pnpm@${pnpm_version}" install', dockerfile)
@@ -326,6 +356,24 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "vnu --version",
         ):
             self.assertIn(command, dockerfile)
+        self.assertIn("COPY renovate.json /tmp/renovate.json", dockerfile)
+        self.assertIn(
+            "renovate-config-validator --strict --no-global /tmp/renovate.json",
+            dockerfile,
+        )
+        renovate_copy = "COPY renovate.json /tmp/renovate.json"
+        self.assertEqual(1, dockerfile.count(renovate_copy))
+        self.assertGreater(
+            dockerfile.index(renovate_copy),
+            dockerfile.index("for binary in terraform tflint terraform-docs helm gh"),
+        )
+        self.assertLess(
+            dockerfile.index(renovate_copy),
+            dockerfile.index(
+                "RUN source /usr/local/lib/container-download-verified.sh",
+                dockerfile.index(renovate_copy),
+            ),
+        )
 
         renovate = json.loads((ROOT / "renovate.json").read_text(encoding="utf-8"))
         serialized_managers = json.dumps(renovate["customManagers"])
@@ -336,8 +384,26 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ACTIONLINT_VERSION",
             "COMPOSE_VERSION",
             "BUILDX_VERSION",
+            "GO_X_CRYPTO_VERSION",
+            "GO_X_NET_VERSION",
+            "GO_X_TEXT_VERSION",
         ):
             self.assertIn(version_argument, serialized_managers)
+
+        expected_go_overrides = {
+            "golang.org/x/crypto": "GO_X_CRYPTO_VERSION",
+            "golang.org/x/net": "GO_X_NET_VERSION",
+            "golang.org/x/text": "GO_X_TEXT_VERSION",
+        }
+        for dependency, argument in expected_go_overrides.items():
+            managers = [
+                manager
+                for manager in renovate["customManagers"]
+                if manager.get("depNameTemplate") == dependency
+            ]
+            self.assertEqual(1, len(managers))
+            self.assertEqual("go", managers[0]["datasourceTemplate"])
+            self.assertIn(argument, managers[0]["matchStrings"][0])
         for atomic_or_derived_argument in (
             "GO_VERSION",
             "TF_VERSION",

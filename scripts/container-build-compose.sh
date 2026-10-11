@@ -10,8 +10,8 @@ report_error() {
 }
 trap 'report_error "$LINENO"' ERR
 
-if [ "$#" -ne 6 ]; then
-  echo "usage: $0 <compose-version> <buildx-version> <moby-v2-version> <namesgenerator-sha256> <x-mod-version> <grpc-version>" >&2
+if [ "$#" -ne 7 ]; then
+  echo "usage: $0 <compose-version> <buildx-version> <moby-v2-version> <namesgenerator-sha256> <x-mod-version> <x-net-version> <grpc-version>" >&2
   exit 2
 fi
 
@@ -20,13 +20,15 @@ buildx_version="$2"
 moby_v2_version="$3"
 namesgenerator_sha256="$4"
 x_mod_version="$5"
-grpc_version="$6"
+x_net_version="$6"
+grpc_version="$7"
 
 for coordinate in \
   "$compose_version" \
   "$buildx_version" \
   "$moby_v2_version" \
   "$x_mod_version" \
+  "$x_net_version" \
   "$grpc_version"
 do
   if [[ ! "$coordinate" =~ ^[0-9A-Za-z._+-]+$ ]]; then
@@ -99,6 +101,8 @@ go mod edit "-replace=github.com/docker/buildx=${buildx_build_dir}"
 go mod edit \
   "-replace=golang.org/x/mod=golang.org/x/mod@v${x_mod_version}"
 go mod edit \
+  "-replace=golang.org/x/net=golang.org/x/net@v${x_net_version}"
+go mod edit \
   "-replace=google.golang.org/grpc=google.golang.org/grpc@v${grpc_version}"
 go mod tidy
 if go list -m all | grep -Eq '^github.com/docker/docker([[:space:]]|$)'; then
@@ -129,6 +133,18 @@ effective_grpc_version="$(
 if [ "$effective_grpc_version" != "v${grpc_version}" ]; then
   printf 'ERROR: docker-compose links google.golang.org/grpc %s, expected v%s\n' \
     "${effective_grpc_version:-<missing>}" "$grpc_version" >&2
+  exit 1
+fi
+effective_x_net_version="$(
+  go version -m /out/docker-compose | awk -v module='golang.org/x/net' '
+    $1 == "dep" && $2 == module { version = $3 }
+    $1 == "=>" && $2 == module { version = $3 }
+    END { print version }
+  '
+)"
+if [ "$effective_x_net_version" != "v${x_net_version}" ]; then
+  printf 'ERROR: docker-compose links golang.org/x/net %s, expected v%s\n' \
+    "${effective_x_net_version:-<missing>}" "$x_net_version" >&2
   exit 1
 fi
 
