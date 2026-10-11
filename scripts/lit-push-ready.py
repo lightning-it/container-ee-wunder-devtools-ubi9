@@ -5,6 +5,11 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import codecs
+from collections import namedtuple
+import functools
+import io
+import itertools
 import hashlib
 import json
 import os
@@ -78,8 +83,14 @@ SAFE_PUBLIC_SECRET_ROUTE_PATTERN = re.compile(
     r"(?:en/)?[a-z0-9]+(?:-[a-z0-9]+)*-secrets-"
     r"[a-z0-9]+(?:-[a-z0-9]+)*\.html"
 )
+PEM_KEY_BOUNDARY_PATTERN = re.compile(
+    r"-----(?:BEGIN|END) (?:[A-Z0-9]+ )?PRIVATE KEY-----"
+)
+PEM_KEY_BEGIN_BOUNDARY_PATTERN = re.compile(
+    r"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----"
+)
 SECRET_CONTENT_PATTERNS = (
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    PEM_KEY_BOUNDARY_PATTERN,
     re.compile(
         r"(?i)(?:api[_-]?key|client[_-]?secret|access[_-]?token|password)"
         r"\s*[:=]\s*[\"']?[A-Za-z0-9_./+=-]{16,}"
@@ -97,11 +108,19 @@ SECRET_CONTENT_PATTERNS = (
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
     re.compile(r"(?i)_authToken\s*=\s*[^\s]{12,}"),
 )
+PACKER_VARIABLE_REFERENCE_LINE = re.compile(
+    r"\s*password\s*=\s*var\.[a-z_][a-z0-9_]*\s*",
+)
 NPMRC_AUTH_PATTERN = re.compile(
     r"(?im)(?:^|[+:])\s*(?:_authToken|_auth|_password|username)\s*="
 )
 SECRET_FIXTURE_MANIFEST_PATH = ".lit/push-ready-secret-fixtures.json"
 SECRET_FIXTURE_PATH_PREFIXES = ("examples/", "molecule/", "tests/")
+SYNTHETIC_DOCUMENTATION_PATH_PATTERN = re.compile(
+    r"(?:README\.md|charts/(?:[a-z0-9][a-z0-9-]*/charts/)*"
+    r"[a-z0-9][a-z0-9-]*/"
+    r"(?:README\.md(?:\.gotmpl)?|values\.yaml))"
+)
 MAX_SECRET_FIXTURE_MANIFEST_BYTES = 100_000
 MAX_SECRET_FIXTURE_SOURCE_BYTES = 10_000_000
 INSTRUCTION_PATH_PATTERN = re.compile(
@@ -109,7 +128,7 @@ INSTRUCTION_PATH_PATTERN = re.compile(
     r"^\.github/instructions/.+\.instructions\.md$"
 )
 MAX_CONFIG_BYTES = 1_000_000
-MAX_REVIEW_BYTES = 5_000_000
+DEFAULT_DIFF_WARNING_BYTES = 500_000
 MAX_TIMEOUT_SECONDS = 3_600
 CHECK_TIMEOUT_SECONDS = 2_700
 AUTHORITATIVE_BASE_REFS = {
@@ -185,21 +204,728 @@ COPILOT_REQUIRED_SAFETY_ARGUMENTS = (
 )
 
 
-class PlannedChange(NamedTuple):
-    """Immutable description of the repository state intended for the push."""
+# Content is always spooled to an anonymous temporary file. CHUNK_BYTES is an
+# allocation size, never an admission limit on a diff, file, or review.
+CHUNK_BYTES = 64 * 1024
+# Aggregate tracked-workspace read budget, independent of PR/diff sizing.
+MAX_TRACKED_WORKSPACE_SCAN_BYTES = 500_000_000
 
-    base_ref: str
-    base_tip: str
-    base_commit: str
-    head_commit: str
-    diff: str
-    paths: tuple[str, ...]
-    untracked_sha256: dict[str, str]
-    tree_fingerprint: str
+
+class PatchSpool:
+    """Complete private patch bytes with incremental identity and bounded reads."""
+
+    def __init__(self):
+        self.file = tempfile.TemporaryFile(mode="w+b")
+        self.size = 0
+        self.digest = hashlib.sha256()
+
+    def write(self, payload: bytes) -> None:
+        self.file.write(payload)
+        self.digest.update(payload)
+        self.size += len(payload)
+
+    def chunks(self):
+        self.file.flush()
+        self.file.seek(0)
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            value = self.file.read(CHUNK_BYTES)
+            if not value:
+                break
+            digest.update(value)
+            size += len(value)
+            yield value
+        if size != self.size or digest.digest() != self.digest.digest():
+            raise RuntimeError("private patch spool changed after construction")
+
+    def text_chunks(self, *, errors="strict"):
+        decoder = codecs.getincrementaldecoder("utf-8")(errors=errors)
+        for value in self.chunks():
+            yield decoder.decode(value)
+        yield decoder.decode(b"", final=True)
+
+    def close(self):
+        self.file.close()
+
+    def __del__(self):
+        if hasattr(self, "file"):
+            self.file.close()
+
+    def __bool__(self):
+        return self.size != 0
+
+    # Explicit compatibility accessors for historical diagnostic callers. The
+    # production pipeline never uses these materializing string operations.
+    def as_text(self):
+        return "".join(self.text_chunks())
+
+    def __contains__(self, value):
+        tail = ""
+        for chunk in self.text_chunks():
+            text = tail + chunk
+            if value in text:
+                return True
+            tail = text[-len(value) :] if value else ""
+        return False
+
+    def replace(self, *args):
+        return self.as_text().replace(*args)
+
+    def encode(self, *args, **kwargs):
+        return self.as_text().encode(*args, **kwargs)
+
+
+def patch_chunks(value):
+    if hasattr(value, "text_chunks"):
+        yield from value.text_chunks()
+    else:
+        for offset in range(0, len(value), CHUNK_BYTES):
+            yield value[offset : offset + CHUNK_BYTES]
+
+
+def stream_git(*args: str, cwd=None):
+    """Read stdout in bounded blocks; stderr never joins authenticated bytes."""
+    environment = isolated_git_environment()
+    directory = cwd or ROOT
+    try:
+        directory.resolve().relative_to(ROOT)
+    except ValueError:
+        for variable in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"):
+            environment.pop(variable, None)
+    with tempfile.TemporaryFile() as errors:
+        with subprocess.Popen(
+            ["git", *args],
+            cwd=directory,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+        ) as process:
+            try:
+                while True:
+                    chunk = process.stdout.read(CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    yield chunk
+                if process.wait():
+                    errors.seek(0)
+                    diagnostic = errors.read(CHUNK_BYTES).decode("utf-8", "replace")
+                    raise RuntimeError(
+                        "streamed Git operation failed: " + diagnostic.strip()
+                    )
+            finally:
+                # A read/write/decoder failure must not leave a pipe writer
+                # blocked while Popen.__exit__ waits for it.
+                if process.poll() is None:
+                    process.kill()
+                process.stdout.close()
+                process.wait()
+
+
+def decoded_git_chunks(
+    *args, cwd=None, errors="surrogateescape", universal_newlines=True
+):
+    decoder = codecs.getincrementaldecoder("utf-8")(errors=errors)
+    # Match subprocess text=True universal-newline semantics across blocks.
+    if universal_newlines:
+        decoder = io.IncrementalNewlineDecoder(decoder, translate=True)
+    for value in stream_git(*args, cwd=cwd):
+        yield decoder.decode(value)
+    yield decoder.decode(b"", final=True)
+
+
+def hash_open_file(stream):
+    digest = hashlib.sha256()
+    size = 0
+    while True:
+        value = stream.read(CHUNK_BYTES)
+        if not value:
+            break
+        digest.update(value)
+        size += len(value)
+    return digest.hexdigest(), size
+
+
+def hash_repository_file(root, name, *, purpose):
+    descriptor = open_regular_below(root, name, purpose=purpose)
+    with os.fdopen(descriptor, "rb") as stream:
+        return hash_open_file(stream)
+
+
+def fingerprint_stream(cwd, untracked, *, integration=False):
+    """Hash exactly the historical sorted JSON bytes without buffering diff."""
+    digest = hashlib.sha256()
+    digest.update(b'{"diff":"')
+    for chunk in decoded_git_chunks(
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--binary",
+        "HEAD",
+        "--",
+        cwd=cwd,
+    ):
+        digest.update(json.dumps(chunk, ensure_ascii=True)[1:-1].encode("ascii"))
+    digest.update(b'","head":')
+    head = git_output_at(cwd, "rev-parse", "HEAD").strip()
+    digest.update(json.dumps(head).encode("ascii"))
+    if integration:
+        digest.update(b',"index_tree":')
+        tree = git_output_at(cwd, "write-tree").strip()
+        digest.update(json.dumps(tree).encode("ascii"))
+    digest.update(b',"status":"')
+    for chunk in decoded_git_chunks(
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "-z",
+        cwd=cwd,
+    ):
+        digest.update(json.dumps(chunk, ensure_ascii=True)[1:-1].encode("ascii"))
+    digest.update(b'","untracked":')
+    encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    for part in encoder.iterencode(untracked):
+        digest.update(part.encode("ascii"))
+    digest.update(b"}")
+    return digest.hexdigest()
+
+
+def split_text_fragments(chunks):
+    """Yield bounded fragments and exact str.splitlines-style separators."""
+    pending_cr = False
+    for chunk in chunks:
+        if not chunk:
+            continue
+        if pending_cr:
+            if chunk.startswith("\n"):
+                yield "", "\r\n"
+                chunk = chunk[1:]
+            else:
+                yield "", "\r"
+            pending_cr = False
+        start = 0
+        for match in re.finditer(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]", chunk):
+            if match[0] == "\r" and match.end() == len(chunk):
+                yield chunk[start : match.start()], None
+                pending_cr = True
+            else:
+                yield chunk[start : match.start()], match[0]
+            start = match.end()
+        if start < len(chunk):
+            yield chunk[start:], None
+    if pending_cr:
+        yield "", "\r"
+
+
+class StreamingPatterns:
+    """Finite-state execution of the existing governed regexes, without buffers.
+
+    Only the syntax used by those fixed patterns is supported. Unknown syntax
+    fails closed. Matching keeps states, never subject text or an unbounded
+    line, token, whitespace run, PEM modifier, or JWT component.
+    """
+
+    def __init__(self, patterns):
+        try:
+            from re import _parser as parser
+        except ImportError:  # Python 3.9/3.10 compatibility
+            import sre_parse as parser
+        self.edges = []
+        self.accepts = {}
+        self.starts = []
+
+        def state():
+            self.edges.append([])
+            return len(self.edges) - 1
+
+        def build(tokens, flags):
+            first = current = state()
+            for operation, argument in tokens:
+                end = state()
+                kind = str(operation)
+                if kind == "LITERAL":
+                    matcher = re.compile(re.escape(chr(argument)), flags).fullmatch
+                    self.edges[current].append(("char", matcher, end))
+                elif kind == "IN":
+                    pieces = []
+                    for op, arg in argument:
+                        tag = str(op)
+                        if tag == "NEGATE":
+                            pieces.append("^")
+                        elif tag == "LITERAL":
+                            pieces.append(re.escape(chr(arg)))
+                        elif tag == "RANGE":
+                            pieces.append(
+                                re.escape(chr(arg[0])) + "-" + re.escape(chr(arg[1]))
+                            )
+                        elif tag == "CATEGORY":
+                            categories = {
+                                "CATEGORY_SPACE": r"\s",
+                                "CATEGORY_NOT_SPACE": r"\S",
+                                "CATEGORY_WORD": r"\w",
+                                "CATEGORY_DIGIT": r"\d",
+                            }
+                            if str(arg) not in categories:
+                                raise RuntimeError(
+                                    "unsupported streaming regex category"
+                                )
+                            pieces.append(categories[str(arg)])
+                        else:
+                            raise RuntimeError(
+                                "unsupported streaming regex character class"
+                            )
+                    matcher = re.compile("[" + "".join(pieces) + "]", flags).fullmatch
+                    self.edges[current].append(("char", matcher, end))
+                elif kind == "SUBPATTERN":
+                    _, add, remove, body = argument
+                    a, b = build(body, (flags | add) & ~remove)
+                    self.edges[current].append(("epsilon", None, a))
+                    self.edges[b].append(("epsilon", None, end))
+                elif kind == "BRANCH":
+                    for branch in argument[1]:
+                        a, b = build(branch, flags)
+                        self.edges[current].append(("epsilon", None, a))
+                        self.edges[b].append(("epsilon", None, end))
+                elif kind == "MAX_REPEAT":
+                    minimum, maximum, body = argument
+                    cursor = current
+                    for _ in range(minimum):
+                        a, b = build(body, flags)
+                        self.edges[cursor].append(("epsilon", None, a))
+                        cursor = b
+                    if maximum == parser.MAXREPEAT:
+                        self.edges[cursor].append(("epsilon", None, end))
+                        a, b = build(body, flags)
+                        self.edges[cursor].append(("epsilon", None, a))
+                        self.edges[b].append(("epsilon", None, cursor))
+                    else:
+                        for _ in range(maximum - minimum):
+                            self.edges[cursor].append(("epsilon", None, end))
+                            a, b = build(body, flags)
+                            self.edges[cursor].append(("epsilon", None, a))
+                            cursor = b
+                        self.edges[cursor].append(("epsilon", None, end))
+                elif kind == "AT":
+                    self.edges[current].append(("assert", (str(argument), flags), end))
+                else:
+                    raise RuntimeError("unsupported governed streaming regex: " + kind)
+                current = end
+            return first, current
+
+        for number, pattern in enumerate(patterns):
+            parsed = parser.parse(pattern.pattern, pattern.flags)
+            first, last = build(parsed, parsed.state.flags)
+            self.starts.append(first)
+            self.accepts[last] = 1 << number
+        self.step = functools.lru_cache(maxsize=4096)(self._step)
+
+    def _step(self, active, previous, character, beginning):
+        states = set(active) | set(self.starts)
+        pending = list(states)
+        matches = 0
+        while pending:
+            current = pending.pop()
+            matches |= self.accepts.get(current, 0)
+            for kind, value, target in self.edges[current]:
+                passed = kind == "epsilon"
+                if kind == "assert":
+                    assertion, flags = value
+                    if assertion == "AT_BOUNDARY":
+                        left = previous is not None and (
+                            previous.isalnum() or previous == "_"
+                        )
+                        right = character is not None and (
+                            character.isalnum() or character == "_"
+                        )
+                        passed = left != right
+                    elif assertion in {"AT_BEGINNING", "AT_BEGINNING_STRING"}:
+                        passed = beginning or (
+                            assertion == "AT_BEGINNING"
+                            and flags & re.MULTILINE
+                            and previous == "\n"
+                        )
+                    elif assertion == "AT_END_STRING":
+                        passed = character is None
+                    else:
+                        raise RuntimeError(
+                            "unsupported streaming regex assertion: " + assertion
+                        )
+                if passed and target not in states:
+                    states.add(target)
+                    pending.append(target)
+        following = set()
+        if character is not None:
+            for current in states:
+                for kind, matcher, target in self.edges[current]:
+                    if kind == "char" and matcher(character):
+                        following.add(target)
+        return tuple(sorted(following)), matches
+
+    def scanner(self):
+        return PatternScanner(self)
+
+
+class PatternScanner:
+    def __init__(self, machine):
+        self.machine = machine
+        self.active = ()
+        self.previous = None
+        self.beginning = True
+        self.matches = 0
+
+    def feed(self, text):
+        for character in text:
+            self.active, matches = self.machine.step(
+                self.active, self.previous, character, self.beginning
+            )
+            self.matches |= matches
+            self.previous = character
+            self.beginning = False
+
+    def finish(self):
+        _, matches = self.machine.step(self.active, self.previous, None, self.beginning)
+        return self.matches | matches
+
+
+_STREAM_PATTERNS = None
+
+
+def content_scanner():
+    global _STREAM_PATTERNS
+    if _STREAM_PATTERNS is None:
+        _STREAM_PATTERNS = StreamingPatterns(
+            (*SECRET_CONTENT_PATTERNS, NPMRC_AUTH_PATTERN)
+        )
+    return _STREAM_PATTERNS.scanner()
+
+
+def apply_patch_stream(command, *, patch, cwd, capture=True):
+    """Keep git-apply input and potentially large diagnostics out of RAM."""
+    owned = not hasattr(patch, "text_chunks")
+    if owned:
+        value = patch
+        patch = PatchSpool()
+        for chunk in patch_chunks(value):
+            patch.write(chunk.encode("utf-8"))
+    try:
+        patch.file.flush()
+        patch.file.seek(0)
+        environment = isolated_git_environment()
+        for variable in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"):
+            environment.pop(variable, None)
+        with tempfile.TemporaryFile() as output:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                env=environment,
+                stdin=patch.file,
+                stdout=output,
+                stderr=output,
+                check=False,
+            )
+            output.seek(0)
+            diagnostic = output.read(CHUNK_BYTES).decode("utf-8", "replace")
+            return subprocess.CompletedProcess(command, result.returncode, diagnostic)
+    finally:
+        if owned:
+            patch.close()
+
+
+def file_text_chunks(stream, *, errors="replace"):
+    decoder = codecs.getincrementaldecoder("utf-8")(errors=errors)
+    while True:
+        value = stream.read(CHUNK_BYTES)
+        if not value:
+            break
+        yield decoder.decode(value)
+    yield decoder.decode(b"", final=True)
+
+
+def filtered_scan_chunks(
+    chunks, documented, *, path=None, diff=False, redact=False, packer=False
+):
+    """Apply existing exact-line exceptions with bounded line spooling.
+
+    A line may exceed memory: only its digest, parser prefix and finite regex
+    states are retained. No content is discarded by the scan or patch spool.
+    """
+    old_path = new_path = None
+    old_number = new_number = 0
+    in_hunk = False
+    line_number = 0
+    packer_machine = None
+    if packer:
+        packer_machine = StreamingPatterns(
+            [
+                re.compile(
+                    r"\A(?:"
+                    + globals()["PACKER_VARIABLE_REFERENCE_LINE"].pattern
+                    + r")\Z"
+                )
+            ]
+        )
+    with tempfile.SpooledTemporaryFile(max_size=CHUNK_BYTES, mode="w+b") as line_file:
+        prefix = ""
+        digest = hashlib.sha256()
+        first = True
+        pending = False
+        line_scan = content_scanner()
+        packer_scan = packer_machine.scanner() if packer_machine else None
+        # Flush an unterminated last line without inventing an empty one.
+        for fragment, ending in itertools.chain(
+            split_text_fragments(chunks), [("", "EOF")]
+        ):
+            if ending == "EOF" and not pending:
+                break
+            pending = True
+            line_file.write(fragment.encode("utf-8"))
+            prefix += fragment[: max(0, CHUNK_BYTES - len(prefix))]
+            digest.update(
+                (fragment[1:] if first and diff else fragment).encode("utf-8")
+            )
+            if fragment:
+                first = False
+            line_scan.feed(fragment)
+            if packer_scan:
+                packer_scan.feed(fragment)
+            if ending is None:
+                continue
+            line_number += 1
+            mask = False
+            old_content = False
+            match_path = path
+            match_number = line_number
+            if diff:
+                match_path = None
+                if prefix.startswith("diff --git "):
+                    old_path = new_path = None
+                    in_hunk = False
+                elif not in_hunk and prefix.startswith("--- "):
+                    old_path = unquote_diff_path(prefix[4:], "a")
+                elif not in_hunk and prefix.startswith("+++ "):
+                    new_path = (
+                        unquote_diff_path(prefix[4:], "b") if documented else None
+                    )
+                elif prefix.startswith("@@"):
+                    hunk = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", prefix)
+                    if hunk is None or (
+                        documented and old_path is None and new_path is None
+                    ):
+                        raise RuntimeError(
+                            "planned diff has a malformed hunk header or no governed file path"
+                        )
+                    old_number, new_number = map(int, hunk.groups())
+                    in_hunk = True
+                elif in_hunk and prefix[:1] in {"+", "-", " "}:
+                    if prefix.startswith("+"):
+                        match_path, match_number = new_path, new_number
+                        new_number += 1
+                    elif prefix.startswith("-"):
+                        match_path, match_number = old_path, old_number
+                        old_number += 1
+                        old_content = True
+                    else:
+                        match_path, match_number = (
+                            old_path or new_path,
+                            old_number or new_number,
+                        )
+                        old_number += 1
+                        new_number += 1
+            entry = documented.get(match_path or "", {}).get(match_number)
+            if (
+                entry is not None
+                and digest.hexdigest() == entry[0]
+                and not PEM_KEY_BEGIN_BOUNDARY_PATTERN.search(entry[1])
+            ):
+                mask = True
+            flags = line_scan.finish()
+            if redact and old_content and old_path not in documented and flags & ~1:
+                mask = True
+            if packer_scan and packer_scan.finish():
+                mask = True
+            if mask:
+                yield "DOCUMENTED_SYNTHETIC_FIXTURE\n"
+            else:
+                line_file.seek(0)
+                yield from file_text_chunks(line_file, errors="strict")
+                yield "\n"
+            line_file.seek(0)
+            line_file.truncate()
+            prefix = ""
+            digest = hashlib.sha256()
+            first = True
+            pending = False
+            line_scan = content_scanner()
+            packer_scan = packer_machine.scanner() if packer_machine else None
+
+
+def scan_chunks(chunks):
+    scanner = content_scanner()
+    for chunk in chunks:
+        scanner.feed(chunk)
+    return scanner.finish()
+
+
+def streaming_review_safe(change, documented, *, redact=False):
+    unsafe = [path for path in change.paths if is_secret_like_path(path)]
+    if unsafe:
+        raise RuntimeError(
+            "local review refused for secret-like paths: " + ", ".join(sorted(unsafe))
+        )
+    if redact and scan_chunks(
+        filtered_scan_chunks(
+            patch_chunks(change.patch), documented, diff=True, redact=False
+        )
+    ) & 1:
+        raise RuntimeError(
+            "local review refused because the planned patch contains PEM private key material"
+        )
+    scanned = scan_chunks(
+        filtered_scan_chunks(
+            patch_chunks(change.patch), documented, diff=True, redact=redact
+        )
+    )
+    secret_mask = (1 << len(SECRET_CONTENT_PATTERNS)) - 1
+    if scanned & secret_mask:
+        raise RuntimeError(
+            "local review refused because the planned review input contains secret-like content"
+        )
+    # Fixture exceptions never authorize .npmrc authentication configuration.
+    if any(Path(path).name.lower() == ".npmrc" for path in change.paths):
+        npm = scan_chunks(
+            filtered_scan_chunks(
+                patch_chunks(change.patch), {}, diff=True, redact=redact
+            )
+        )
+        if npm & (1 << len(SECRET_CONTENT_PATTERNS)):
+            raise RuntimeError(
+                "local review refused because planned .npmrc content contains authentication configuration"
+            )
+
+
+def streaming_workspace_safe(workspace, documented, *, allow_packer=False):
+    names = git_output_at(workspace, "ls-files", "-z").split("\0")
+    total = 0
+    unsafe = []
+    basenames = {
+        ".env",
+        ".netrc",
+        ".pypirc",
+        "auth.json",
+        "credentials",
+        "credentials.json",
+        "id_ed25519",
+        "id_rsa",
+        "kubeconfig",
+        "vault-password",
+    }
+    for name in filter(None, names):
+        parts = tuple(part.lower() for part in Path(name).parts)
+        if parts[-1] in basenames or any(
+            part in {".aws", ".ssh", "secrets"} for part in parts[:-1]
+        ):
+            unsafe.append(name)
+        descriptor = open_regular_below(workspace, name, purpose="Sanitized review")
+        with os.fdopen(descriptor, "rb") as stream:
+            packer = allow_packer and name.endswith(".pkr.hcl")
+            tail = b""
+            while True:
+                chunk = stream.read(CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_TRACKED_WORKSPACE_SCAN_BYTES:
+                    raise RuntimeError(
+                        "tracked workspace scan exceeds its 500000000-byte resource budget"
+                    )
+                if any(marker in tail + chunk for marker in (b"/*", b"*/", b"<<")):
+                    packer = False
+                tail = chunk[-1:]
+            stream.seek(0)
+            if parts[-1] == ".npmrc":
+                if scan_chunks(file_text_chunks(stream)) & (
+                    1 << len(SECRET_CONTENT_PATTERNS)
+                ):
+                    raise RuntimeError(
+                        "local review refused because tracked .npmrc contains authentication configuration"
+                    )
+                stream.seek(0)
+            matches = scan_chunks(
+                filtered_scan_chunks(
+                    file_text_chunks(stream), documented, path=name, packer=packer
+                )
+            )
+            if matches & ((1 << len(SECRET_CONTENT_PATTERNS)) - 1):
+                raise RuntimeError(
+                    "local review refused because the tracked review snapshot "
+                    f"contains secret-like content in {name}"
+                )
+    if unsafe:
+        raise RuntimeError(
+            "local review refused for secret-like tracked paths: "
+            + ", ".join(sorted(unsafe))
+        )
+
+
+class PlannedChange(
+    namedtuple(
+        "PlannedChangeRecord",
+        "base_ref base_tip base_commit head_commit patch paths untracked_sha256 tree_fingerprint",
+    )
+):
+    """Immutable identity with a complete disk-backed patch in production.
+
+    The historical .diff string accessor remains explicit for diagnostic
+    callers; the pipeline uses .patch and never materializes that accessor.
+    """
+
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        base_ref,
+        base_tip,
+        base_commit,
+        head_commit,
+        diff,
+        paths,
+        untracked_sha256,
+        tree_fingerprint,
+    ):
+        return super().__new__(
+            cls,
+            base_ref,
+            base_tip,
+            base_commit,
+            head_commit,
+            diff,
+            paths,
+            untracked_sha256,
+            tree_fingerprint,
+        )
+
+    @property
+    def diff(self):
+        if self.patch is None:
+            raise RuntimeError("planned patch has not been materialized")
+        return (
+            self.patch.as_text() if hasattr(self.patch, "text_chunks") else self.patch
+        )
+
+    def _replace(self, **values):
+        if "diff" in values:
+            values["patch"] = values.pop("diff")
+        return super()._replace(**values)
 
     @property
     def diff_sha256(self) -> str:
-        return sha256_text(self.diff)
+        if self.patch is None:
+            raise RuntimeError("planned patch has not been materialized")
+        return (
+            self.patch.digest.hexdigest()
+            if hasattr(self.patch, "text_chunks")
+            else sha256_text(self.patch)
+        )
 
 
 def is_secret_like_path(path: str) -> bool:
@@ -535,43 +1261,23 @@ def untracked_names() -> list[str]:
     return [entry for entry in names.split("\0") if entry]
 
 
-def untracked_file_hashes(max_bytes: int = 100_000_000) -> dict[str, str]:
+def untracked_file_hashes(max_bytes: Optional[int] = None) -> dict[str, str]:
     hashes: dict[str, str] = {}
     total = 0
     for name in untracked_names():
-        remaining = max_bytes - total
-        if remaining < 0:
-            raise RuntimeError("Fingerprint input exceeds its aggregate byte limit")
-        payload, _ = read_repository_file(
-            name,
-            purpose="Fingerprint",
-            max_bytes=remaining,
-        )
-        total += len(payload)
-        hashes[name] = sha256_bytes(payload)
+        digest, size = hash_repository_file(ROOT, name, purpose="Fingerprint")
+        total += size
+        if max_bytes is not None and total > max_bytes:
+            raise RuntimeError(
+                "Fingerprint input exceeds its explicit caller byte limit"
+            )
+        hashes[name] = digest
     return hashes
 
 
 def tree_fingerprint() -> str:
     reject_hidden_index_entries()
-    payload = {
-        "head": git_output("rev-parse", "HEAD").strip(),
-        "status": git_output(
-            "status", "--porcelain=v1", "--untracked-files=all", "-z"
-        ),
-        "diff": git_output(
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--binary",
-            "HEAD",
-            "--",
-        ),
-        "untracked": untracked_file_hashes(),
-    }
-    return sha256_text(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    )
+    return fingerprint_stream(ROOT, untracked_file_hashes())
 
 
 def reject_hidden_index_entries() -> None:
@@ -912,11 +1618,7 @@ def load_config() -> dict[str, Any]:
     review = data.get("review")
     if not isinstance(review, dict):
         raise RuntimeError("review must be an object")
-    require_positive_integer(
-        review.get("max_diff_bytes"),
-        "review.max_diff_bytes",
-        maximum=MAX_REVIEW_BYTES,
-    )
+    review_warning_threshold(review)
     evidence = data.get("evidence")
     if not isinstance(evidence, dict):
         raise RuntimeError("evidence must be an object")
@@ -927,6 +1629,24 @@ def load_config() -> dict[str, Any]:
     )
     validate_remote_only_checks(data.get("remote_only_checks"))
     return data
+
+
+def review_warning_threshold(review: dict[str, Any]) -> int | None:
+    """Version 2 migration: the legacy ceiling is readable, never enforced.
+
+    The old value is not reused as a warning threshold. Existing configurations
+    get the same 500000-byte advisory as new ones; explicit null disables it.
+    """
+    if not isinstance(review, dict) or set(review) - {"max_diff_bytes", "warn_diff_bytes"}:
+        raise RuntimeError("review accepts only warn_diff_bytes and deprecated max_diff_bytes")
+    if "max_diff_bytes" in review:
+        legacy = review["max_diff_bytes"]
+        if type(legacy) is not int or legacy <= 0:
+            raise RuntimeError("deprecated review.max_diff_bytes must be a positive integer")
+    warning = review.get("warn_diff_bytes", DEFAULT_DIFF_WARNING_BYTES)
+    if warning is not None and (type(warning) is not int or warning <= 0):
+        raise RuntimeError("review.warn_diff_bytes must be a positive integer or null")
+    return warning
 
 
 def instructions_digest() -> str:
@@ -1489,59 +2209,15 @@ def require_trusted_check_policy(
 
 
 def integration_worktree_fingerprint(cwd: Path) -> str:
-    # Deliberately omit --exclude-standard: deterministic validation must not
-    # be able to hide checkout mutations behind a repository ignore rule.
-    untracked = git_output_at(
-        cwd,
-        "ls-files",
-        "--others",
-        "-z",
-    ).split("\0")
-    untracked_hashes: dict[str, str] = {}
-    untracked_bytes = 0
-    for name in (entry for entry in untracked if entry):
-        descriptor = open_regular_below(
-            cwd,
-            name,
-            purpose="Worktree fingerprint",
-        )
-        try:
-            with os.fdopen(descriptor, "rb") as stream:
-                descriptor = -1
-                payload = stream.read(100_000_001)
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-        if len(payload) > 100_000_000:
-            raise RuntimeError(
-                "worktree fingerprint input exceeds 100000000 bytes"
-            )
-        untracked_bytes += len(payload)
-        if untracked_bytes > 500_000_000:
-            raise RuntimeError(
-                "worktree fingerprint input exceeds 500000000 total bytes"
-            )
-        untracked_hashes[name] = sha256_bytes(payload)
-    payload = {
-        "head": git_output_at(cwd, "rev-parse", "HEAD").strip(),
-        "index_tree": git_output_at(cwd, "write-tree").strip(),
-        "status": git_output_at(
-            cwd, "status", "--porcelain=v1", "--untracked-files=all", "-z"
-        ),
-        "diff": git_output_at(
-            cwd,
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--binary",
-            "HEAD",
-            "--",
-        ),
-        "untracked": untracked_hashes,
-    }
-    return sha256_text(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    )
+    # Include ignored files: deterministic checks cannot hide mutations.
+    names = git_output_at(cwd, "ls-files", "--others", "-z").split("\0")
+    hashes = {}
+    total = 0
+    for name in filter(None, names):
+        digest, size = hash_repository_file(cwd, name, purpose="Worktree fingerprint")
+        total += size
+        hashes[name] = digest
+    return fingerprint_stream(cwd, hashes, integration=True)
 
 
 def synthetic_integration_commit(
@@ -2014,99 +2690,140 @@ def render_untracked_patch(
     return "".join(parts)
 
 
+def spool_untracked_patch(name, patch):
+    raw = PatchSpool()
+    try:
+        descriptor = open_repository_regular(name, purpose="Untracked fingerprint")
+        with os.fdopen(descriptor, "rb") as stream:
+            mode = os.fstat(stream.fileno()).st_mode
+            while True:
+                payload = stream.read(CHUNK_BYTES)
+                if not payload:
+                    break
+                if b"\0" in payload:
+                    raise RuntimeError(
+                        f"local review refused for binary untracked path: {name}"
+                    )
+                raw.write(payload)
+        lines = 0
+        partial = False
+        try:
+            for fragment, ending in split_text_fragments(raw.text_chunks()):
+                partial = True
+                if ending is not None:
+                    lines += 1
+                    partial = False
+            lines += partial
+        except UnicodeError as exc:
+            raise RuntimeError(
+                f"local review refused for non-UTF-8 untracked path: {name}"
+            ) from exc
+        old_path = quote_diff_path("a", name)
+        new_path = quote_diff_path("b", name)
+        mode_value = "100755" if mode & 0o111 else "100644"
+        header = f"diff --git {old_path} {new_path}\nnew file mode {mode_value}\n"
+        if not raw.size:
+            header += "index 0000000..e69de29\n"
+        else:
+            header += f"--- /dev/null\n+++ {new_path}\n@@ -0,0 +1,{lines} @@\n"
+        patch.write(header.encode("utf-8"))
+        beginning = True
+        for fragment, ending in split_text_fragments(raw.text_chunks()):
+            if beginning:
+                patch.write(b"+")
+                beginning = False
+            patch.write(fragment.encode("utf-8"))
+            if ending is not None:
+                patch.write(ending.encode("utf-8"))
+                if not ending.endswith("\n"):
+                    patch.write(b"\n\\ No newline at end of file\n")
+                beginning = True
+        if not beginning:
+            patch.write(b"\n\\ No newline at end of file\n")
+        return raw.digest.hexdigest(), raw.size
+    finally:
+        raw.close()
+
+
 def planned_change(
     config: dict[str, Any],
     *,
     base_override: Optional[str] = None,
     fixture_manifest_bootstrap: bool = False,
+    include_patch: bool = True,
 ) -> PlannedChange:
     initial_tree_fingerprint = tree_fingerprint()
     base_ref, base_tip, base_commit = resolve_base(config, base_override)
     head_commit = git_output("rev-parse", "--verify", "HEAD^{commit}").strip()
-    tracked_diff = git_output(
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--binary",
-        "--no-renames",
-        "--unified=40",
-        base_commit,
-        "--",
-    )
-    if "GIT binary patch\n" in tracked_diff or "\nBinary files " in tracked_diff:
-        raise RuntimeError(
-            "local review refused because the planned tracked diff contains "
-            "binary content"
-        )
     tracked_names = git_output(
         "diff", "--name-only", "--no-renames", "-z", base_commit, "--"
     ).split("\0")
-    max_bytes = require_positive_integer(
-        config["review"]["max_diff_bytes"],
-        "review.max_diff_bytes",
-        maximum=MAX_REVIEW_BYTES,
-    )
-    untracked_hashes: dict[str, str] = {}
-    patches: list[str] = []
-    consumed = utf8_size(tracked_diff)
-    for name in untracked_names():
-        remaining = max_bytes - consumed
-        if remaining <= 0:
+    patch = PatchSpool() if include_patch else None
+    untracked_hashes = {}
+    try:
+        if include_patch:
+            tail = ""
+            for chunk in decoded_git_chunks(
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--binary",
+                "--no-renames",
+                "--unified=40",
+                base_commit,
+                "--",
+                errors="strict",
+                universal_newlines=False,
+            ):
+                inspection = tail + chunk
+                if (
+                    "GIT binary patch\n" in inspection
+                    or "\nBinary files " in inspection
+                ):
+                    raise RuntimeError(
+                        "local review refused because the planned tracked diff contains binary content"
+                    )
+                tail = inspection[-32:]
+                patch.write(chunk.encode("utf-8"))
+            total = 0
+            for name in untracked_names():
+                digest, size = spool_untracked_patch(name, patch)
+                total += size
+                untracked_hashes[name] = digest
+            warning = review_warning_threshold(config["review"])
+            if warning is not None and patch.size >= warning:
+                print(
+                    f"Planning notice: complete diff is {patch.size} bytes (advisory threshold {warning}); all deterministic checks still run. No automatic PR splitting.",
+                    file=sys.stderr,
+                )
+        paths = tuple(sorted(set(filter(None, tracked_names)) | set(untracked_hashes)))
+        final_tree_fingerprint = tree_fingerprint()
+        if final_tree_fingerprint != initial_tree_fingerprint:
             raise RuntimeError(
-                f"planned diff exceeds local review limit of {max_bytes} bytes"
+                "Git tree changed while constructing the exact planned push patch"
             )
-        payload, mode = read_repository_file(
-            name,
-            purpose="Local review",
-            max_bytes=remaining,
+        change = PlannedChange(
+            base_ref,
+            base_tip,
+            base_commit,
+            head_commit,
+            patch,
+            paths,
+            untracked_hashes,
+            final_tree_fingerprint,
         )
-        patch = render_untracked_patch(name, payload, mode)
-        patch_bytes = utf8_size(patch)
-        consumed += patch_bytes
-        if consumed > max_bytes:
-            raise RuntimeError(
-                f"planned diff exceeds local review limit of {max_bytes} bytes"
+        if include_patch:
+            ensure_review_safe(
+                change,
+                secret_fixture_manifest_for_change(
+                    change, bootstrap=fixture_manifest_bootstrap
+                ),
             )
-        patches.append(patch)
-        untracked_hashes[name] = sha256_bytes(payload)
-    diff = tracked_diff + "".join(patches)
-    if utf8_size(diff) > max_bytes:
-        raise RuntimeError(
-            f"planned diff exceeds local review limit of {max_bytes} bytes"
-        )
-    paths = tuple(
-        sorted(
-            {
-                path
-                for path in tracked_names
-                if path
-            }
-            | set(untracked_hashes)
-        )
-    )
-    final_tree_fingerprint = tree_fingerprint()
-    if final_tree_fingerprint != initial_tree_fingerprint:
-        raise RuntimeError(
-            "Git tree changed while constructing the exact planned push patch"
-        )
-    change = PlannedChange(
-        base_ref=base_ref,
-        base_tip=base_tip,
-        base_commit=base_commit,
-        head_commit=head_commit,
-        diff=diff,
-        paths=paths,
-        untracked_sha256=untracked_hashes,
-        tree_fingerprint=final_tree_fingerprint,
-    )
-    ensure_review_safe(
-        change,
-        secret_fixture_manifest_for_change(
-            change,
-            bootstrap=fixture_manifest_bootstrap,
-        ),
-    )
-    return change
+        return change
+    except BaseException:
+        if hasattr(patch, "text_chunks"):
+            patch.close()
+        raise
 
 
 def changed_paths() -> list[str]:
@@ -2153,7 +2870,8 @@ def planned_diff(
 ) -> str:
     if config is None:
         config = load_config()
-    return planned_change(config, base_override=base_override).diff
+    value = planned_change(config, base_override=base_override).diff
+    return value.as_text() if hasattr(value, "text_chunks") else value
 
 
 def untracked_review_text(max_bytes: int = 1_000_000) -> str:
@@ -2210,9 +2928,14 @@ def parse_secret_fixture_manifest(
         path = entry["path"]
         encoded = entry["line_hex"]
         line_number = entry["line_number"]
-        if entry["purpose"] != "synthetic-test-fixture":
+        purpose = entry["purpose"]
+        if not isinstance(purpose, str) or purpose not in {
+            "synthetic-test-fixture",
+            "synthetic-documentation-example",
+        }:
             raise RuntimeError(
-                "secret fixture manifest purpose must be synthetic-test-fixture"
+                "secret fixture manifest purpose must be synthetic-test-fixture "
+                "or synthetic-documentation-example"
             )
         if (
             isinstance(line_number, bool)
@@ -2235,7 +2958,12 @@ def parse_secret_fixture_manifest(
             )
             or Path(path).as_posix() != path
             or any(part in {"", ".", "..", ".git"} for part in Path(path).parts)
-            or not path.startswith(SECRET_FIXTURE_PATH_PREFIXES)
+            or not (
+                (purpose == "synthetic-test-fixture"
+                 and path.startswith(SECRET_FIXTURE_PATH_PREFIXES))
+                or (purpose == "synthetic-documentation-example"
+                    and SYNTHETIC_DOCUMENTATION_PATH_PATTERN.fullmatch(path))
+            )
         ):
             raise RuntimeError("secret fixture manifest contains an unsafe path")
         if (
@@ -2418,6 +3146,24 @@ def mask_documented_secret_fixture_lines(
     return "\n".join(masked)
 
 
+def mask_packer_variable_references(
+    value: str,
+    *,
+    path: Optional[str] = None,
+) -> str:
+    """Exclude bare Packer variables only in marker-free tracked HCL files."""
+    if path is None or not path.endswith(".pkr.hcl") or any(
+        marker in value for marker in ("/*", "*/", "<<")
+    ):
+        return value
+    return "\n".join(
+        "PACKER_VARIABLE_REFERENCE"
+        if PACKER_VARIABLE_REFERENCE_LINE.fullmatch(line)
+        else line
+        for line in value.splitlines()
+    )
+
+
 def documented_secret_fixture_matches(
     documented: dict[str, dict[int, tuple[str, str]]],
     path: Optional[str],
@@ -2490,37 +3236,45 @@ def mask_documented_secret_fixture_diff(
     return "\n".join(masked)
 
 
-def ensure_review_safe(
-    change: PlannedChange,
+def redact_removed_sensitive_lines(
+    diff: str,
     documented: Optional[dict[str, dict[int, tuple[str, str]]]] = None,
-) -> None:
-    unsafe = []
-    for path in change.paths:
-        if is_secret_like_path(path):
-            unsafe.append(path)
-    if unsafe:
+) -> str:
+    """Hide removed single-line values outside governed fixture paths."""
+    if PEM_KEY_BOUNDARY_PATTERN.search(diff):
         raise RuntimeError(
-            "local review refused for secret-like paths: "
-            + ", ".join(sorted(unsafe))
+            "local review refused because the planned patch contains "
+            "PEM private key material"
         )
-    scanned_diff = mask_documented_secret_fixture_lines(
-        change.diff,
-        documented or {},
-        diff=True,
-    )
-    if any(pattern.search(scanned_diff) for pattern in SECRET_CONTENT_PATTERNS):
-        raise RuntimeError(
-            "local review refused because the planned review input contains "
-            "secret-like content"
-        )
-    if (
-        any(Path(path).name.lower() == ".npmrc" for path in change.paths)
-        and NPMRC_AUTH_PATTERN.search(change.diff)
-    ):
-        raise RuntimeError(
-            "local review refused because planned .npmrc content contains "
-            "authentication configuration"
-        )
+    redacted: list[str] = []
+    governed_paths = frozenset((documented or {}).keys())
+    old_path: Optional[str] = None
+    in_hunk = False
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            old_path = None
+            in_hunk = False
+        elif not in_hunk and line.startswith("--- "):
+            old_path = unquote_diff_path(line[4:], "a")
+        elif re.match(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", line):
+            in_hunk = True
+        elif (
+            in_hunk
+            and old_path is not None
+            and old_path not in governed_paths
+            and line.startswith("-")
+            and (
+                any(pattern.search(line[1:]) for pattern in SECRET_CONTENT_PATTERNS[1:])
+                or NPMRC_AUTH_PATTERN.search(line[1:])
+            )
+        ):
+            line = "-<REDACTED REMOVED SENSITIVE LINE>"
+        redacted.append(line)
+    return "\n".join(redacted)
+
+
+def ensure_review_safe(change: PlannedChange, documented=None) -> None:
+    streaming_review_safe(change, documented or {}, redact=True)
 
 
 def checkout_sanitized_commit(
@@ -2765,8 +3519,8 @@ def sanitized_review_workspace(
                 builder,
                 disabled_hooks,
             )
-            if change.diff:
-                applied = run(
+            if change.patch:
+                applied = apply_patch_stream(
                     [
                         "git",
                         "-c",
@@ -2779,7 +3533,7 @@ def sanitized_review_workspace(
                         "-",
                     ],
                     capture=True,
-                    input_text=change.diff,
+                    patch=change.patch,
                     cwd=builder,
                 )
                 if applied.returncode:
@@ -2833,67 +3587,8 @@ def sanitized_review_workspace(
         yield workspace, root, topology
 
 
-def ensure_workspace_review_safe(
-    workspace: Path,
-    documented: Optional[dict[str, dict[int, tuple[str, str]]]] = None,
-) -> None:
-    """Scan the complete tracked snapshot before local evidence is accepted."""
-    names = git_output_at(workspace, "ls-files", "-z").split("\0")
-    total = 0
-    unsafe_paths: list[str] = []
-    sensitive_basenames = {
-        ".env",
-        ".netrc",
-        ".pypirc",
-        "auth.json",
-        "credentials",
-        "credentials.json",
-        "id_ed25519",
-        "id_rsa",
-        "kubeconfig",
-        "vault-password",
-    }
-    sensitive_directories = {".aws", ".ssh", "secrets"}
-    for name in (entry for entry in names if entry):
-        parts = tuple(part.lower() for part in Path(name).parts)
-        if (
-            parts[-1] in sensitive_basenames
-            or any(part in sensitive_directories for part in parts[:-1])
-        ):
-            unsafe_paths.append(name)
-        candidate = workspace / name
-        if not candidate.is_file() or candidate.is_symlink():
-            raise RuntimeError(
-                f"sanitized review path is not a regular file: {name}"
-            )
-        payload = candidate.read_bytes()
-        total += len(payload)
-        if total > 500_000_000:
-            raise RuntimeError("sanitized review secret scan exceeds 500 MB")
-        # Preserve every ASCII secret marker even when an unchanged tracked
-        # binary contains invalid UTF-8. New or changed binary content is
-        # rejected from the planned diff before workspace creation.
-        text_value = payload.decode("utf-8", errors="replace")
-        if parts[-1] == ".npmrc" and NPMRC_AUTH_PATTERN.search(text_value):
-            raise RuntimeError(
-                "local review refused because tracked .npmrc contains "
-                "authentication configuration"
-            )
-        scanned_value = mask_documented_secret_fixture_lines(
-            text_value,
-            documented or {},
-            path=name,
-        )
-        if any(pattern.search(scanned_value) for pattern in SECRET_CONTENT_PATTERNS):
-            raise RuntimeError(
-                "local review refused because the tracked review snapshot "
-                f"contains secret-like content in {name}"
-            )
-    if unsafe_paths:
-        raise RuntimeError(
-            "local review refused for secret-like tracked paths: "
-            + ", ".join(sorted(unsafe_paths))
-        )
+def ensure_workspace_review_safe(workspace: Path, documented=None) -> None:
+    streaming_workspace_safe(workspace, documented or {}, allow_packer=True)
 
 
 def tracked_instruction_bundle(workspace: Path) -> str:
@@ -2910,7 +3605,9 @@ def tracked_instruction_bundle(workspace: Path) -> str:
             raise RuntimeError(
                 f"sanitized instruction is not a regular file: {name}"
             )
-        payload = candidate.read_bytes()
+        descriptor = open_regular_below(workspace, name, purpose="Tracked instruction")
+        with os.fdopen(descriptor, "rb") as stream:
+            payload = stream.read(2_000_001 - total)
         total += len(payload)
         if total > 2_000_000:
             raise RuntimeError("tracked instruction bundle exceeds 2 MB")
@@ -3354,7 +4051,7 @@ def review_prompt(
         "checks remain mandatory."
     )
     task = (
-        "Review the exact planned push patch below against AGENTS.md, nested "
+        "Review the planned push patch below against AGENTS.md, nested "
         "AGENTS.md files, and .github/copilot-instructions.md. Check "
         "correctness, security, failure behavior, tests, scope, and likely "
         "GitHub Actions failures. The patch combines committed, staged, "
@@ -3366,9 +4063,10 @@ def review_prompt(
         "parents, and history objects are intentionally absent from the "
         "workspace; their absence is a security boundary, not a finding. The "
         "caller-verified hashes below bind the source topology without "
-        "exposing its content history. Do not modify files, use network "
-        "tools, or expose credentials. The embedded patch is authoritative "
-        "for review scope."
+        "exposing its content history. Old sensitive lines removed by the "
+        "patch are redacted; inspect the final synthetic tree to assess their "
+        "replacement. Do not modify files, use network tools, or expose "
+        "credentials. The embedded patch is authoritative for review scope."
     )
     if agent == "copilot":
         verdict = (
@@ -3409,9 +4107,9 @@ def review_prompt(
         + "\n----- BEGIN TRACKED REVIEW INSTRUCTIONS -----\n"
         + instructions
         + "\n----- END TRACKED REVIEW INSTRUCTIONS -----\n"
-        + "\n----- BEGIN EXACT PLANNED PUSH PATCH -----\n"
-        + change.diff
-        + "\n----- END EXACT PLANNED PUSH PATCH -----\n"
+        + "\n----- BEGIN PLANNED PUSH PATCH (REMOVED SENSITIVE LINES REDACTED) -----\n"
+        + redact_removed_sensitive_lines(change.diff)
+        + "\n----- END PLANNED PUSH PATCH -----\n"
     )
 
 
@@ -4192,9 +4890,10 @@ def main() -> int:
         if args.command == "validate":
             require_clean_head()
             refresh_authoritative_base(config)
-            change = planned_change(config)
+            change = planned_change(config, include_patch=False)
             require_trusted_check_policy(change)
             execute_integration_checks(config, change)
+            planned_change(config)
             return 0
         if args.command == "review":
             if args.fixture_manifest_bootstrap:
@@ -4218,6 +4917,7 @@ def main() -> int:
         refresh_authoritative_base(config)
         change = planned_change(
             config,
+            include_patch=False,
             fixture_manifest_bootstrap=args.fixture_manifest_bootstrap,
         )
         require_trusted_check_policy(
@@ -4269,11 +4969,18 @@ def main() -> int:
         return 0
     except (
         OSError,
+        MemoryError,
+        UnicodeError,
         RuntimeError,
         json.JSONDecodeError,
         subprocess.SubprocessError,
     ) as exc:
-        print(f"push-ready: {exc}", file=sys.stderr)
+        message = (
+            "operational memory exhaustion; no validation evidence accepted"
+            if isinstance(exc, MemoryError)
+            else str(exc)
+        )
+        print(f"push-ready: {message}", file=sys.stderr)
         return 1
 
 

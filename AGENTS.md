@@ -1,5 +1,52 @@
 # AGENTS.md
 
+<!-- LIT REP-40 delivery efficiency: start -->
+
+## AI delivery efficiency contract (mandatory)
+
+- Optimize every task for the smallest safe, usable live result. Keep optional
+  hardening, penetration tests, migrations, and documentation perfection out of
+  the critical path and track them as separate work items.
+- Before editing, state the bounded deliverable, real blockers, stop conditions,
+  and time budget. After 90 minutes without a new usable verified state, stop
+  before creating more work and simplify, split, or escalate the blocker.
+- Collect and deduplicate every known finding for the current head into one
+  correction set. A finding does not automatically justify its own commit,
+  pull request, successor, agent, or full validation run.
+- Run the directly affected suite and workflow first. Run exactly one complete
+  push-ready validation only after those targeted checks pass. Repeat the full
+  validation only after it found a concrete defect, that defect was corrected,
+  and the correction was reproduced by the targeted check.
+- Re-read mutable state exactly once at the final mutation boundary. Remove
+  duplicate full validation that does not add an independent security property.
+- A stale head or run must stop immediately as `stale / not applicable`; it must
+  not continue polling, request another review, publish evidence, or consume
+  runner time for an obsolete revision.
+- Move large inline workflow programs into small separately linted and tested
+  scripts when a linter exceeds 60 seconds, exhibits path explosion, or the
+  security boundary can no longer be tested locally.
+- Keep at most one active implementation pull request per goal. Where the
+  governing workflow permits successor heads, two consecutive reviewed heads
+  with new correction findings exhaust the normal correction budget; do not
+  create another equivalent successor without simplifying or splitting the
+  design and recording the new bounded work item.
+- Deterministic checks, formatting, inventory, and polling must not invoke AI.
+  Use the least expensive model and reasoning level that is sufficient; reserve
+  higher reasoning for new architecture, security, or root-cause decisions.
+- Measure success by lead time to a usable merge, runner minutes, AI/token cost,
+  number of reviewed heads, and new verified state—not by turns, artifacts, or
+  apparent activity.
+- This contract never permits bypass, force/direct push, manual rerun, fabricated
+  evidence, or weaker required checks. The Exact-Revision textual review-unit
+  boundary remains `1..199999` bytes only for the historical compatibility
+  contract; the 2026-10-05 sizing amendment below governs normal Copilot PRs.
+
+Authority: [LIT-ENG-ADR-REP-40](https://wiki.cloud.l-it.io/wiki/spaces/LIT/pages/2878440201),
+Amendment 2026-09-12. Delivery and fleet rollout are tracked in LI-206; stale-run
+termination is tracked in LI-204.
+
+<!-- LIT REP-40 delivery efficiency: end -->
+
 ## Shared-assets ownership
 
 - This repository receives centrally managed baseline files from `lightning-it/shared-assets-lit`.
@@ -129,7 +176,7 @@
   acceptance evidence of every post-baseline ingress PR, and all release and
   audit checks. It MUST NOT request a second AI review of the cumulative
   promotion diff or apply the per-review-unit byte limit to that cumulative
-  diff; the limit remains mandatory for each new ingress review unit.
+  diff; historical Own-MLX compatibility units retain their versioned limits.
 - After a Release-App `release/vX.Y.Z` merge to `main`, its protected
   release-published back-sync is the sole owner of `main` to `develop`
   convergence. The generic ancestry synchronizer MUST detect that exact
@@ -416,3 +463,73 @@
   performs no Quay tag mutation. Quay offers no atomic create-if-absent alias
   operation, so release/version/source-SHA and `latest` aliases are not created
   or retargeted by the Security path.
+
+<!-- LIT review sizing governance: start -->
+
+## Review size and model budgets
+
+- The owner-authorized 2026-10-05 size-policy amendment replaces blanket KB
+  gates for normal Copilot pull requests and cumulative promotions. Complete
+  local deterministic checks run independently of diff size. An optional
+  planning notice starts at 500000 bytes; it never blocks or automatically
+  divides a PR, skips checks, truncates review input, or requests another AI
+  review. Existing actor, exact-head, source, and request-count guards remain.
+- Version 2 push-ready configurations migrate from `review.max_diff_bytes` to
+  `review.warn_diff_bytes`. The legacy positive integer remains readable but
+  has no blocking effect and does not set the advisory threshold. The default
+  advisory is 500000 bytes; an explicit null disables it. Promotion version 2
+  likewise accepts its legacy review shape without enforcing a diff ceiling.
+- For model calls we control, Source/Governance must budget the complete model
+  input: system and developer instructions, repository policy, prompt, schemas,
+  full diff, tool framing and results, plus an explicit output/reasoning reserve.
+  Bind the model, tokenizer/version, context capacity, all input hashes and
+  reserved output in a versioned contract; fail closed on unknown capacity or
+  an exceeded token budget. KB size is not a substitute for token accounting.
+- Preserve real parser, transport, file-read, metadata, timeout and inventory
+  resource limits. Historical Own-MLX receipt versions and the inactive bounded
+  feature-main-prestage authorization are separate contracts. Their limits
+  must not be silently reinterpreted as token budgets or globally removed;
+  Source/Governance coordinates a new producer/consumer version before cutover.
+
+
+### Protected SINGLE controller host exception (2026-10-06)
+
+The owner-authorized exception to the Devtools execution boundary applies only
+in the protected Exact-Revision SINGLE workflow. Its immutable controller may
+use host Python for tuple-bound materialization and regeneration, host/cgroup
+resource admission, root-owned `/run` bootstrap and loopback supervision, and
+the authenticated receipt lifecycle. Controller and imported runtime assets
+must remain bound to the protected workflow/base Git blobs; candidate code is
+review data and must never be imported or executed.
+
+These narrowly admitted controller checks are not generic host acceptance
+evidence or native review acceptance. Lint, test, build, package and unrelated
+validators remain in pinned Devtools. The deterministic receipt collector must
+start before `drop-sudo`, with the original runner UID/GID, read-only inputs and
+no network or service-socket mount. Its existing protected supervisor may
+publish only the successful collector's bounded output. No sudo/Docker access
+is restored after privilege removal. This exception grants no extra inference,
+request, retry, replay, funding or promotion authority; Devtools still never
+runs a model invocation.
+
+<!-- LIT review sizing governance: end -->
+
+<!-- LIT at-most-once review funding: start -->
+
+## At-most-once review funding
+
+The owner-authorized 2026-10-06 amendment requires a durable, exact-head
+reservation before the one review-request POST. Enabled pilot requests confirm
+the protected Git CAS claim before the effect; disabled/default and non-pilot
+requests confirm the durable UNCERTAIN comment reservation without CAS.
+Reservation proves consumption only, never delivery, review quality, or acceptance.
+After an unknown POST outcome, observe review delivery only through GET reads;
+do not repeat the same-head AI request. Base drift, a new run, or missing pending
+state never restores that consumed opportunity. Every completed same-head review
+from the trusted Copilot bot consumes the funding opportunity, including failed,
+quota-blocked, changes-requested, and dismissed reviews, regardless of body or
+inline content. The separate policy/evidence gate must still reject unusable
+content and unresolved findings. This amendment grants no bypass or weaker
+platform, protected-source, actor, Required-Workflow, or merge authority.
+
+<!-- LIT at-most-once review funding: end -->

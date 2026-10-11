@@ -5,7 +5,7 @@
 name: Re-evaluate protected current-revision evidence
 run-name: >-
   Protected verifier handoff PR #${{ inputs.pr_number }}
-  producer ${{ inputs.producer_run_id || 'reusable' }}
+  producer ${{ inputs.producer_run_id || 'reusable' }}${{ inputs.producer_run_attempt > 0 && format(' attempt {0}', inputs.producer_run_attempt) || '' }}
   head ${{ inputs.expected_head }}
 
 on:
@@ -60,18 +60,32 @@ on:
         required: true
         type: string
 
+      producer_run_attempt:
+        description: Frozen producer attempt for the pilot event handoff
+        required: false
+        default: 0
+        type: number
+
+    # Event handoffs carry the immutable producer attempt; legacy callers omit it.
+    # This field belongs only to workflow_dispatch.
+    # See the explicit event-writer job below.
 permissions:
   contents: read
 
 concurrency:
   group: >-
-    protected-current-revision-rerun-${{ inputs.pr_number }}-${{ inputs.expected_head }}
+    ${{ (vars.LI219_EVENT_MODE == 'enabled' && contains(fromJSON('["lightning-it/.github","lightning-it/shared-assets-lit","lightning-it/ansible-collection-supplementary"]'), github.repository)) && github.event_name == 'workflow_dispatch' && inputs.producer_run_attempt > 0 && format('current-revision-{0}-head-{1}-check-current-revision-review', github.repository_id, inputs.expected_head) || format('protected-current-revision-rerun-{0}-{1}', inputs.pr_number, inputs.expected_head) }}
   cancel-in-progress: false
+
+env:
+  LI259_INFRA_RETRY: ${{ vars.LI259_INFRA_RETRY }}
+  LI219_EVENT_MODE: ${{ (vars.LI219_EVENT_MODE == 'enabled' && contains(fromJSON('["lightning-it/.github","lightning-it/shared-assets-lit","lightning-it/ansible-collection-supplementary"]'), github.repository)) && 'enabled' || 'disabled' }}
 
 jobs:
   rerun-protected-verifier:
-    name: Re-run the one protected verifier attempt
+    name: ${{ (vars.LI219_EVENT_MODE == 'enabled' && contains(fromJSON('["lightning-it/.github","lightning-it/shared-assets-lit","lightning-it/ansible-collection-supplementary"]'), github.repository)) && github.event_name == 'workflow_dispatch' && inputs.producer_run_attempt > 0 && 'Inactive legacy writer' || 'Re-run the one protected verifier attempt' }}
     if: >-
+      !((vars.LI219_EVENT_MODE == 'enabled' && contains(fromJSON('["lightning-it/.github","lightning-it/shared-assets-lit","lightning-it/ansible-collection-supplementary"]'), github.repository)) && github.event_name == 'workflow_dispatch' && inputs.producer_run_attempt > 0) &&
       github.run_attempt == 1 &&
       (
         ( github.event_name == 'pull_request_target' && github.workflow_ref == format('{0}/.github/workflows/copilot-review.yml@refs/heads/{1}', github.repository, github.event.repository.default_branch) && github.ref_protected == true && github.event.pull_request.number == inputs.pr_number && github.event.pull_request.base.sha == inputs.expected_base && github.event.pull_request.head.sha == inputs.expected_head ) ||
@@ -86,7 +100,161 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    steps:
+    steps: &canonical_rerun_steps
+      - name: Materialize the protected operation claim
+        run: |
+          set -euo pipefail
+          umask 077
+          cat >"${RUNNER_TEMP}/helper-operation.sh" <<'CLAIM'
+          claim_review_operation() {
+            [ "${LI219_EVENT_MODE:-disabled}" = enabled ] || return 0
+            # The data ref is the CAS authority; Check inventory is never a lock.
+            local target="$1" head="$2" base="$3" pr="$4"
+            local key path action target_run created now prior snapshot record payload response committed marker rows attempt
+            [[ "${target}" =~ ^[1-9][0-9]*$ ]] || return 1
+            [[ "${pr}" =~ ^[1-9][0-9]*$ ]] || return 1
+            [[ "${head}" =~ ^[0-9a-f]{40}$ ]] || return 1
+            [[ "${base}" =~ ^[0-9a-f]{40}$ ]] || return 1
+            [[ "${GITHUB_REPOSITORY_ID}" =~ ^[1-9][0-9]*$ ]] || return 1
+            [[ "${GITHUB_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || return 1
+            [ "${GITHUB_RUN_ATTEMPT}" = 1 ] || return 1
+            action="${5:-rerun}"
+            case "${action}" in
+              rerun) [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ] || return 1 ;;
+              request) [ "${GITHUB_EVENT_NAME}" = pull_request_target ] || return 1 ;;
+              *) return 1 ;;
+            esac
+            [ "${GITHUB_REF_PROTECTED}" = true ] || return 1
+            [[ "${GITHUB_REF}" =~ ^refs/heads/(develop|main)$ ]] || return 1
+            [[ "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] || return 1
+            operation_api() {
+              if declare -F bounded_gh_api >/dev/null; then
+                bounded_gh_api "$@"
+              else
+                timeout --foreground --signal=TERM --kill-after=2s 30s gh api "$@"
+              fi
+            }
+            operation_ref() {
+              local result
+              result="$(operation_api "repos/${REPOSITORY}/git/ref/heads/lit-review-operations")" || return 1
+              jq -er 'select(.ref == "refs/heads/lit-review-operations" and .object.type == "commit")
+                | .object.sha | strings | select(test("^[0-9a-f]{40}$"))' <<<"${result}"
+            }
+            operation_snapshot() {
+              # Source commit, manifest and operation are one immutable snapshot. Never
+              # combine a mutable ref read with a separately resolved branch:path read.
+              local oid="$1" result
+              result="$(operation_api graphql -f query='query($owner:String!,$name:String!,$oid:String!,$manifest:String!,$record:String!){
+                repository(owner:$owner,name:$name){nameWithOwner
+                  source:object(expression:$oid){__typename oid}
+                  manifest:object(expression:$manifest){__typename ... on Blob{isTruncated byteSize text}}
+                  record:object(expression:$record){__typename ... on Blob{isTruncated byteSize text}}
+                }}' -f "owner=${REPOSITORY%%/*}" -f "name=${REPOSITORY#*/}" \
+                -f "oid=${oid}" -f "manifest=${oid}:manifest.json" -f "record=${oid}:${path}")" || return 1
+              jq -ce --arg oid "${oid}" --arg repo "${REPOSITORY}" --arg repo_id "${GITHUB_REPOSITORY_ID}" '
+                select(has("errors") | not) | .data.repository
+                | select(.nameWithOwner == $repo and .source.__typename == "Commit" and .source.oid == $oid)
+                | select(.manifest.__typename == "Blob" and .manifest.isTruncated == false
+                    and (.manifest.byteSize | type) == "number" and .manifest.byteSize > 0 and .manifest.byteSize <= 4096)
+                | select((.manifest.text | fromjson) == {schema:1,repository:$repo,repository_id:$repo_id,ref:"refs/heads/lit-review-operations"})
+                | select(has("record"))
+                | if .record == null then {present:false} else
+                    .record | select(.__typename == "Blob" and .isTruncated == false
+                      and (.byteSize | type) == "number" and .byteSize > 0 and .byteSize <= 4096)
+                    | {present:true,record:(.text | fromjson)} end
+                ' <<<"${result}"
+            }
+            target_run="$(operation_api "repos/${REPOSITORY}/actions/runs/${target}")" || return 1
+            created="$(jq -er --argjson id "${target}" '
+              select(.id == $id and .run_attempt == 1) | .created_at | fromdateiso8601
+              ' <<<"${target_run}")" || return 1
+            now="$(date +%s)"
+            if [ "$((now - created))" -gt 604800 ] || [ "${created}" -gt "${now}" ]; then
+              echo 'Verifier event reservation expired; merge remains blocked.' >&2
+              return 1
+            fi
+            key="li219-verifier-operation:v1:${pr}:${base}:${head}:${target}"
+            if [ "${action}" = request ]; then
+              # Base changes and fresh producer run IDs cannot buy another AI call.
+              key="li219-review-request:v1:${GITHUB_REPOSITORY_ID}:${pr}:${head}"
+            fi
+            path="operations/$(printf '%s' "${key}" | sha256sum | cut -d ' ' -f 1).json"
+            prior="$(operation_ref)" || return 1
+            snapshot="$(operation_snapshot "${prior}")" || return 1
+            if [ "$(jq -r .present <<<"${snapshot}")" != false ]; then
+              echo 'Verifier operation already consumed; only native-state reconciliation is allowed.' >&2
+              return 1
+            fi
+            record="$(jq -cn --arg key "${key}" --arg repo "${REPOSITORY}" --arg run "${GITHUB_RUN_ID}" \
+              --arg source "${WORKFLOW_SHA}" --arg repo_id "${GITHUB_REPOSITORY_ID}" --arg action "${action}" '{schema:1,repository:$repo,repository_id:$repo_id,action:$action,operation:$key,claim_run:$run,claim_attempt:"1",source_sha:$source}')" || return 1
+            payload="$(jq -cn --arg repo "${REPOSITORY}" --arg prior "${prior}" --arg path "${path}" \
+              --arg content "$(printf '%s' "${record}" | base64 -w 0)" '{
+                query:"mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid parents(first:2){nodes{oid}}}}}",
+                variables:{input:{branch:{repositoryNameWithOwner:$repo,branchName:"lit-review-operations"},
+                  expectedHeadOid:$prior,message:{headline:"Consume LI-219 verifier operation"},
+                  fileChanges:{additions:[{path:$path,contents:$content}]}}}}')" || return 1
+            # Exactly one CAS attempt. A lost response or conflict is NOT permission to
+            # retry a mutation, even if readback finds our record. Only confirmed winners
+            # may reach the single rerun POST in this invocation.
+            committed=''
+            if response="$(operation_api graphql --input - <<<"${payload}")"; then
+              committed="$(jq -er --arg prior "${prior}" '
+                select(has("errors") | not) | .data.createCommitOnBranch.commit
+                | select(.parents.nodes == [{oid:$prior}])
+                | .oid | strings | select(test("^[0-9a-f]{40}$") and . != $prior)
+                ' <<<"${response}")" || committed=''
+            fi
+            if [ -z "${committed}" ]; then
+              for attempt in 1 2 3; do
+                if prior="$(operation_ref)" && snapshot="$(operation_snapshot "${prior}")" \
+                    && [ "$(jq -r .present <<<"${snapshot}")" = true ]; then break; fi
+                [ "${attempt}" -eq 3 ] || sleep 2
+              done
+              echo 'CAS conflict or uncertain claim response; reconciliation only, no rerun sent.' >&2
+              return 1
+            fi
+            snapshot="$(operation_snapshot "${committed}")" || return 1
+            jq -e --argjson record "${record}" '.present == true and .record == $record' \
+              <<<"${snapshot}" >/dev/null || return 1
+            if [ "${action}" = request ]; then
+              CLAIM_COMMIT="${committed}"
+              return 0
+            fi
+            marker="$(jq -cn --arg key "${key}" --arg run "${GITHUB_RUN_ID}" \
+              --arg commit "${committed}" '{operation:$key,claim_run:$run,claim_attempt:"1",journal_commit:$commit}')" || return 1
+            operation_api --method POST "repos/${REPOSITORY}/check-runs" \
+              -f 'name=Review event operation' -f "head_sha=${head}" -f "external_id=${key}" \
+              -f status=completed -f conclusion=neutral -f 'output[title]=Verifier mutation consumed' \
+              -f "output[summary]=${marker}" >/dev/null || true
+            for attempt in 1 2 3; do
+              if rows="$(operation_api --paginate --slurp \
+                  "repos/${REPOSITORY}/commits/${head}/check-runs?check_name=Review%20event%20operation&filter=all&per_page=100")" \
+                && jq -e --arg marker "${marker}" --arg key "${key}" --arg head "${head}" '
+                  select(type == "array" and length > 0 and length <= 10)
+                  | select(all(.[]; (.check_runs | type) == "array"))
+                  | [.[].check_runs[] | select(.external_id == $key)]
+                  | length == 1 and .[0].output.summary == $marker
+                    and .[0].name == "Review event operation" and .[0].head_sha == $head
+                    and .[0].app.id == 15368 and .[0].app.slug == "github-actions"
+                    and .[0].status == "completed" and .[0].conclusion == "neutral"
+                    and .[0].output.title == "Verifier mutation consumed"
+                  ' <<<"${rows}" >/dev/null; then return 0; fi
+              [ "${attempt}" -eq 3 ] || sleep 2
+            done
+            echo 'Consumed operation receipt not visible; no rerun sent.' >&2
+            return 1
+          }
+          seal_native_retry_contract() {
+            [ "${LI219_EVENT_MODE:-disabled}" = enabled ] || return 0
+            [ "${LI259_INFRA_RETRY:-disabled}" = enabled ] || return 0
+            local launcher="${RUNNER_TEMP}/li259-launcher.sh"
+            if [ ! -s "${launcher}" ]; then
+              gh api "repos/${REPOSITORY}/contents/scripts/run-native-verifier-retry.sh?ref=${WORKFLOW_SHA}" \
+                --jq '.content' | base64 --decode >"${launcher}" || return 1
+            fi
+            bash "${launcher}" seal "${PR_NUMBER}" "${run_id}"
+          }
+          CLAIM
       - name: Validate the live binding and rerun exactly once
         env:
           EVENT_ACTOR: ${{ github.actor }}
@@ -97,7 +265,10 @@ jobs:
           EVENT_EXPECTED_HEAD: ${{ github.event.inputs.expected_head }}
           EVENT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           EVENT_PRODUCER_RUN_ID: ${{ github.event.inputs.producer_run_id }}
+          EVENT_PRODUCER_RUN_ATTEMPT: ${{ inputs.producer_run_attempt || 0 }}
           EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          LI219_EVENT_MODE: ${{ (vars.LI219_EVENT_MODE == 'enabled' && contains(fromJSON('["lightning-it/.github","lightning-it/shared-assets-lit","lightning-it/ansible-collection-supplementary"]'), github.repository)) && github.event_name == 'workflow_dispatch' && inputs.producer_run_attempt > 0 && 'enabled' || 'disabled' }}
           EXECUTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
           EXPECTED_BASE: ${{ inputs.expected_base }}
           EXPECTED_HEAD: ${{ inputs.expected_head }}
@@ -625,32 +796,158 @@ jobs:
             echo "The exact detached producer did not complete successfully in time." >&2
             return 1
           }
-          if [ "${evidence_version}" != v4 ]; then
+          validate_event_producer() {
+            local payload="${1}" jobs="${2}"
+            [[ "${EVENT_PRODUCER_RUN_ATTEMPT}" =~ ^(1|2)$ ]] || return 1
+            jq -e --argjson id "${producer_id}" \
+              --argjson attempt "${EVENT_PRODUCER_RUN_ATTEMPT}" '
+              .actor.login as $sender
+              | .id == $id and .run_attempt == $attempt
+              and .status == "completed"
+              and (.conclusion == "success" or .conclusion == "failure")
+              and ($sender | type) == "string" and ($sender | length) > 0
+              and .triggering_actor.login == (
+                if $attempt == 1 then $sender else "github-actions[bot]" end)
+            ' <<<"${payload}" >/dev/null || return 1
+            jq -e --arg head "${EXPECTED_HEAD}" \
+              --arg conclusion "$(jq -r .conclusion <<<"${payload}")" \
+              --argjson id "${producer_id}" \
+              --argjson attempt "${EVENT_PRODUCER_RUN_ATTEMPT}" '
+              def integer: type == "number" and floor == .;
+              if type != "array" or length == 0 then false else
+              ([.[].jobs[]] | length) as $count
+              | all(.[]; (.jobs | type) == "array"
+                  and (.total_count | integer) and .total_count == $count)
+              and ([.[].jobs[].id] | unique | length) == $count
+              and all(.[].jobs[];
+                (.id | integer) and .id > 0
+                and .run_id == $id and .run_attempt == $attempt
+                and .head_sha == $head and .status == "completed"
+                and (.conclusion == "success" or .conclusion == "skipped"
+                  or (.name == "Request protected verifier re-evaluation"
+                    and .conclusion == "failure")))
+              and ([.[].jobs[] | select(.name == "Verify current revision policy"
+                and .conclusion == "success")] | length) == 1
+              and ([.[].jobs[] | select(.name == "Request protected verifier re-evaluation"
+                and .conclusion == $conclusion)] | length) == 1
+              and ([.[].jobs[] | select(.conclusion == "failure")] | length)
+                == (if $conclusion == "failure" then 1 else 0 end)
+              end
+            ' <<<"${jobs}" >/dev/null
+          }
+          if [ "${LI219_EVENT_MODE:-disabled}" = enabled ]; then
+            test "${evidence_version}:${external_kind}" = v6:copilot
+            event_producer_jobs="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/actions/runs/${producer_id}/attempts/${EVENT_PRODUCER_RUN_ATTEMPT}/jobs?filter=all&per_page=100")"
+            validate_event_producer "${producer}" "${event_producer_jobs}"
+          elif [ "${evidence_version}" != v4 ]; then
             detached_producer=false
             if [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]; then
               detached_producer=true
               wait_for_successful_detached_producer
-              jq -e '
-                .run_attempt == 1
-                and .status == "completed"
-                and .conclusion == "success"
-              ' <<<"${producer}" >/dev/null
               producer_handoff_job='Request protected verifier re-evaluation'
               if [ "${external_kind}" = managed-sync ]; then
                 producer_handoff_job='Dispatch protected managed-sync finalizer re-evaluation'
               fi
             else
               test "${producer_id}" = "${GITHUB_RUN_ID}"
-              jq -e '
-                .run_attempt == 1
-                and .status == "in_progress"
-                and .conclusion == null
-              ' <<<"${producer}" >/dev/null
               producer_handoff_job='Request protected verifier re-evaluation / Re-run the one protected verifier attempt'
             fi
-            producer_jobs_pages="$(gh api --paginate --slurp \
-              "repos/${REPOSITORY}/actions/runs/${producer_id}/jobs?filter=all&per_page=100")"
-            jq -e \
+            validate_producer_run() {
+              if [ "${detached_producer}" = true ]; then
+                jq -e '
+                  .run_attempt == 1
+                  and .status == "completed"
+                  and .conclusion == "success"
+                ' <<<"${producer}" >/dev/null
+              else
+                jq -e '
+                  .run_attempt == 1
+                  and .status == "in_progress"
+                  and .conclusion == null
+                ' <<<"${producer}" >/dev/null
+              fi
+            }
+            validate_producer_run
+            producer_jobs_pages=''
+            read_producer_job_inventory() {
+              gh api --paginate --slurp \
+                "repos/${REPOSITORY}/actions/runs/${producer_id}/jobs?filter=all&per_page=100"
+            }
+            validate_producer_job_inventory_shape() {
+              jq -e \
+                --arg head "${EXPECTED_HEAD}" \
+                --arg handoff_job "${producer_handoff_job}" \
+                --argjson run_id "${producer_id}" '
+                  def exact_job($name):
+                    select(.run_id == $run_id and .run_attempt == 1
+                      and .head_sha == $head and .name == $name);
+                  def integer: type == "number" and floor == .;
+                  def valid_execution_shape:
+                    has("runner_id") and has("runner_name")
+                    and (.steps | type) == "array"
+                    and has("status") and has("conclusion")
+                    and if .runner_id == null then
+                      (.runner_name == null or .runner_name == "")
+                      and (.steps | length) == 0
+                      and ((.status == "queued" and .conclusion == null)
+                        or (.status == "completed" and .conclusion == "skipped"))
+                    else
+                      (.runner_id | integer) and .runner_id > 0
+                      and (.runner_name | type) == "string"
+                      and (.runner_name | length) > 0
+                      and (.steps | length) > 0
+                    end;
+                  if type != "array" or length == 0 then false else
+                    ([.[].jobs[]] | length) as $count
+                    | all(.[];
+                        type == "object"
+                        and (.total_count | integer) and .total_count >= 0
+                        and (.jobs | type) == "array")
+                    and ([.[].total_count] | unique | length) == 1
+                    and .[0].total_count == $count
+                    and ([.[].jobs[].id] | unique | length) == $count
+                    and all(.[].jobs[];
+                      type == "object"
+                      and (.id | integer) and .id > 0
+                      and .run_id == $run_id and .run_attempt == 1
+                      and .head_sha == $head
+                      and (.name | type) == "string" and (.name | length) > 0
+                      and valid_execution_shape
+                      and if .status == "completed" then
+                        .conclusion == "success" or .conclusion == "skipped"
+                      else
+                        (.status == "queued" or .status == "in_progress")
+                        and .conclusion == null
+                      end)
+                    and ([.[].jobs[] |
+                      exact_job("Verify current revision policy")] | length) == 1
+                    and ([.[].jobs[] | exact_job($handoff_job)] | length) == 1
+                  end
+                ' <<<"${producer_jobs_pages}" >/dev/null
+            }
+            if [ "${detached_producer}" = true ]; then
+              for producer_jobs_attempt in $(seq 1 40); do
+                producer_jobs_pages="$(read_producer_job_inventory)"
+                validate_producer_job_inventory_shape
+                if jq -e \
+                  '[.[].jobs[]] | all(.[]; .status == "completed")' \
+                  <<<"${producer_jobs_pages}" >/dev/null; then
+                  break
+                fi
+                if [ "${producer_jobs_attempt}" -eq 40 ]; then
+                  echo "The detached producer job inventory did not converge in time." >&2
+                  exit 1
+                fi
+                sleep 5
+              done
+            else
+              producer_jobs_pages="$(read_producer_job_inventory)"
+              validate_producer_job_inventory_shape
+            fi
+            # Validate the complete exact review-producer job inventory.
+            validate_producer_job_inventory() {
+              jq -e \
               --arg head "${EXPECTED_HEAD}" \
               --arg handoff_job "${producer_handoff_job}" \
               --argjson detached "${detached_producer}" \
@@ -658,20 +955,72 @@ jobs:
                 def exact_job($name):
                   select(.run_id == $run_id and .run_attempt == 1
                     and .head_sha == $head and .name == $name);
-                type == "array" and length > 0
-                and all(.[]; type == "object" and (.jobs | type) == "array")
-                and ([.[].jobs[] |
-                  exact_job("Verify current revision policy")
-                  | select(.status == "completed" and .conclusion == "success")] | length) == 1
-                and ([.[].jobs[] |
-                  exact_job($handoff_job)
-                  | select(
-                      if $detached then
-                        .status == "completed" and .conclusion == "success"
-                      else
-                        .status == "in_progress" and .conclusion == null
-                      end)] | length) == 1
+                def integer: type == "number" and floor == .;
+                def valid_execution_shape:
+                  has("runner_id") and has("runner_name")
+                  and (.steps | type) == "array"
+                  and has("status") and has("conclusion")
+                  and if .runner_id == null then
+                    (.runner_name == null or .runner_name == "")
+                    and (.steps | length) == 0
+                    and ((.status == "queued" and .conclusion == null)
+                      or (.status == "completed" and .conclusion == "skipped"))
+                  else
+                    (.runner_id | integer) and .runner_id > 0
+                    and (.runner_name | type) == "string"
+                    and (.runner_name | length) > 0
+                    and (.steps | length) > 0
+                  end;
+                if type != "array" or length == 0 then false else
+                  ([.[].jobs[]] | length) as $count
+                  | all(.[];
+                      type == "object"
+                      and (.total_count | integer) and .total_count >= 0
+                      and (.jobs | type) == "array")
+                  and ([.[].total_count] | unique | length) == 1
+                  and .[0].total_count == $count
+                  and ([.[].jobs[].id] | unique | length) == $count
+                  and all(.[].jobs[];
+                    type == "object"
+                    and (.id | integer) and .id > 0
+                    and .run_id == $run_id and .run_attempt == 1
+                    and .head_sha == $head
+                    and (.name | type) == "string" and (.name | length) > 0
+                    and valid_execution_shape
+                    and (.status == "queued" or .status == "in_progress"
+                      or .status == "completed")
+                    and has("conclusion")
+                    and if $detached or .status == "completed" then
+                      .status == "completed"
+                      and (.conclusion == "success" or .conclusion == "skipped")
+                    else
+                      .conclusion == null
+                    end)
+                  and ([.[].jobs[] |
+                    exact_job("Verify current revision policy")
+                    | select(.status == "completed" and .conclusion == "success")] | length) == 1
+                  and ([.[].jobs[] |
+                    exact_job($handoff_job)
+                    | select(
+                        if $detached then
+                          .status == "completed" and .conclusion == "success"
+                        else
+                          .status == "in_progress" and .conclusion == null
+                        end)] | length) == 1
+                end
               ' <<<"${producer_jobs_pages}" >/dev/null
+            }
+            validate_producer_snapshot() {
+              validate_producer_run
+              validate_producer_job_inventory_shape
+              validate_producer_job_inventory
+            }
+            validate_producer_snapshot
+            if [ "${detached_producer}" = true ]; then
+              admitted_producer="$(jq -cS '.' <<<"${producer}")"
+              admitted_producer_jobs_pages="$(jq -cS '.' \
+                <<<"${producer_jobs_pages}")"
+            fi
           else
             # Only the v4 Exact-Revision producer dispatches this detached
             # verifier, then exits after observing that this job was
@@ -1075,7 +1424,9 @@ jobs:
           attempt_one_inventory_deadline_ms=''
           test "${attempt_one_inventory_converged}" = true
           # Validate only the converged attempt-one inventory.
-          jq -e '
+          jq -e \
+            --argjson run_id "${run_id}" \
+            --arg head "${EXPECTED_HEAD}" '
             type == "array"
             and length > 0
             and all(.[];
@@ -1086,15 +1437,20 @@ jobs:
               | all(.[]; .total_count == $job_count))
             and all(.[].jobs[];
               type == "object"
-              and (.id | type) == "number" and .id > 0
+              and (.id | type) == "number"
+              and (.id | floor) == .id and .id > 0
               and (.name | type) == "string"
-              and (.run_attempt | type) == "number" and .run_attempt >= 1
+              and .run_id == $run_id
+              and .head_sha == $head
+              and .run_attempt == 1
               and (.steps | type) == "array"
               and has("runner_id")
               and (.runner_id == null
                 or ((.runner_id | type) == "number" and .runner_id > 0))
               and .status == "completed"
               and (.conclusion | type) == "string")
+            and (([.[].jobs[].id] | length)
+              == ([.[].jobs[].id] | unique | length))
           ' <<<"${attempt_one_jobs_pages}" >/dev/null
           attempt_one_jobs=$(jq -c '[.[].jobs[]]' <<<"${attempt_one_jobs_pages}")
           jq -e 'all(.[]; has("runner_id") and (.steps | type) == "array")' <<<"${attempt_one_jobs}" >/dev/null
@@ -1104,6 +1460,27 @@ jobs:
           # is never review evidence. Routed S0 jobs are accepted only as skipped.
           synthetic_evidence_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Current revision review" or .name == "Protected current-revision verifier") | select(.run_attempt == 1 and .status == "completed" and .conclusion == "success")]' <<<"${attempt_one_jobs}")
           test "$(jq 'length' <<<"${synthetic_evidence_jobs}")" -le 2
+          # A failed reservation is not review PASS evidence. It is only the
+          # exact API check already bound above to this required run, PR and
+          # head. Draft-time failure leaves it in the attempt-one inventory;
+          # count that known record without selecting it as a rerun target.
+          failed_reservation_jobs=$(jq -c \
+            --argjson reservations "${matching_reservations}" \
+            --argjson run_id "${run_id}" \
+            --arg head "${EXPECTED_HEAD}" '
+              [.[] | select(
+                ($reservations | length) == 1
+                and $reservations[0].status == "completed"
+                and $reservations[0].conclusion == "failure"
+                and $reservations[0].head_sha == $head
+                and .id == $reservations[0].id
+                and .run_id == $run_id and .head_sha == $head
+                and .name == "Protected current-revision verifier"
+                and .runner_id == null and (.steps | length) == 0
+                and .run_attempt == 1 and .status == "completed"
+                and .conclusion == "failure")]
+            ' <<<"${attempt_one_jobs}")
+          test "$(jq 'length' <<<"${failed_reservation_jobs}")" -le 1
           synthetic_authorization_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Authorize exact Supplementary catch-up v5 successor") | select(.run_attempt == 1 and .status == "completed" and .conclusion == "skipped")]' <<<"${attempt_one_jobs}")
           test "$(jq 'length' <<<"${synthetic_authorization_jobs}")" -le 1
           synthetic_promotion_jobs=$(jq -c '[.[] | select(.runner_id == null and (.steps | length) == 0) | select(.name == "Verify aggregated develop-to-main promotion evidence") | select(.run_attempt == 1 and .status == "completed" and .conclusion == "skipped")]' <<<"${attempt_one_jobs}")
@@ -1123,6 +1500,7 @@ jobs:
               <<<"${attempt_one_jobs}" >/dev/null; then
             jq -e \
               --argjson evidence "${synthetic_evidence_jobs}" \
+              --argjson failed_reservation "${failed_reservation_jobs}" \
               --argjson authorization "${synthetic_authorization_jobs}" \
               --argjson promotion "${synthetic_promotion_jobs}" '
                 def runner($name; $conclusion):
@@ -1134,7 +1512,7 @@ jobs:
                     and (.steps | length) == 0 and .conclusion == "skipped")]
                   | length == 1;
                 length == (6 + ($evidence | length) + ($authorization | length)
-                  + ($promotion | length))
+                  + ($promotion | length) + ($failed_reservation | length))
                 and runner("Route protected current-revision verification"; "success")
                 and runner("Legacy protected current-revision verifier"; "failure")
                 and runner("Required current-revision workflow"; "failure")
@@ -1145,7 +1523,7 @@ jobs:
             rerunnable_jobs=$(jq -c '[.[] | select(.name == "Legacy protected current-revision verifier") | select(.runner_id != null and (.steps | length) > 0) | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${runner_backed_jobs}")
           else
             test "$(jq 'length' <<<"${attempt_one_jobs}")" -eq \
-              "$(jq -n --argjson authorization "${synthetic_authorization_jobs}" --argjson evidence "${synthetic_evidence_jobs}" --argjson promotion "${synthetic_promotion_jobs}" --argjson runners "${runner_backed_jobs}" '(($authorization | length) + ($evidence | length) + ($promotion | length) + ($runners | length))')"
+              "$(jq -n --argjson authorization "${synthetic_authorization_jobs}" --argjson evidence "${synthetic_evidence_jobs}" --argjson failed_reservation "${failed_reservation_jobs}" --argjson promotion "${synthetic_promotion_jobs}" --argjson runners "${runner_backed_jobs}" '(($authorization | length) + ($evidence | length) + ($failed_reservation | length) + ($promotion | length) + ($runners | length))')"
             test "$(jq 'length' <<<"${runner_backed_jobs}")" -eq 1
             rerunnable_jobs=$(jq -c '[.[] | select(.name == "Required current-revision workflow") | select(.runner_id != null and (.steps | length) > 0) | select(.run_attempt == 1) | select(.status == "completed" and .conclusion == "failure")]' <<<"${runner_backed_jobs}")
           fi
@@ -1160,6 +1538,33 @@ jobs:
           test "$(jq -cS '.' <<<"${final_attempt_one_jobs_pages}")" = \
             "$(jq -cS '.' <<<"${attempt_one_jobs_pages}")"
           revalidate_pr_metadata
+          if [ "${LI219_EVENT_MODE:-disabled}" = enabled ]; then
+            event_producer_latest="$(gh api "repos/${REPOSITORY}/actions/runs/${producer_id}")"
+            event_jobs_latest="$(gh api --paginate --slurp \
+              "repos/${REPOSITORY}/actions/runs/${producer_id}/attempts/${EVENT_PRODUCER_RUN_ATTEMPT}/jobs?filter=all&per_page=100")"
+            validate_event_producer "${event_producer_latest}" "${event_jobs_latest}"
+            test "$(jq -cS . <<<"${event_jobs_latest}")" = "$(jq -cS . <<<"${event_producer_jobs}")"
+            # shellcheck source=/dev/null
+            source "${RUNNER_TEMP}/helper-operation.sh"
+            seal_native_retry_contract
+            claim_review_operation "${run_id}" "${EXPECTED_HEAD}" "${EXPECTED_BASE}" "${PR_NUMBER}" || exit 0
+            revalidate_pr_metadata
+            event_producer_latest="$(gh api "repos/${REPOSITORY}/actions/runs/${producer_id}")"
+            validate_event_producer "${event_producer_latest}" "${event_jobs_latest}"
+            seal_native_retry_contract
+          elif [ "${evidence_version}" != v4 ] \
+              && [ "${detached_producer}" = true ]; then
+            final_producer="$(gh api \
+              "repos/${REPOSITORY}/actions/runs/${producer_id}")"
+            final_producer_jobs_pages="$(read_producer_job_inventory)"
+            producer="${final_producer}"
+            producer_jobs_pages="${final_producer_jobs_pages}"
+            validate_producer_snapshot
+            test "$(jq -cS '.' <<<"${final_producer}")" = \
+              "${admitted_producer}"
+            test "$(jq -cS '.' <<<"${final_producer_jobs_pages}")" = \
+              "${admitted_producer_jobs_pages}"
+          fi
           if ! gh api --method POST \
               "repos/${REPOSITORY}/actions/jobs/${required_job_id}/rerun" >/dev/null; then
             # GitHub can accept the verifier-job rerun and still close the client request
@@ -1189,3 +1594,19 @@ jobs:
               and .[0].conclusion == "success"
             ' <<<"${post_neutral}" >/dev/null
           echo "Protected verifier rerun request published; required workflow attempt two owns final verification."
+
+  event-rerun:
+    name: ${{ (vars.LI219_EVENT_MODE == 'enabled' && contains(fromJSON('["lightning-it/.github","lightning-it/shared-assets-lit","lightning-it/ansible-collection-supplementary"]'), github.repository)) && github.event_name == 'workflow_dispatch' && inputs.producer_run_attempt > 0 && 'Re-run the one protected verifier attempt' || 'Inactive event writer' }}
+    if: >-
+      (vars.LI219_EVENT_MODE == 'enabled' && contains(fromJSON('["lightning-it/.github","lightning-it/shared-assets-lit","lightning-it/ansible-collection-supplementary"]'), github.repository)) && github.event_name == 'workflow_dispatch' && inputs.producer_run_attempt > 0 && github.run_attempt == 1 && github.ref_protected &&
+      github.actor == 'github-actions[bot]' && github.triggering_actor == 'github-actions[bot]' &&
+      github.workflow_sha == inputs.expected_base &&
+      github.ref == format('refs/heads/{0}', inputs.base_ref)
+    permissions:
+      actions: write
+      checks: write
+      contents: write
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps: *canonical_rerun_steps

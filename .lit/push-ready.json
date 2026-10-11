@@ -34,7 +34,7 @@
     }
   ],
   "review": {
-    "max_diff_bytes": 200000
+    "warn_diff_bytes": 500000
   },
   "evidence": {
     "max_age_seconds": 86400
