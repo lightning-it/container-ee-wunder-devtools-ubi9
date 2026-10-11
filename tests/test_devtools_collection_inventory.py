@@ -160,7 +160,9 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
 
     def test_patched_go_crypto_is_forced_into_vulnerable_binaries(self) -> None:
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("ARG GO_X_CRYPTO_VERSION=0.55.0", dockerfile)
+        self.assertIn("ARG GO_X_CRYPTO_VERSION=0.57.0", dockerfile)
+        self.assertIn("ARG GO_X_NET_VERSION=0.60.0", dockerfile)
+        self.assertIn("ARG GO_X_TEXT_VERSION=0.42.0", dockerfile)
         self.assertIn(
             'github.com/terraform-docs/terraform-docs "v${TF_DOCS_VERSION}" '
             ". terraform-docs \\\n"
@@ -183,20 +185,12 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
         self.assertEqual(
             2,
             dockerfile.count(
-                'go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"'
+                '"google.golang.org/grpc@v${GO_GRPC_VERSION}" &&'
             ),
         )
-        self.assertIn(
-            'github.com/cli/cli/v2 "v${GH_VERSION}" ./cmd/gh gh \\\n'
-            '      "golang.org/x/mod@v${GO_X_MOD_VERSION}" \\\n'
-            '      "google.golang.org/grpc@v${GO_GRPC_VERSION}"',
-            dockerfile,
-        )
-        self.assertIn(
-            'cp vendor.sum go.sum && \\\n'
-            '    GOFLAGS=-mod=mod go get '
-            '"google.golang.org/grpc@v${GO_GRPC_VERSION}"',
-            dockerfile,
+        self.assertGreaterEqual(
+            dockerfile.count('"golang.org/x/net@v${GO_X_NET_VERSION}"'),
+            6,
         )
         self.assertIn("CGO_ENABLED=0 GOFLAGS=-mod=mod go build", dockerfile)
         self.assertIn(
@@ -204,22 +198,34 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
             "docker-compose",
             dockerfile,
         )
+        self.assertIn(
+            "for binary in terraform tflint terraform-docs helm gh docker "
+            "docker-compose",
+            dockerfile,
+        )
         self.assertNotIn("-mod=vendor", dockerfile)
+        self.assertIn("<x-net-version>", compose_builder)
         self.assertIn("<grpc-version>", compose_builder)
         self.assertIn("invalid container build coordinate", compose_builder)
         self.assertNotIn("invalid Compose build coordinate", compose_builder)
+        self.assertIn(
+            '"-replace=golang.org/x/net='
+            'golang.org/x/net@v${x_net_version}"',
+            compose_builder,
+        )
         self.assertIn(
             '"-replace=google.golang.org/grpc='
             'google.golang.org/grpc@v${grpc_version}"',
             compose_builder,
         )
         self.assertIn(
-            'effective_grpc_version="$(\n'
+            'effective_x_net_version="$(\n'
             "  go version -m /out/docker-compose",
             compose_builder,
         )
         self.assertIn(
-            '"${effective_grpc_version:-<missing>}" "$grpc_version"',
+            'effective_grpc_version="$(\n'
+            "  go version -m /out/docker-compose",
             compose_builder,
         )
 
