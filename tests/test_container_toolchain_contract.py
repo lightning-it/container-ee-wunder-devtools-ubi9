@@ -59,6 +59,11 @@ class ContainerToolchainContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        pnpm_lock = yaml.safe_load(
+            (ROOT / "container-toolchain/pnpm-lock.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
 
         locked_versions = {}
         for match in re.finditer(
@@ -163,6 +168,28 @@ class ContainerToolchainContractTests(unittest.TestCase):
         )
         pnpm_version = container_package["dependencies"]["pnpm"]
         self.assertEqual(f"pnpm@{pnpm_version}", container_package["packageManager"])
+        self.assertEqual("44.145.2", container_package["dependencies"]["renovate"])
+        self.assertEqual(
+            "44.145.2",
+            pnpm_lock["importers"]["."]["dependencies"]["renovate"]["specifier"],
+        )
+        expected_renovate_security_overrides = {
+            "handlebars": "4.7.10",
+            "simple-git": "4.0.2",
+            "@simple-git/argv-parser": "2.0.1",
+        }
+        for package, version in expected_renovate_security_overrides.items():
+            self.assertEqual(version, pnpm_workspace["overrides"][package])
+            self.assertEqual(version, pnpm_lock["overrides"][package])
+            self.assertIn(f"{package}@{version}", pnpm_lock["packages"])
+            self.assertTrue(
+                any(
+                    snapshot == f"{package}@{version}"
+                    or snapshot.startswith(f"{package}@{version}(")
+                    for snapshot in pnpm_lock["snapshots"]
+                ),
+                f"pnpm lock must retain the {package}@{version} snapshot",
+            )
         self.assertNotIn("ARG PNPM_VERSION=", dockerfile)
         self.assertIn("dependencies.pnpm", dockerfile)
         self.assertIn('corepack "pnpm@${pnpm_version}" install', dockerfile)
@@ -331,7 +358,21 @@ class ContainerToolchainContractTests(unittest.TestCase):
             self.assertIn(command, dockerfile)
         self.assertIn("COPY renovate.json /tmp/renovate.json", dockerfile)
         self.assertIn(
-            "renovate-config-validator --no-global /tmp/renovate.json", dockerfile
+            "renovate-config-validator --strict --no-global /tmp/renovate.json",
+            dockerfile,
+        )
+        renovate_copy = "COPY renovate.json /tmp/renovate.json"
+        self.assertEqual(1, dockerfile.count(renovate_copy))
+        self.assertGreater(
+            dockerfile.index(renovate_copy),
+            dockerfile.index("for binary in terraform tflint terraform-docs helm gh"),
+        )
+        self.assertLess(
+            dockerfile.index(renovate_copy),
+            dockerfile.index(
+                "RUN source /usr/local/lib/container-download-verified.sh",
+                dockerfile.index(renovate_copy),
+            ),
         )
 
         renovate = json.loads((ROOT / "renovate.json").read_text(encoding="utf-8"))

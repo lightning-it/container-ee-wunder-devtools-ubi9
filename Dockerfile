@@ -40,7 +40,6 @@ COPY scripts/container-download-verified.sh /usr/local/lib/container-download-ve
 COPY scripts/container-build-go-tool.sh /usr/local/lib/container-build-go-tool.sh
 COPY scripts/container-build-compose.sh /usr/local/lib/container-build-compose.sh
 COPY container-toolchain/package.json container-toolchain/pnpm-lock.yaml container-toolchain/pnpm-workspace.yaml /opt/node-toolchain/
-COPY renovate.json /tmp/renovate.json
 
 RUN dnf -y update && \
     dnf -y install --allowerasing ca-certificates curl tar xz && \
@@ -194,6 +193,10 @@ RUN set -euo pipefail; \
       fi; \
     done
 
+# Keep repository configuration changes out of the expensive DNF and Go build
+# cache boundary while validating it with the exact shipped Renovate runtime.
+COPY renovate.json /tmp/renovate.json
+
 # Node.js LTS plus deterministic repository validators. The independently
 # selected website runtime remains bundled so repositories declaring its exact
 # .node-version never need a host or worktree-local bootstrap. Node release
@@ -282,7 +285,7 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     /opt/node/bin/npm --version && \
     /opt/node/bin/pnpm --version && \
     /opt/node/bin/renovate-config-validator --version && \
-    /opt/node/bin/renovate-config-validator --no-global /tmp/renovate.json && \
+    /opt/node/bin/renovate-config-validator --strict --no-global /tmp/renovate.json && \
     /opt/node/bin/markdownlint-cli2 --version && \
     /opt/node/bin/prettier --version && \
     test "$(/opt/node-website/bin/node --version)" = "v${WEBSITE_NODE_VERSION}" && \
