@@ -359,7 +359,11 @@ termination is tracked in LI-204.
   `.github/workflows/current-revision-rerun.yml` differs from the protected
   canonical blob, the shared-assets App first opens a policy-only bootstrap
   containing exactly the engine, `.lit/push-ready.json`, this `AGENTS.md`, the
-  rebound Copilot instructions, and the exact protected-rerun helper. A later
+  rebound Copilot instructions, and the exact protected-rerun helper. When the
+  Devtools native gate would otherwise test the new engine against stale
+  target-owned companions, that bootstrap may additionally carry only the
+  exact pair `tests/test_lit_push_ready.py` and
+  `tests/test_current_revision_rerun_contract.py`. A later
   protected source run performs the full runtime sync only after the bootstrap
   is part of the target base; a newer full-sync head must never depend on its
   own unmerged helper, and the two phases must never be collapsed past the

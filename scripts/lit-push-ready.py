@@ -209,6 +209,11 @@ COPILOT_REQUIRED_SAFETY_ARGUMENTS = (
 CHUNK_BYTES = 64 * 1024
 # Aggregate tracked-workspace read budget, independent of PR/diff sizing.
 MAX_TRACKED_WORKSPACE_SCAN_BYTES = 500_000_000
+# Fingerprints cover ignored and untracked files as well as Git metadata. Keep
+# their I/O bounded independently of review sizing so an ignored artifact
+# cannot exhaust the runner while checks compare pre/post state.
+MAX_FINGERPRINT_FILE_BYTES = 100_000_000
+MAX_FINGERPRINT_TOTAL_BYTES = 500_000_000
 
 
 class PatchSpool:
@@ -334,22 +339,31 @@ def decoded_git_chunks(
     yield decoder.decode(b"", final=True)
 
 
-def hash_open_file(stream):
+def hash_open_file(stream, *, max_bytes=None, purpose="File"):
     digest = hashlib.sha256()
     size = 0
     while True:
-        value = stream.read(CHUNK_BYTES)
+        read_size = CHUNK_BYTES
+        if max_bytes is not None:
+            # Read at most the remaining allowance plus one bounded byte that
+            # distinguishes exact-size input from an oversized stream.
+            read_size = min(CHUNK_BYTES, max_bytes - size + 1)
+        value = stream.read(read_size)
         if not value:
             break
-        digest.update(value)
         size += len(value)
+        if max_bytes is not None and size > max_bytes:
+            raise RuntimeError(
+                f"{purpose} input exceeds {max_bytes} bytes"
+            )
+        digest.update(value)
     return digest.hexdigest(), size
 
 
-def hash_repository_file(root, name, *, purpose):
+def hash_repository_file(root, name, *, purpose, max_bytes=None):
     descriptor = open_regular_below(root, name, purpose=purpose)
     with os.fdopen(descriptor, "rb") as stream:
-        return hash_open_file(stream)
+        return hash_open_file(stream, max_bytes=max_bytes, purpose=purpose)
 
 
 def fingerprint_stream(cwd, untracked, *, integration=False):
@@ -1264,12 +1278,19 @@ def untracked_names() -> list[str]:
 def untracked_file_hashes(max_bytes: Optional[int] = None) -> dict[str, str]:
     hashes: dict[str, str] = {}
     total = 0
+    total_limit = MAX_FINGERPRINT_TOTAL_BYTES if max_bytes is None else max_bytes
     for name in untracked_names():
-        digest, size = hash_repository_file(ROOT, name, purpose="Fingerprint")
+        remaining = total_limit - total
+        digest, size = hash_repository_file(
+            ROOT,
+            name,
+            purpose="Fingerprint",
+            max_bytes=min(MAX_FINGERPRINT_FILE_BYTES, remaining),
+        )
         total += size
-        if max_bytes is not None and total > max_bytes:
+        if total > total_limit:
             raise RuntimeError(
-                "Fingerprint input exceeds its explicit caller byte limit"
+                f"Fingerprint input exceeds {total_limit} total bytes"
             )
         hashes[name] = digest
     return hashes
@@ -2214,8 +2235,18 @@ def integration_worktree_fingerprint(cwd: Path) -> str:
     hashes = {}
     total = 0
     for name in filter(None, names):
-        digest, size = hash_repository_file(cwd, name, purpose="Worktree fingerprint")
+        remaining = MAX_FINGERPRINT_TOTAL_BYTES - total
+        digest, size = hash_repository_file(
+            cwd,
+            name,
+            purpose="Worktree fingerprint",
+            max_bytes=min(MAX_FINGERPRINT_FILE_BYTES, remaining),
+        )
         total += size
+        if total > MAX_FINGERPRINT_TOTAL_BYTES:
+            raise RuntimeError(
+                "Worktree fingerprint input exceeds 500000000 total bytes"
+            )
         hashes[name] = digest
     return fingerprint_stream(cwd, hashes, integration=True)
 

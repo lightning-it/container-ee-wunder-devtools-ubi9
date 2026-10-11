@@ -1,4 +1,6 @@
 import importlib.util
+import hashlib
+import io
 import os
 import subprocess
 import tempfile
@@ -214,6 +216,144 @@ class PushReadySecurityTests(unittest.TestCase):
             PUSH_READY.ensure_review_safe(
                 self.change(diff="+ token = ghp_" + "a" * 36 + "\n")
             )
+
+    def test_streaming_secret_scanner_matches_governed_regexes_at_every_split(self):
+        samples = (
+            "-----BEGIN PRIVATE KEY-----",
+            "client_secret = '" + "a" * 20 + "'",
+            "ghp_" + "a" * 24,
+            "github_pat_" + "a" * 24,
+            "glpat-" + "a" * 24,
+            "pypi-" + "a" * 24,
+            "npm_" + "a" * 24,
+            "sk_live_" + "a" * 20,
+            "AKIA" + "A" * 16,
+            "AIza" + "a" * 35,
+            "xoxb-" + "a" * 24,
+            "Bearer " + "a" * 24,
+            "eyJ" + "a" * 12 + "." + "b" * 12 + "." + "c" * 12,
+            "_authToken = " + "a" * 20,
+            "safe content with token-like words only",
+            "prefix\r\nnpm_" + "a" * 24 + "\r\nsuffix",
+        )
+        governed_patterns = (
+            *PUSH_READY.SECRET_CONTENT_PATTERNS,
+            PUSH_READY.NPMRC_AUTH_PATTERN,
+        )
+        for sample in samples:
+            expected = sum(
+                (1 << index) if pattern.search(sample) else 0
+                for index, pattern in enumerate(governed_patterns)
+            )
+            for split in range(len(sample) + 1):
+                with self.subTest(sample=sample[:24], split=split):
+                    self.assertEqual(
+                        expected,
+                        PUSH_READY.scan_chunks((sample[:split], sample[split:])),
+                    )
+
+    def test_streaming_secret_scanner_preserves_chunk_boundary_and_masking(self):
+        token = "npm_" + "a" * 24
+        sample = "x" * (PUSH_READY.CHUNK_BYTES - 2) + "\r\n" + token + "\r\n"
+        governed_patterns = (
+            *PUSH_READY.SECRET_CONTENT_PATTERNS,
+            PUSH_READY.NPMRC_AUTH_PATTERN,
+        )
+        expected = sum(
+            (1 << index) if pattern.search(sample) else 0
+            for index, pattern in enumerate(governed_patterns)
+        )
+        for split in (
+            PUSH_READY.CHUNK_BYTES - 1,
+            PUSH_READY.CHUNK_BYTES,
+            PUSH_READY.CHUNK_BYTES + 1,
+            len(sample) - 1,
+        ):
+            self.assertEqual(
+                expected,
+                PUSH_READY.scan_chunks((sample[:split], sample[split:])),
+            )
+
+        fixture = "token = " + "a" * 20
+        documented = {
+            "fixture.txt": {
+                1: (hashlib.sha256(fixture.encode()).hexdigest(), fixture)
+            }
+        }
+        masked = "".join(
+            PUSH_READY.filtered_scan_chunks(
+                (fixture + "\r\n",),
+                documented,
+                path="fixture.txt",
+                redact=True,
+            )
+        )
+        self.assertEqual("DOCUMENTED_SYNTHETIC_FIXTURE\n", masked)
+        self.assertEqual(0, PUSH_READY.scan_chunks((masked,)))
+
+    def test_fingerprint_hashing_enforces_file_and_aggregate_limits(self):
+        class CountingStream(io.BytesIO):
+            def __init__(self, value):
+                super().__init__(value)
+                self.read_sizes = []
+
+            def read(self, size=-1):
+                self.read_sizes.append(size)
+                return super().read(size)
+
+        stream = CountingStream(b"123456")
+        with self.assertRaisesRegex(RuntimeError, "Fingerprint input exceeds 5 bytes"):
+            PUSH_READY.hash_open_file(
+                stream,
+                max_bytes=5,
+                purpose="Fingerprint",
+            )
+        self.assertEqual([6], stream.read_sizes)
+
+        exhausted = CountingStream(b"x" * PUSH_READY.CHUNK_BYTES)
+        with self.assertRaisesRegex(RuntimeError, "Fingerprint input exceeds 0 bytes"):
+            PUSH_READY.hash_open_file(
+                exhausted,
+                max_bytes=0,
+                purpose="Fingerprint",
+            )
+        self.assertEqual([1], exhausted.read_sizes)
+
+        limits = []
+
+        def bounded_hash(*_args, max_bytes, **_kwargs):
+            limits.append(max_bytes)
+            return "a" * 64, 100_000_000
+
+        with mock.patch.object(
+            PUSH_READY,
+            "git_output_at",
+            return_value=(
+                "\0".join(f"file-{value}.bin" for value in range(6)) + "\0"
+            ),
+        ), mock.patch.object(
+            PUSH_READY,
+            "hash_repository_file",
+            side_effect=bounded_hash,
+        ), mock.patch.object(PUSH_READY, "fingerprint_stream") as fingerprint:
+            with self.assertRaisesRegex(RuntimeError, "500000000 total bytes"):
+                PUSH_READY.integration_worktree_fingerprint(ROOT)
+        fingerprint.assert_not_called()
+        self.assertEqual([100_000_000] * 5 + [0], limits)
+
+        limits.clear()
+        with mock.patch.object(
+            PUSH_READY,
+            "untracked_names",
+            return_value=[f"file-{value}.bin" for value in range(6)],
+        ), mock.patch.object(
+            PUSH_READY,
+            "hash_repository_file",
+            side_effect=bounded_hash,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "500000000 total bytes"):
+                PUSH_READY.untracked_file_hashes()
+        self.assertEqual([100_000_000] * 5 + [0], limits)
 
     def test_safe_open_refuses_symlink(self):
         with tempfile.TemporaryDirectory() as temporary:
