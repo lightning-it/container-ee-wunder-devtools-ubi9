@@ -250,7 +250,7 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     /opt/node/bin/npm --version && \
     /opt/node/bin/pnpm --version && \
     /opt/node/bin/renovate-config-validator --version && \
-    /opt/node/bin/renovate-config-validator /tmp/renovate.json && \
+    /opt/node/bin/renovate-config-validator --no-global /tmp/renovate.json && \
     /opt/node/bin/markdownlint-cli2 --version && \
     /opt/node/bin/prettier --version && \
     test "$(/opt/node-website/bin/node --version)" = "v${WEBSITE_NODE_VERSION}" && \

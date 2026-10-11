@@ -328,7 +328,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             self.assertIn(command, dockerfile)
         self.assertIn("COPY renovate.json /tmp/renovate.json", dockerfile)
         self.assertIn(
-            "renovate-config-validator /tmp/renovate.json", dockerfile
+            "renovate-config-validator --no-global /tmp/renovate.json", dockerfile
         )
 
         renovate = json.loads((ROOT / "renovate.json").read_text(encoding="utf-8"))
