@@ -1,6 +1,7 @@
 import importlib.util
 import hashlib
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -290,6 +291,86 @@ class PushReadySecurityTests(unittest.TestCase):
         )
         self.assertEqual("DOCUMENTED_SYNTHETIC_FIXTURE\n", masked)
         self.assertEqual(0, PUSH_READY.scan_chunks((masked,)))
+
+    def test_packer_masking_is_limited_to_bare_references_in_packer_files(self):
+        reference = "password = var.this_is_a_long_variable_name"
+
+        def scan(path, content, *, allow_packer=True):
+            with tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                subprocess.run(
+                    ["git", "init", "-q", str(workspace)], check=True
+                )
+                destination = workspace / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(content + "\n", encoding="utf-8")
+                subprocess.run(
+                    ["git", "-C", str(workspace), "add", path], check=True
+                )
+                PUSH_READY.streaming_workspace_safe(
+                    workspace, {}, allow_packer=allow_packer
+                )
+
+        scan("image.pkr.hcl", reference)
+        rejected = (
+            ("image.pkr.hcl", "# " + reference),
+            ("image.pkr.hcl", "value = <<EOF\n" + reference + "\nEOF"),
+            ("variables.hcl", reference),
+            ("image.pkr.hcl", "password = ghp_" + "a" * 24),
+        )
+        for path, content in rejected:
+            with self.subTest(path=path, content=content[:24]):
+                with self.assertRaisesRegex(RuntimeError, "secret-like content"):
+                    scan(path, content)
+
+    def test_documentation_fixture_authorization_is_path_and_purpose_bound(self):
+        line = "password = " + "a" * 20
+
+        def manifest(path, purpose, value=line):
+            return json.dumps(
+                {
+                    "version": 1,
+                    "fixtures": [
+                        {
+                            "path": path,
+                            "line_hex": value.encode().hex(),
+                            "line_number": 1,
+                            "purpose": purpose,
+                        }
+                    ],
+                }
+            )
+
+        allowed = (
+            "README.md",
+            "charts/service/README.md",
+            "charts/service/README.md.gotmpl",
+            "charts/service/values.yaml",
+            "charts/parent/charts/child/README.md",
+        )
+        for path in allowed:
+            with self.subTest(path=path):
+                parsed = PUSH_READY.parse_secret_fixture_manifest(
+                    manifest(path, "synthetic-documentation-example")
+                )
+                self.assertIn(path, parsed)
+
+        rejected = (
+            ("docs/README.md", "synthetic-documentation-example", line),
+            ("tests/example.txt", "synthetic-documentation-example", line),
+            ("README.md", "synthetic-test-fixture", line),
+            (
+                "README.md",
+                "synthetic-documentation-example",
+                "-----BEGIN PRIVATE KEY-----",
+            ),
+        )
+        for path, purpose, value in rejected:
+            with self.subTest(path=path, purpose=purpose, value=value[:24]):
+                with self.assertRaisesRegex(RuntimeError, "unsafe path|PEM"):
+                    PUSH_READY.parse_secret_fixture_manifest(
+                        manifest(path, purpose, value)
+                    )
 
     def test_fingerprint_hashing_enforces_file_and_aggregate_limits(self):
         class CountingStream(io.BytesIO):

@@ -3023,6 +3023,10 @@ def parse_secret_fixture_manifest(
             raise RuntimeError(
                 "secret fixture manifest entries must encode one non-empty line"
             )
+        if PEM_KEY_BEGIN_BOUNDARY_PATTERN.search(line):
+            raise RuntimeError(
+                "secret fixture manifest may not authorize PEM private key beginnings"
+            )
         if not any(pattern.search(line) for pattern in SECRET_CONTENT_PATTERNS):
             raise RuntimeError(
                 "secret fixture manifest entry is not secret-like"
