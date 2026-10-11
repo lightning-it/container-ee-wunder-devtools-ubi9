@@ -147,6 +147,36 @@
     },
     {
       "customType": "regex",
+      "description": "Go x/crypto security override in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+GO_X_CRYPTO_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "golang.org/x/crypto",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Go x/net security override in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+GO_X_NET_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "golang.org/x/net",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Go x/text security override in Dockerfile",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+GO_X_TEXT_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "golang.org/x/text",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
       "managerFilePatterns": ["/^collections/requirements-base\\.yml$/", "/^collections/controller-requirements\\.yml$/"],
       "matchStrings": ["-\\s+name:\\s+(?<depName>[A-Za-z0-9_]+\\.[A-Za-z0-9_]+)\\s*\\n\\s+version:\\s+\"?(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\"?\\s*\\n"],
       "datasourceTemplate": "galaxy-collection",

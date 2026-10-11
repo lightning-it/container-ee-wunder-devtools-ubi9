@@ -384,8 +384,26 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ACTIONLINT_VERSION",
             "COMPOSE_VERSION",
             "BUILDX_VERSION",
+            "GO_X_CRYPTO_VERSION",
+            "GO_X_NET_VERSION",
+            "GO_X_TEXT_VERSION",
         ):
             self.assertIn(version_argument, serialized_managers)
+
+        expected_go_overrides = {
+            "golang.org/x/crypto": "GO_X_CRYPTO_VERSION",
+            "golang.org/x/net": "GO_X_NET_VERSION",
+            "golang.org/x/text": "GO_X_TEXT_VERSION",
+        }
+        for dependency, argument in expected_go_overrides.items():
+            managers = [
+                manager
+                for manager in renovate["customManagers"]
+                if manager.get("depNameTemplate") == dependency
+            ]
+            self.assertEqual(1, len(managers))
+            self.assertEqual("go", managers[0]["datasourceTemplate"])
+            self.assertIn(argument, managers[0]["matchStrings"][0])
         for atomic_or_derived_argument in (
             "GO_VERSION",
             "TF_VERSION",
