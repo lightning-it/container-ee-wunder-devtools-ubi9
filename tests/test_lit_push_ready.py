@@ -395,6 +395,10 @@ class PushReadySecurityTests(unittest.TestCase):
                     PUSH_READY,
                     "open_repository_regular",
                     side_effect=duplicate_file,
+                ), mock.patch.object(
+                    PUSH_READY,
+                    "stream_git",
+                    return_value=iter(()),
                 ), mock.patch.object(Path, "exists", return_value=True):
                     PUSH_READY.ensure_review_safe(
                         self.change(diff=patch, paths=("image.pkr.hcl",))
