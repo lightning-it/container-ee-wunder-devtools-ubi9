@@ -1,4 +1,7 @@
 import importlib.util
+import hashlib
+import io
+import json
 import os
 import subprocess
 import tempfile
@@ -215,6 +218,326 @@ class PushReadySecurityTests(unittest.TestCase):
                 self.change(diff="+ token = ghp_" + "a" * 36 + "\n")
             )
 
+    def test_streaming_secret_scanner_matches_governed_regexes_at_every_split(self):
+        samples = (
+            "-----BEGIN " "PRIVATE KEY-----",
+            "client_secret = '" + "a" * 20 + "'",
+            "ghp_" + "a" * 24,
+            "github_pat_" + "a" * 24,
+            "glpat-" + "a" * 24,
+            "pypi-" + "a" * 24,
+            "npm_" + "a" * 24,
+            "sk_live_" + "a" * 20,
+            "AKIA" + "A" * 16,
+            "AIza" + "a" * 35,
+            "xoxb-" + "a" * 24,
+            "Bearer " + "a" * 24,
+            "eyJ" + "a" * 12 + "." + "b" * 12 + "." + "c" * 12,
+            "_authToken = " + "a" * 20,
+            "safe content with token-like words only",
+            "prefix\r\nnpm_" + "a" * 24 + "\r\nsuffix",
+        )
+        governed_patterns = (
+            *PUSH_READY.SECRET_CONTENT_PATTERNS,
+            PUSH_READY.NPMRC_AUTH_PATTERN,
+        )
+        for sample in samples:
+            expected = sum(
+                (1 << index) if pattern.search(sample) else 0
+                for index, pattern in enumerate(governed_patterns)
+            )
+            for split in range(len(sample) + 1):
+                with self.subTest(sample=sample[:24], split=split):
+                    self.assertEqual(
+                        expected,
+                        PUSH_READY.scan_chunks((sample[:split], sample[split:])),
+                    )
+
+    def test_streaming_secret_scanner_preserves_chunk_boundary_and_masking(self):
+        token = "npm_" + "a" * 24
+        sample = "x" * (PUSH_READY.CHUNK_BYTES - 2) + "\r\n" + token + "\r\n"
+        governed_patterns = (
+            *PUSH_READY.SECRET_CONTENT_PATTERNS,
+            PUSH_READY.NPMRC_AUTH_PATTERN,
+        )
+        expected = sum(
+            (1 << index) if pattern.search(sample) else 0
+            for index, pattern in enumerate(governed_patterns)
+        )
+        for split in (
+            PUSH_READY.CHUNK_BYTES - 1,
+            PUSH_READY.CHUNK_BYTES,
+            PUSH_READY.CHUNK_BYTES + 1,
+            len(sample) - 1,
+        ):
+            self.assertEqual(
+                expected,
+                PUSH_READY.scan_chunks((sample[:split], sample[split:])),
+            )
+
+        fixture = "token = " + "a" * 20
+        documented = {
+            "fixture.txt": {
+                1: (hashlib.sha256(fixture.encode()).hexdigest(), fixture)
+            }
+        }
+        masked = "".join(
+            PUSH_READY.filtered_scan_chunks(
+                (fixture + "\r\n",),
+                documented,
+                path="fixture.txt",
+                redact=True,
+            )
+        )
+        self.assertEqual("DOCUMENTED_SYNTHETIC_FIXTURE\n", masked)
+        self.assertEqual(0, PUSH_READY.scan_chunks((masked,)))
+
+    def test_planned_packer_attribute_stream_is_bounded_and_exact(self):
+        output = b"image.pkr.hcl\0filter\0unspecified\0"
+        with mock.patch.object(
+            PUSH_READY,
+            "stream_git",
+            return_value=iter((output[:7], output[7:19], output[19:])),
+        ):
+            names, byte_count, triple_count = (
+                PUSH_READY.planned_packer_attribute_names(
+                    "image.pkr.hcl", max_bytes=len(output), max_triples=1
+                )
+            )
+        self.assertEqual({"filter"}, names)
+        self.assertEqual(len(output), byte_count)
+        self.assertEqual(1, triple_count)
+
+        with mock.patch.object(
+            PUSH_READY, "stream_git", return_value=iter((output,))
+        ):
+            with self.assertRaisesRegex(RuntimeError, "byte resource budget"):
+                PUSH_READY.planned_packer_attribute_names(
+                    "image.pkr.hcl", max_bytes=len(output) - 1, max_triples=1
+                )
+
+        two_records = output + b"image.pkr.hcl\0diff\0set\0"
+        with mock.patch.object(
+            PUSH_READY, "stream_git", return_value=iter((two_records,))
+        ):
+            with self.assertRaisesRegex(RuntimeError, "triple resource budget"):
+                PUSH_READY.planned_packer_attribute_names(
+                    "image.pkr.hcl",
+                    max_bytes=len(two_records),
+                    max_triples=1,
+                )
+
+        wrong_path = b"other.pkr.hcl\0filter\0set\0"
+        with mock.patch.object(
+            PUSH_READY, "stream_git", return_value=iter((wrong_path,))
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected path"):
+                PUSH_READY.planned_packer_attribute_names(
+                    "image.pkr.hcl",
+                    max_bytes=len(wrong_path),
+                    max_triples=1,
+                )
+
+    def test_packer_masking_is_limited_to_bare_references_in_packer_files(self):
+        reference = "password = var." "this_is_a_long_variable_name"
+
+        def scan(path, content, *, allow_packer=True):
+            with tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                subprocess.run(
+                    ["git", "init", "-q", str(workspace)], check=True
+                )
+                destination = workspace / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(content + "\n", encoding="utf-8")
+                subprocess.run(
+                    ["git", "-C", str(workspace), "add", path], check=True
+                )
+                PUSH_READY.streaming_workspace_safe(
+                    workspace, {}, allow_packer=allow_packer
+                )
+
+        scan("image.pkr.hcl", reference)
+        rejected = (
+            ("image.pkr.hcl", "# " + reference),
+            ("image.pkr.hcl", "value = <<EOF\n" + reference + "\nEOF"),
+            ("variables.hcl", reference),
+            ("image.pkr.hcl", "password = ghp_" + "a" * 24),
+            ("image.pkr.hcl", "password = var.npm_" + "a" * 24),
+            ("image.pkr.hcl", "password = var.xnpm_" + "a" * 24),
+            ("image.pkr.hcl", "password = var.npm_" + "a" * 24 + "_suffix"),
+        )
+        for path, content in rejected:
+            with self.subTest(path=path, content=content[:24]):
+                with self.assertRaisesRegex(RuntimeError, "secret-like content"):
+                    scan(path, content)
+
+    def test_planned_diff_packer_masking_uses_the_complete_file_boundary(self):
+        reference = "password = var." "this_is_a_long_variable_name"
+
+        def review(file_content, changed_line=reference):
+            patch = (
+                "diff --git a/image.pkr.hcl b/image.pkr.hcl\n"
+                "--- a/image.pkr.hcl\n"
+                "+++ b/image.pkr.hcl\n"
+                "@@ -0,0 +1 @@\n"
+                f"+{changed_line}\n"
+            )
+            with tempfile.TemporaryFile() as stream:
+                stream.write((file_content + "\n").encode())
+                stream.flush()
+
+                def duplicate_file(*_args, **_kwargs):
+                    stream.seek(0)
+                    return os.dup(stream.fileno())
+
+                with mock.patch.object(
+                    PUSH_READY,
+                    "open_repository_regular",
+                    side_effect=duplicate_file,
+                ), mock.patch.object(Path, "exists", return_value=True), mock.patch.object(
+                    PUSH_READY, "stream_git", return_value=iter(())
+                ):
+                    PUSH_READY.ensure_review_safe(
+                        self.change(diff=patch, paths=("image.pkr.hcl",))
+                    )
+
+        review(reference)
+        rejected = (
+            ("# " + reference, "# " + reference),
+            ("value = <<EOF\n" + reference + "\nEOF", reference),
+            ("password = ghp_" + "a" * 24, "password = ghp_" + "a" * 24),
+            (
+                "password = var.npm_" + "a" * 24,
+                "password = var.npm_" + "a" * 24,
+            ),
+            (
+                "password = var.xnpm_" + "a" * 24,
+                "password = var.xnpm_" + "a" * 24,
+            ),
+            (
+                "password = var.npm_" + "a" * 24 + "_suffix",
+                "password = var.npm_" + "a" * 24 + "_suffix",
+            ),
+        )
+        for file_content, changed_line in rejected:
+            with self.subTest(file_content=file_content[:24]):
+                with self.assertRaisesRegex(RuntimeError, "secret-like content"):
+                    review(file_content, changed_line)
+
+    def test_documentation_fixture_authorization_is_path_and_purpose_bound(self):
+        line = "password = " + "a" * 20
+
+        def manifest(path, purpose, value=line):
+            return json.dumps(
+                {
+                    "version": 1,
+                    "fixtures": [
+                        {
+                            "path": path,
+                            "line_hex": value.encode().hex(),
+                            "line_number": 1,
+                            "purpose": purpose,
+                        }
+                    ],
+                }
+            )
+
+        allowed = (
+            "README.md",
+            "charts/service/README.md",
+            "charts/service/README.md.gotmpl",
+            "charts/service/values.yaml",
+            "charts/parent/charts/child/README.md",
+        )
+        for path in allowed:
+            with self.subTest(path=path):
+                parsed = PUSH_READY.parse_secret_fixture_manifest(
+                    manifest(path, "synthetic-documentation-example")
+                )
+                self.assertIn(path, parsed)
+
+        rejected = (
+            ("docs/README.md", "synthetic-documentation-example", line),
+            ("tests/example.txt", "synthetic-documentation-example", line),
+            ("README.md", "synthetic-test-fixture", line),
+            (
+                "README.md",
+                "synthetic-documentation-example",
+                "-----BEGIN " "PRIVATE KEY-----",
+            ),
+        )
+        for path, purpose, value in rejected:
+            with self.subTest(path=path, purpose=purpose, value=value[:24]):
+                with self.assertRaisesRegex(RuntimeError, "unsafe path|PEM"):
+                    PUSH_READY.parse_secret_fixture_manifest(
+                        manifest(path, purpose, value)
+                    )
+
+    def test_fingerprint_hashing_enforces_file_and_aggregate_limits(self):
+        class CountingStream(io.BytesIO):
+            def __init__(self, value):
+                super().__init__(value)
+                self.read_sizes = []
+
+            def read(self, size=-1):
+                self.read_sizes.append(size)
+                return super().read(size)
+
+        stream = CountingStream(b"123456")
+        with self.assertRaisesRegex(RuntimeError, "Fingerprint input exceeds 5 bytes"):
+            PUSH_READY.hash_open_file(
+                stream,
+                max_bytes=5,
+                purpose="Fingerprint",
+            )
+        self.assertEqual([6], stream.read_sizes)
+
+        exhausted = CountingStream(b"x" * PUSH_READY.CHUNK_BYTES)
+        with self.assertRaisesRegex(RuntimeError, "Fingerprint input exceeds 0 bytes"):
+            PUSH_READY.hash_open_file(
+                exhausted,
+                max_bytes=0,
+                purpose="Fingerprint",
+            )
+        self.assertEqual([1], exhausted.read_sizes)
+
+        limits = []
+
+        def bounded_hash(*_args, max_bytes, **_kwargs):
+            limits.append(max_bytes)
+            return "a" * 64, 100_000_000
+
+        with mock.patch.object(
+            PUSH_READY,
+            "git_output_at",
+            return_value=(
+                "\0".join(f"file-{value}.bin" for value in range(6)) + "\0"
+            ),
+        ), mock.patch.object(
+            PUSH_READY,
+            "hash_repository_file",
+            side_effect=bounded_hash,
+        ), mock.patch.object(PUSH_READY, "fingerprint_stream") as fingerprint:
+            with self.assertRaisesRegex(RuntimeError, "500000000 total bytes"):
+                PUSH_READY.integration_worktree_fingerprint(ROOT)
+        fingerprint.assert_not_called()
+        self.assertEqual([100_000_000] * 5 + [0], limits)
+
+        limits.clear()
+        with mock.patch.object(
+            PUSH_READY,
+            "untracked_names",
+            return_value=[f"file-{value}.bin" for value in range(6)],
+        ), mock.patch.object(
+            PUSH_READY,
+            "hash_repository_file",
+            side_effect=bounded_hash,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "500000000 total bytes"):
+                PUSH_READY.untracked_file_hashes()
+        self.assertEqual([100_000_000] * 5 + [0], limits)
+
     def test_safe_open_refuses_symlink(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -272,6 +595,75 @@ class PushReadySecurityTests(unittest.TestCase):
                     remote_name="origin",
                     remote_url=remote_url,
                 )
+
+
+class PushReadyWarningTests(unittest.TestCase):
+    def test_review_warning_threshold_migration_contract(self):
+        threshold = PUSH_READY.review_warning_threshold
+        for config in ({}, {"max_diff_bytes": 1}, {"max_diff_bytes": 200000}):
+            self.assertEqual(500000, threshold(config))
+        self.assertEqual(17, threshold({"warn_diff_bytes": 17}))
+        self.assertIsNone(threshold({"max_diff_bytes": 1, "warn_diff_bytes": None}))
+        for config in (
+            {"max_diff_bytes": None}, {"max_diff_bytes": True},
+            {"max_diff_bytes": 0}, {"max_diff_bytes": -1},
+            {"max_diff_bytes": "200000"}, {"warn_diff_bytes": False},
+            {"warn_diff_bytes": 0}, {"warn_diff_bytes": "500000"},
+            {"unknown": 1},
+        ):
+            with self.subTest(config=config), self.assertRaises(RuntimeError):
+                threshold(config)
+
+    def test_large_patch_notice_does_not_skip_deterministic_validation(self):
+        payload = "+" + "x" * 500000 + "\n"
+
+        def decoded(*args, **kwargs):
+            if "--name-only" in args:
+                yield "ordinary.txt\0"
+            else:
+                for offset in range(0, len(payload), 16384):
+                    yield payload[offset:offset + 16384]
+
+        patches = []
+        planned = PUSH_READY.planned_change
+
+        def record_change(*args, **kwargs):
+            change = planned(*args, **kwargs)
+            if change.patch is not None:
+                patches.append(change.patch)
+            return change
+
+        profile = mock.Mock()
+        stderr = io.StringIO()
+        overrides = {
+            "check_instruction_contract": mock.Mock(),
+            "require_clean_head": mock.Mock(),
+            "refresh_authoritative_base": mock.Mock(),
+            "require_trusted_check_policy": mock.Mock(),
+            "load_config": lambda: {"review": {"max_diff_bytes": 1}},
+            "resolve_base": lambda *a, **kw: (
+                "refs/remotes/origin/develop", "a" * 40, "a" * 40
+            ),
+            "git_output": lambda *a: "b" * 40,
+            "decoded_git_chunks": decoded,
+            "tree_fingerprint": lambda: "f" * 64,
+            "untracked_names": lambda: [],
+            "secret_fixture_manifest_for_change": lambda *a, **kw: {},
+            "execute_integration_checks": profile,
+            "planned_change": record_change,
+        }
+        try:
+            with mock.patch.dict(PUSH_READY.main.__globals__, overrides), mock.patch.object(
+                PUSH_READY.sys, "argv", ["lit-push-ready.py", "validate"]
+            ), mock.patch.object(PUSH_READY.sys, "stderr", stderr):
+                self.assertEqual(0, PUSH_READY.main())
+            profile.assert_called_once()
+            self.assertEqual(len(payload.encode("utf-8")), patches[0].size)
+            self.assertIn("Planning notice:", stderr.getvalue())
+            self.assertIn("all deterministic checks still run", stderr.getvalue())
+        finally:
+            for patch in patches:
+                patch.close()
 
 
 if __name__ == "__main__":
