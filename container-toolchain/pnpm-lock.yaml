@@ -8,7 +8,7 @@ overrides:
   adm-zip: 0.6.1
   brace-expansion: 5.0.11
   handlebars: 4.7.10
-  ip-address: 10.5.0
+  ip-address: 10.7.1
   js-yaml: 4.3.2
   simple-git: 4.0.2
   '@simple-git/argv-parser': 2.0.1
@@ -28,8 +28,8 @@ importers:
         specifier: 5.0.11
         version: 5.0.11
       ip-address:
-        specifier: 10.5.0
-        version: 10.5.0
+        specifier: 10.7.1
+        version: 10.7.1
       js-yaml:
         specifier: 4.3.2
         version: 4.3.2
@@ -1491,8 +1491,8 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  ip-address@10.5.0:
-    resolution: {integrity: sha512-R5SnVLJmgYYvf2F2ZgwSBnelz5G4q5AxIC277GDfUaNbrZKNANcBC7RHqYYePlszf4kBolVkJauG0ZjHHFh55g==}
+  ip-address@10.7.1:
+    resolution: {integrity: sha512-4OUAqU9Z1i3vCnS05hzGiFnEMDpQ+62pAD/MVQOp83fYyNC8GleCqaS0QikQBmcWCrKFiUs/B8ztRRiYOAXuCA==}
     engines: {node: '>= 12'}
 
   is-alphabetical@2.0.1:
@@ -4582,7 +4582,7 @@ snapshots:
   install-artifact-from-github@1.8.1:
     optional: true
 
-  ip-address@10.5.0: {}
+  ip-address@10.7.1: {}
 
   is-alphabetical@2.0.1: {}
 
@@ -5875,7 +5875,7 @@ snapshots:
 
   socks@2.8.9:
     dependencies:
-      ip-address: 10.5.0
+      ip-address: 10.7.1
       smart-buffer: 4.2.0
 
   sort-keys@4.2.0:
