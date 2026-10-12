@@ -6,9 +6,9 @@ LABEL org.opencontainers.image.description="Devtools Execution Environment (UBI 
 LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-ee-wunder-devtools-ubi9"
 
 ARG TARGETARCH
-ARG GO_VERSION=1.26.7
-ARG GO_AMD64_SHA256=ffb5f8de10c62550dfddab66b36b57030721e0a44a3218e9e1181d7b59f121ca
-ARG GO_ARM64_SHA256=5a4ec883379d51ee9ce1040d5e87f8d35e20387574dd8c947feb01eabc3c1b37
+ARG GO_VERSION=1.26.9
+ARG GO_AMD64_SHA256=42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d
+ARG GO_ARM64_SHA256=4a97373d49fcacdcf3694fea368a500b00ee3e963974f3e7514132717632f052
 ARG TF_VERSION=1.15.9
 ARG TF_SOURCE_COMMIT=87488977e32a400445e0c0b4d95c0713a5eee941
 ARG TF_SOURCE_SHA256=b4036b35e69a57e4a4b83bafba337a5c8e3ab2c0b1812df92528dec0958ed61e
@@ -25,10 +25,10 @@ ARG MOBY_V2_VERSION=2.0.0-beta.21
 ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
 ARG NODE_VERSION=24.19.0
 ARG WEBSITE_NODE_VERSION=24.18.0
-ARG GO_X_CRYPTO_VERSION=0.55.0
+ARG GO_X_CRYPTO_VERSION=0.57.0
 ARG GO_X_MOD_VERSION=0.40.0
-ARG GO_X_NET_VERSION=0.56.0
-ARG GO_X_TEXT_VERSION=0.39.0
+ARG GO_X_NET_VERSION=0.60.0
+ARG GO_X_TEXT_VERSION=0.42.0
 ARG GO_GRPC_VERSION=1.83.2
 ARG ORAS_GO_VERSION=2.6.2
 
@@ -79,7 +79,13 @@ RUN curl -fsSLo /tmp/terraform.tar.gz \
     mkdir -p /tmp/terraform-source && \
     tar -xzf /tmp/terraform.tar.gz --strip-components=1 -C /tmp/terraform-source && \
     cd /tmp/terraform-source && \
-    go get "google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
+    go get \
+      "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
+      "golang.org/x/net@v${GO_X_NET_VERSION}" \
+      "golang.org/x/text@v${GO_X_TEXT_VERSION}" \
+      "google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/net)" = \
+      "v${GO_X_NET_VERSION}" && \
     test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = \
       "v${GO_GRPC_VERSION}" && \
     CGO_ENABLED=0 go build \
@@ -93,6 +99,7 @@ RUN curl -fsSLo /tmp/terraform.tar.gz \
 RUN /usr/local/lib/container-build-go-tool.sh \
       github.com/terraform-linters/tflint "v${TFLINT_VERSION}" . tflint \
       "golang.org/x/mod@v${GO_X_MOD_VERSION}" \
+      "golang.org/x/net@v${GO_X_NET_VERSION}" \
       "google.golang.org/grpc@v${GO_GRPC_VERSION}"
 
 RUN /usr/local/lib/container-build-go-tool.sh \
@@ -105,11 +112,14 @@ RUN /usr/local/lib/container-build-go-tool.sh \
 RUN /usr/local/lib/container-build-go-tool.sh \
       helm.sh/helm/v4 "v${HELM_VERSION}" ./cmd/helm helm \
       "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
+      "golang.org/x/net@v${GO_X_NET_VERSION}" \
+      "golang.org/x/text@v${GO_X_TEXT_VERSION}" \
       "oras.land/oras-go/v2@v${ORAS_GO_VERSION}"
 
 RUN /usr/local/lib/container-build-go-tool.sh \
       github.com/cli/cli/v2 "v${GH_VERSION}" ./cmd/gh gh \
       "golang.org/x/mod@v${GO_X_MOD_VERSION}" \
+      "golang.org/x/net@v${GO_X_NET_VERSION}" \
       "google.golang.org/grpc@v${GO_GRPC_VERSION}"
 
 RUN curl -fsSLo /tmp/docker-cli.tar.gz \
@@ -122,7 +132,11 @@ RUN curl -fsSLo /tmp/docker-cli.tar.gz \
     [[ "$docker_source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] && \
     cp vendor.mod go.mod && \
     cp vendor.sum go.sum && \
-    GOFLAGS=-mod=mod go get "google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
+    GOFLAGS=-mod=mod go get \
+      "golang.org/x/net@v${GO_X_NET_VERSION}" \
+      "google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
+    test "$(GOFLAGS=-mod=mod go list -m -f '{{.Version}}' golang.org/x/net)" = \
+      "v${GO_X_NET_VERSION}" && \
     test "$(GOFLAGS=-mod=mod go list -m -f '{{.Version}}' google.golang.org/grpc)" = \
       "v${GO_GRPC_VERSION}" && \
     CGO_ENABLED=0 GOFLAGS=-mod=mod go build \
@@ -142,6 +156,7 @@ RUN /usr/local/lib/container-build-compose.sh \
       "${MOBY_V2_VERSION}" \
       "${MOBY_NAMESGENERATOR_SHA256}" \
       "${GO_X_MOD_VERSION}" \
+      "${GO_X_NET_VERSION}" \
       "${GO_GRPC_VERSION}"
 
 RUN set -euo pipefail; \
@@ -160,6 +175,27 @@ RUN set -euo pipefail; \
         exit 1; \
       fi; \
     done
+
+RUN set -euo pipefail; \
+    for binary in terraform tflint terraform-docs helm gh docker docker-compose; do \
+      effective_version="$( \
+        go version -m "/out/${binary}" | \
+          awk -v module='golang.org/x/net' ' \
+            $1 == "dep" && $2 == module { version = $3 } \
+            $1 == "=>" && $2 == module { version = $3 } \
+            END { print version } \
+          ' \
+      )"; \
+      if [ "${effective_version}" != "v${GO_X_NET_VERSION}" ]; then \
+        printf 'ERROR: %s links golang.org/x/net %s, expected v%s\n' \
+          "${binary}" "${effective_version:-<missing>}" "${GO_X_NET_VERSION}" >&2; \
+        exit 1; \
+      fi; \
+    done
+
+# Keep repository configuration changes out of the expensive DNF and Go build
+# cache boundary while validating it with the exact shipped Renovate runtime.
+COPY renovate.json /tmp/renovate.json
 
 # Node.js LTS plus deterministic repository validators. The independently
 # selected website runtime remains bundled so repositories declaring its exact
@@ -249,11 +285,12 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     /opt/node/bin/npm --version && \
     /opt/node/bin/pnpm --version && \
     /opt/node/bin/renovate-config-validator --version && \
+    /opt/node/bin/renovate-config-validator --strict --no-global /tmp/renovate.json && \
     /opt/node/bin/markdownlint-cli2 --version && \
     /opt/node/bin/prettier --version && \
     test "$(/opt/node-website/bin/node --version)" = "v${WEBSITE_NODE_VERSION}" && \
     test "$(PATH=/opt/node-website/bin:${PATH} /opt/node-website/bin/npm --version)" = "11.16.0" && \
-    rm -f /tmp/node.tar.xz /tmp/node-website.tar.xz && \
+    rm -f /tmp/node.tar.xz /tmp/node-website.tar.xz /tmp/renovate.json && \
     rm -rf /tmp/pnpm-store /opt/node-toolchain/.npm
 
 # Isolate the validator build from the large Devtools toolchain. This stage uses
@@ -423,7 +460,7 @@ LABEL org.opencontainers.image.source="https://github.com/lightning-it/container
 
 ARG ANSIBLE_CORE_VERSION=2.21.1
 ARG PIP_VERSION=25.3
-ARG CENTOS_STREAM_COMPOSE=CentOS-Stream-9-20260927.0
+ARG CENTOS_STREAM_COMPOSE=CentOS-Stream-9-20261012.0
 
 USER 0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
