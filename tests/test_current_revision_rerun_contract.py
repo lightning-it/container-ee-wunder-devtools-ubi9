@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -120,6 +122,97 @@ class RequiredWorkflowDiscoveryContractTests(unittest.TestCase):
         )
         self.assertIn("Exactly one CAS attempt", claim_function)
         self.assertIn("no rerun sent", claim_function)
+
+    def test_operation_receipt_binds_created_check_id_and_exact_url(self) -> None:
+        source = self.workflow_source()
+        claim_function = source.split(
+            "claim_review_operation() {", 1
+        )[1].split("\n          }", 1)[0]
+        self.assertEqual(
+            1,
+            claim_function.count('operation_api --method POST \\'),
+        )
+        self.assertIn('"repos/${REPOSITORY}/check-runs"', claim_function)
+        self.assertEqual(
+            1,
+            claim_function.count('operation_api --method PATCH \\'),
+        )
+        self.assertIn(
+            '"repos/${REPOSITORY}/check-runs/${check_id}"', claim_function
+        )
+        self.assertIn(
+            'check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"',
+            claim_function,
+        )
+        self.assertIn('.[0].id == $id and .[0].details_url == $url', claim_function)
+        self.assertLess(
+            claim_function.index("check_response="),
+            claim_function.index("check_id="),
+        )
+        self.assertLess(
+            claim_function.index("check_id="),
+            claim_function.index("check_url="),
+        )
+        self.assertLess(
+            claim_function.index("check_url="),
+            claim_function.index("--method PATCH"),
+        )
+
+    def test_created_check_filter_receives_and_enforces_exact_marker(self) -> None:
+        source = self.workflow_source()
+        claim_function = source.split(
+            "claim_review_operation() {", 1
+        )[1].split("\n          }", 1)[0]
+        invocation = claim_function.split('check_id="$(jq -er ', 1)[1].split(
+            " '\n", 1
+        )[0]
+        self.assertIn('--arg marker "${marker}"', invocation)
+        jq_filter = claim_function.split(
+            '--arg marker "${marker}" \'\n', 1
+        )[1].split("\n                | $id'", 1)[0] + "\n                | $id"
+        key = "operation-key"
+        head = "a" * 40
+        marker = '{"operation":"operation-key"}'
+        payload = {
+            "id": 42,
+            "name": "Review event operation",
+            "head_sha": head,
+            "external_id": key,
+            "app": {"id": 15368, "slug": "github-actions"},
+            "status": "completed",
+            "conclusion": "neutral",
+            "output": {
+                "title": "Verifier mutation consumed",
+                "summary": marker,
+            },
+        }
+
+        def evaluate(expected_marker: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    "jq",
+                    "-er",
+                    "--arg",
+                    "key",
+                    key,
+                    "--arg",
+                    "head",
+                    head,
+                    "--arg",
+                    "marker",
+                    expected_marker,
+                    jq_filter,
+                ],
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        accepted = evaluate(marker)
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertEqual("42", accepted.stdout.strip())
+        self.assertNotEqual(0, evaluate("wrong-marker").returncode)
 
 
 if __name__ == "__main__":

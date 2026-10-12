@@ -222,18 +222,36 @@ jobs:
             fi
             marker="$(jq -cn --arg key "${key}" --arg run "${GITHUB_RUN_ID}" \
               --arg commit "${committed}" '{operation:$key,claim_run:$run,claim_attempt:"1",journal_commit:$commit}')" || return 1
-            operation_api --method POST "repos/${REPOSITORY}/check-runs" \
+            check_response="$(operation_api --method POST \
+              "repos/${REPOSITORY}/check-runs" \
               -f 'name=Review event operation' -f "head_sha=${head}" -f "external_id=${key}" \
               -f status=completed -f conclusion=neutral -f 'output[title]=Verifier mutation consumed' \
-              -f "output[summary]=${marker}" >/dev/null || true
+              -f "output[summary]=${marker}")" || return 1
+            check_id="$(jq -er --arg key "${key}" --arg head "${head}" \
+              --arg marker "${marker}" '
+                . as $check
+                | ($check.id | select(type == "number" and . > 0 and floor == .)) as $id
+                | select($check.name == "Review event operation"
+                  and $check.head_sha == $head and $check.external_id == $key
+                  and $check.app.id == 15368 and $check.app.slug == "github-actions"
+                  and $check.status == "completed" and $check.conclusion == "neutral"
+                  and $check.output.title == "Verifier mutation consumed"
+                  and $check.output.summary == $marker)
+                | $id' <<<"${check_response}")" || return 1
+            check_url="${GITHUB_SERVER_URL}/${REPOSITORY}/runs/${check_id}"
+            operation_api --method PATCH \
+              "repos/${REPOSITORY}/check-runs/${check_id}" \
+              -f "details_url=${check_url}" >/dev/null || return 1
             for attempt in 1 2 3; do
               if rows="$(operation_api --paginate --slurp \
                   "repos/${REPOSITORY}/commits/${head}/check-runs?check_name=Review%20event%20operation&filter=all&per_page=100")" \
-                && jq -e --arg marker "${marker}" --arg key "${key}" --arg head "${head}" '
+                && jq -e --argjson id "${check_id}" --arg url "${check_url}" \
+                  --arg marker "${marker}" --arg key "${key}" --arg head "${head}" '
                   select(type == "array" and length > 0 and length <= 10)
                   | select(all(.[]; (.check_runs | type) == "array"))
                   | [.[].check_runs[] | select(.external_id == $key)]
-                  | length == 1 and .[0].output.summary == $marker
+                  | length == 1 and .[0].id == $id and .[0].details_url == $url
+                    and .[0].output.summary == $marker
                     and .[0].name == "Review event operation" and .[0].head_sha == $head
                     and .[0].app.id == 15368 and .[0].app.slug == "github-actions"
                     and .[0].status == "completed" and .[0].conclusion == "neutral"

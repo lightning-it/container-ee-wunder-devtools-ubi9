@@ -368,6 +368,34 @@ termination is tracked in LI-204.
   is part of the target base; a newer full-sync head must never depend on its
   own unmerged helper, and the two phases must never be collapsed past the
   200,000-byte fail-closed review limit.
+- The owner-authorized Devtools recovery PR 775 has one bounded exception to
+  that path set. It may also carry `Dockerfile` only when the protected
+  canonical override contains exactly
+  `ARG CENTOS_STREAM_COMPOSE=CentOS-Stream-9-20261012.0` and has SHA-256
+  `f037af8e9d4081f5029efccaa13bc54a6e50a3a66ece72881326c727ac4b9019`.
+  The target base file has SHA-256
+  `6cca62ff3e6fbbcae201ec88174a9946943e49bf503180970fa7ef6418a3f780`,
+  and the staged file has SHA-256
+  `54f597cd711787dc2a13f10c18d4090edc236767547057606af3149e922bca20`.
+  The bounded classifier must prove that replacing the single unavailable
+  `CentOS-Stream-9-20260927.0` assignment with that canonical assignment is
+  the complete target-file change. An unknown predecessor, another path,
+  another assignment, or any second Dockerfile difference fails closed. The
+  exact native image build, canonical container CI, HIGH/CRITICAL Trivy gate,
+  current-head review, and normal protected merge remain mandatory. This
+  recovery is admitted only while the live GitHub PR payload remains open,
+  non-draft PR 775 with protected base
+  `6a7982704c2c916074fceac61a38a67a05a87a68`, head branch
+  `li150/security-toolchain-override`, and head
+  `28684c98ce74c8458cb2281371c8e7547214c020`. On that exact tuple the
+  controller may validate the local staged recovery but MUST report no
+  downstream change and MUST NOT push, create, or update a generic sync PR.
+  It MUST re-read and revalidate the complete live base and PR tuple
+  immediately before reporting that no-change result, and the locally
+  materialized Git tree MUST equal the immutable tree of the exact PR head.
+  Any changed state, base, branch, head, author, title, or repository consumes
+  the exception and fails closed. This consumed recovery does not authorize
+  another downstream Dockerfile edit.
 - The Ansible container has one narrower pre-policy recovery phase for an
   externally aged UBI security lock. Whenever its canonical
   `rpm-security-updates.lock` differs while the controller would otherwise
