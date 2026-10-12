@@ -460,7 +460,7 @@ LABEL org.opencontainers.image.source="https://github.com/lightning-it/container
 
 ARG ANSIBLE_CORE_VERSION=2.21.1
 ARG PIP_VERSION=25.3
-ARG CENTOS_STREAM_COMPOSE=CentOS-Stream-9-20260927.0
+ARG CENTOS_STREAM_COMPOSE=CentOS-Stream-9-20261012.0
 
 USER 0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
