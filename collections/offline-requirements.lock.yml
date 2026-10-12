@@ -18,10 +18,10 @@ collections:
     sha256: "64cc4c5f4041f9c2f2b741bcde9864231c2366b2dfa38a057d54e37dcbab1b5b"
     size: 807257
   - name: community.crypto
-    version: "3.3.0"
-    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-crypto-3.3.0.tar.gz"
-    sha256: "b17e3fe14fb934a38213204d8fe70c52fd63aabf6ea8ffd56e8fbaef70b69f18"
-    size: 596994
+    version: "3.5.0"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-crypto-3.5.0.tar.gz"
+    sha256: "41e1ef1d3b9e0b8b1d3ef61ee0a3b0cab304593aebe1ad89b1eaced0cfb3aad0"
+    size: 603754
   - name: community.docker
     version: "5.2.2"
     url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-docker-5.2.2.tar.gz"

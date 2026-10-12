@@ -344,14 +344,25 @@ class PushReadySecurityTests(unittest.TestCase):
         def scan(path, content, *, allow_packer=True):
             with tempfile.TemporaryDirectory() as directory:
                 workspace = Path(directory)
+                # The wrapper binds the source Git metadata read-only. This
+                # disposable fixture must initialize its own repository.
+                fixture_environment = {
+                    key: value
+                    for key, value in os.environ.items()
+                    if key not in {"GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"}
+                }
                 subprocess.run(
-                    ["git", "init", "-q", str(workspace)], check=True
+                    ["git", "init", "-q", str(workspace)],
+                    check=True,
+                    env=fixture_environment,
                 )
                 destination = workspace / path
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(content + "\n", encoding="utf-8")
                 subprocess.run(
-                    ["git", "-C", str(workspace), "add", path], check=True
+                    ["git", "-C", str(workspace), "add", path],
+                    check=True,
+                    env=fixture_environment,
                 )
                 PUSH_READY.streaming_workspace_safe(
                     workspace, {}, allow_packer=allow_packer
