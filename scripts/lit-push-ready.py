@@ -678,6 +678,7 @@ def filtered_scan_chunks(
     redact=False,
     packer=False,
     packer_paths=frozenset(),
+    removed_fixture_lines=None,
 ):
     """Apply existing exact-line exceptions with bounded line spooling.
 
@@ -690,9 +691,16 @@ def filtered_scan_chunks(
     line_number = 0
     packer_machine = None
     packer_token_machine = None
-    governed_paths = frozenset(documented) | frozenset(packer_paths)
+    removed_fixture_lines = removed_fixture_lines or {}
+    governed_paths = (
+        frozenset(documented) | frozenset(packer_paths) | frozenset(removed_fixture_lines)
+    )
     governed_old_paths = governed_diff_header_paths("a", governed_paths)
     governed_new_paths = governed_diff_header_paths("b", governed_paths)
+    removed_headers = {
+        f"diff --git a/{name} b/{name}": name for name in removed_fixture_lines
+    }
+    removed_section = None
     ungoverned_path = object()
     if packer or packer_paths:
         packer_machine = StreamingPatterns(
@@ -744,6 +752,7 @@ def filtered_scan_chunks(
                 if prefix.startswith("diff --git "):
                     old_path = new_path = None
                     in_hunk = False
+                    removed_section = removed_headers.get(prefix)
                 elif not in_hunk and prefix.startswith("--- "):
                     old_path = governed_old_paths.get(prefix[4:], ungoverned_path)
                 elif not in_hunk and prefix.startswith("+++ "):
@@ -781,6 +790,13 @@ def filtered_scan_chunks(
             ):
                 mask = True
             flags = line_scan.finish()
+            if (
+                old_content
+                and match_path == removed_section
+                and removed_fixture_lines.get(match_path, {}).get(match_number)
+                == digest.hexdigest()
+            ):
+                mask = True
             if redact and old_content and old_path not in documented and flags & ~1:
                 mask = True
             if (
@@ -911,15 +927,104 @@ def planned_packer_paths(paths):
     return frozenset(allowed)
 
 
+RETIRED_SOURCE_FIXTURE_PATH = (
+    "container/overrides/container-ee-wunder-devtools-ubi9/tests/test_lit_push_ready.py"
+)
+RETIRED_SOURCE_FIXTURE_BEFORE = "5ce260a626d01326bd7e8f816015c69457490ae9"
+RETIRED_SOURCE_FIXTURE_AFTER = "3d2707da21ada0388c3fcfdc92de19e7b2dad415"
+RETIRED_SOURCE_FIXTURE_DIFF = (
+    "6b0ef04ea864938beb6432e39eb3539b5ca693b75e99210409a42b3041724a1e"
+)
+
+
+def retired_source_fixture_lines(change):
+    """Retire two historical dummy markers only in one exact source migration.
+
+    Bind regular Git blobs on both authoritative base and committed head, then
+    authenticate the complete file diff as an ordered digest of exact lines.
+    The admission becomes unreachable once the protected before blob advances.
+    It grants no workspace, added-line, context-line or general PEM exception.
+    """
+    path = RETIRED_SOURCE_FIXTURE_PATH
+    if path not in change.paths:
+        return {}
+    if change.base_ref != "refs/remotes/origin/develop" or any(
+        not is_full_git_object_id(commit)
+        for commit in (change.base_tip, change.base_commit, change.head_commit)
+    ):
+        return {}
+    for commit, blob in (
+        (change.base_tip, RETIRED_SOURCE_FIXTURE_BEFORE),
+        (change.base_commit, RETIRED_SOURCE_FIXTURE_BEFORE),
+        (change.head_commit, RETIRED_SOURCE_FIXTURE_AFTER),
+    ):
+        if git_tree_entry(commit, path) != f"100644 blob {blob}\t{path}\0":
+            return {}
+    header = f"diff --git a/{path} b/{path}"
+    section = None
+    sections = []
+    prefix = ""
+    line = hashlib.sha256()
+    pending = False
+    for fragment, ending in itertools.chain(
+        split_text_fragments(patch_chunks(change.patch)), [("", "EOF")]
+    ):
+        if ending == "EOF" and not pending:
+            break
+        pending = True
+        prefix += fragment[: max(0, len(header) + 1 - len(prefix))]
+        line.update(fragment.encode("utf-8"))
+        if ending is None:
+            continue
+        if ending != "EOF":
+            line.update(ending.encode("utf-8"))
+        if prefix.startswith("diff --git "):
+            if section is not None:
+                sections.append(section.hexdigest())
+            section = hashlib.sha256() if prefix == header else None
+        if section is not None:
+            digest = line.digest()
+            index = re.fullmatch(r"index ([0-9a-f]{7,40})\.\.([0-9a-f]{7,40}) 100644", prefix)
+            if (
+                index is not None
+                and ending == "\n"
+                and digest == hashlib.sha256((prefix + ending).encode("utf-8")).digest()
+                and RETIRED_SOURCE_FIXTURE_BEFORE.startswith(index[1])
+                and RETIRED_SOURCE_FIXTURE_AFTER.startswith(index[2])
+            ):
+                # Git abbreviation varies by repository object count. The
+                # complete identities were independently proved above.
+                digest = hashlib.sha256(
+                    (f"index {RETIRED_SOURCE_FIXTURE_BEFORE}.."
+                     f"{RETIRED_SOURCE_FIXTURE_AFTER} 100644\n").encode("utf-8")
+                ).digest()
+            section.update(digest)
+        prefix = ""
+        line = hashlib.sha256()
+        pending = False
+    if section is not None:
+        sections.append(section.hexdigest())
+    if sections != [RETIRED_SOURCE_FIXTURE_DIFF]:
+        return {}
+    return {
+        path: {
+            223: "910cab1ada7b0bdf7e70d26d9bc64ea6b87288bc1e7bae4b989c076972d35b23",
+            465: "591225f282569a23a0523fe4442688d04c13b4aa591181b2d17fffa139c21b2f",
+        }
+    }
+
+
 def streaming_review_safe(change, documented, *, redact=False):
     unsafe = [path for path in change.paths if is_secret_like_path(path)]
     if unsafe:
         raise RuntimeError(
             "local review refused for secret-like paths: " + ", ".join(sorted(unsafe))
         )
+    removed_fixture_lines = retired_source_fixture_lines(change) if redact else {}
     if redact and scan_chunks(
         filtered_scan_chunks(
-            patch_chunks(change.patch), documented, diff=True, redact=False
+            patch_chunks(change.patch), documented, diff=True, redact=False,
+            removed_fixture_lines=removed_fixture_lines,
         )
     ) & 1:
         raise RuntimeError(
@@ -932,6 +1037,7 @@ def streaming_review_safe(change, documented, *, redact=False):
             diff=True,
             redact=redact,
             packer_paths=planned_packer_paths(change.paths),
+            removed_fixture_lines=removed_fixture_lines,
         )
     )
     secret_mask = (1 << len(SECRET_CONTENT_PATTERNS)) - 1

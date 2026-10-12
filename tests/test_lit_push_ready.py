@@ -220,7 +220,7 @@ class PushReadySecurityTests(unittest.TestCase):
 
     def test_streaming_secret_scanner_matches_governed_regexes_at_every_split(self):
         samples = (
-            "-----BEGIN PRIVATE KEY-----",
+            "-----BEGIN " "PRIVATE KEY-----",
             "client_secret = '" + "a" * 20 + "'",
             "ghp_" + "a" * 24,
             "github_pat_" + "a" * 24,
@@ -339,7 +339,7 @@ class PushReadySecurityTests(unittest.TestCase):
                 )
 
     def test_packer_masking_is_limited_to_bare_references_in_packer_files(self):
-        reference = "password = var.this_is_a_long_variable_name"
+        reference = "password = var." "this_is_a_long_variable_name"
 
         def scan(path, content, *, allow_packer=True):
             with tempfile.TemporaryDirectory() as directory:
@@ -373,7 +373,7 @@ class PushReadySecurityTests(unittest.TestCase):
                     scan(path, content)
 
     def test_planned_diff_packer_masking_uses_the_complete_file_boundary(self):
-        reference = "password = var.this_is_a_long_variable_name"
+        reference = "password = var." "this_is_a_long_variable_name"
 
         def review(file_content, changed_line=reference):
             patch = (
@@ -395,11 +395,9 @@ class PushReadySecurityTests(unittest.TestCase):
                     PUSH_READY,
                     "open_repository_regular",
                     side_effect=duplicate_file,
-                ), mock.patch.object(
-                    PUSH_READY,
-                    "stream_git",
-                    return_value=iter(()),
-                ), mock.patch.object(Path, "exists", return_value=True):
+                ), mock.patch.object(Path, "exists", return_value=True), mock.patch.object(
+                    PUSH_READY, "stream_git", return_value=iter(())
+                ):
                     PUSH_READY.ensure_review_safe(
                         self.change(diff=patch, paths=("image.pkr.hcl",))
                     )
@@ -466,7 +464,7 @@ class PushReadySecurityTests(unittest.TestCase):
             (
                 "README.md",
                 "synthetic-documentation-example",
-                "-----BEGIN PRIVATE KEY-----",
+                "-----BEGIN " "PRIVATE KEY-----",
             ),
         )
         for path, purpose, value in rejected:
@@ -597,6 +595,75 @@ class PushReadySecurityTests(unittest.TestCase):
                     remote_name="origin",
                     remote_url=remote_url,
                 )
+
+
+class PushReadyWarningTests(unittest.TestCase):
+    def test_review_warning_threshold_migration_contract(self):
+        threshold = PUSH_READY.review_warning_threshold
+        for config in ({}, {"max_diff_bytes": 1}, {"max_diff_bytes": 200000}):
+            self.assertEqual(500000, threshold(config))
+        self.assertEqual(17, threshold({"warn_diff_bytes": 17}))
+        self.assertIsNone(threshold({"max_diff_bytes": 1, "warn_diff_bytes": None}))
+        for config in (
+            {"max_diff_bytes": None}, {"max_diff_bytes": True},
+            {"max_diff_bytes": 0}, {"max_diff_bytes": -1},
+            {"max_diff_bytes": "200000"}, {"warn_diff_bytes": False},
+            {"warn_diff_bytes": 0}, {"warn_diff_bytes": "500000"},
+            {"unknown": 1},
+        ):
+            with self.subTest(config=config), self.assertRaises(RuntimeError):
+                threshold(config)
+
+    def test_large_patch_notice_does_not_skip_deterministic_validation(self):
+        payload = "+" + "x" * 500000 + "\n"
+
+        def decoded(*args, **kwargs):
+            if "--name-only" in args:
+                yield "ordinary.txt\0"
+            else:
+                for offset in range(0, len(payload), 16384):
+                    yield payload[offset:offset + 16384]
+
+        patches = []
+        planned = PUSH_READY.planned_change
+
+        def record_change(*args, **kwargs):
+            change = planned(*args, **kwargs)
+            if change.patch is not None:
+                patches.append(change.patch)
+            return change
+
+        profile = mock.Mock()
+        stderr = io.StringIO()
+        overrides = {
+            "check_instruction_contract": mock.Mock(),
+            "require_clean_head": mock.Mock(),
+            "refresh_authoritative_base": mock.Mock(),
+            "require_trusted_check_policy": mock.Mock(),
+            "load_config": lambda: {"review": {"max_diff_bytes": 1}},
+            "resolve_base": lambda *a, **kw: (
+                "refs/remotes/origin/develop", "a" * 40, "a" * 40
+            ),
+            "git_output": lambda *a: "b" * 40,
+            "decoded_git_chunks": decoded,
+            "tree_fingerprint": lambda: "f" * 64,
+            "untracked_names": lambda: [],
+            "secret_fixture_manifest_for_change": lambda *a, **kw: {},
+            "execute_integration_checks": profile,
+            "planned_change": record_change,
+        }
+        try:
+            with mock.patch.dict(PUSH_READY.main.__globals__, overrides), mock.patch.object(
+                PUSH_READY.sys, "argv", ["lit-push-ready.py", "validate"]
+            ), mock.patch.object(PUSH_READY.sys, "stderr", stderr):
+                self.assertEqual(0, PUSH_READY.main())
+            profile.assert_called_once()
+            self.assertEqual(len(payload.encode("utf-8")), patches[0].size)
+            self.assertIn("Planning notice:", stderr.getvalue())
+            self.assertIn("all deterministic checks still run", stderr.getvalue())
+        finally:
+            for patch in patches:
+                patch.close()
 
 
 if __name__ == "__main__":
