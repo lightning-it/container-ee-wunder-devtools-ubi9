@@ -89,12 +89,13 @@ PEM_KEY_BOUNDARY_PATTERN = re.compile(
 PEM_KEY_BEGIN_BOUNDARY_PATTERN = re.compile(
     r"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----"
 )
+PASSWORD_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)(?:api[_-]?key|client[_-]?secret|access[_-]?token|password)"
+    r"\s*[:=]\s*[\"']?[A-Za-z0-9_./+=-]{16,}"
+)
 SECRET_CONTENT_PATTERNS = (
     PEM_KEY_BOUNDARY_PATTERN,
-    re.compile(
-        r"(?i)(?:api[_-]?key|client[_-]?secret|access[_-]?token|password)"
-        r"\s*[:=]\s*[\"']?[A-Za-z0-9_./+=-]{16,}"
-    ),
+    PASSWORD_ASSIGNMENT_PATTERN,
     re.compile(r"\bgh[opusr]_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
@@ -107,6 +108,16 @@ SECRET_CONTENT_PATTERNS = (
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b", re.IGNORECASE),
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
     re.compile(r"(?i)_authToken\s*=\s*[^\s]{12,}"),
+)
+PACKER_PASSWORD_ASSIGNMENT_MASK = 1 << SECRET_CONTENT_PATTERNS.index(
+    PASSWORD_ASSIGNMENT_PATTERN
+)
+PACKER_EMBEDDED_TOKEN_PATTERNS = tuple(
+    re.compile(
+        pattern.pattern.replace(r"\b", ""),
+        pattern.flags,
+    )
+    for pattern in SECRET_CONTENT_PATTERNS[2:]
 )
 PACKER_VARIABLE_REFERENCE_LINE = re.compile(
     r"\s*password\s*=\s*var\.[a-z_][a-z0-9_]*\s*",
@@ -123,6 +134,9 @@ SYNTHETIC_DOCUMENTATION_PATH_PATTERN = re.compile(
 )
 MAX_SECRET_FIXTURE_MANIFEST_BYTES = 100_000
 MAX_SECRET_FIXTURE_SOURCE_BYTES = 10_000_000
+MAX_PLANNED_PACKER_PATHS = 1_000
+MAX_PLANNED_PACKER_ATTRIBUTE_BYTES = 10_000_000
+MAX_PLANNED_PACKER_ATTRIBUTE_TRIPLES = 10_000
 INSTRUCTION_PATH_PATTERN = re.compile(
     r"(?:^|/)AGENTS\.md$|^\.github/copilot-instructions\.md$|"
     r"^\.github/instructions/.+\.instructions\.md$"
@@ -656,7 +670,14 @@ def file_text_chunks(stream, *, errors="replace"):
 
 
 def filtered_scan_chunks(
-    chunks, documented, *, path=None, diff=False, redact=False, packer=False
+    chunks,
+    documented,
+    *,
+    path=None,
+    diff=False,
+    redact=False,
+    packer=False,
+    packer_paths=frozenset(),
 ):
     """Apply existing exact-line exceptions with bounded line spooling.
 
@@ -668,7 +689,12 @@ def filtered_scan_chunks(
     in_hunk = False
     line_number = 0
     packer_machine = None
-    if packer:
+    packer_token_machine = None
+    governed_paths = frozenset(documented) | frozenset(packer_paths)
+    governed_old_paths = governed_diff_header_paths("a", governed_paths)
+    governed_new_paths = governed_diff_header_paths("b", governed_paths)
+    ungoverned_path = object()
+    if packer or packer_paths:
         packer_machine = StreamingPatterns(
             [
                 re.compile(
@@ -678,6 +704,7 @@ def filtered_scan_chunks(
                 )
             ]
         )
+        packer_token_machine = StreamingPatterns(PACKER_EMBEDDED_TOKEN_PATTERNS)
     with tempfile.SpooledTemporaryFile(max_size=CHUNK_BYTES, mode="w+b") as line_file:
         prefix = ""
         digest = hashlib.sha256()
@@ -685,6 +712,9 @@ def filtered_scan_chunks(
         pending = False
         line_scan = content_scanner()
         packer_scan = packer_machine.scanner() if packer_machine else None
+        packer_token_scan = (
+            packer_token_machine.scanner() if packer_token_machine else None
+        )
         # Flush an unterminated last line without inventing an empty one.
         for fragment, ending in itertools.chain(
             split_text_fragments(chunks), [("", "EOF")]
@@ -694,14 +724,14 @@ def filtered_scan_chunks(
             pending = True
             line_file.write(fragment.encode("utf-8"))
             prefix += fragment[: max(0, CHUNK_BYTES - len(prefix))]
-            digest.update(
-                (fragment[1:] if first and diff else fragment).encode("utf-8")
-            )
+            content_fragment = fragment[1:] if first and diff else fragment
+            digest.update(content_fragment.encode("utf-8"))
             if fragment:
                 first = False
             line_scan.feed(fragment)
             if packer_scan:
-                packer_scan.feed(fragment)
+                packer_scan.feed(content_fragment)
+                packer_token_scan.feed(content_fragment)
             if ending is None:
                 continue
             line_number += 1
@@ -715,11 +745,9 @@ def filtered_scan_chunks(
                     old_path = new_path = None
                     in_hunk = False
                 elif not in_hunk and prefix.startswith("--- "):
-                    old_path = unquote_diff_path(prefix[4:], "a")
+                    old_path = governed_old_paths.get(prefix[4:], ungoverned_path)
                 elif not in_hunk and prefix.startswith("+++ "):
-                    new_path = (
-                        unquote_diff_path(prefix[4:], "b") if documented else None
-                    )
+                    new_path = governed_new_paths.get(prefix[4:], ungoverned_path)
                 elif prefix.startswith("@@"):
                     hunk = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", prefix)
                     if hunk is None or (
@@ -755,7 +783,16 @@ def filtered_scan_chunks(
             flags = line_scan.finish()
             if redact and old_content and old_path not in documented and flags & ~1:
                 mask = True
-            if packer_scan and packer_scan.finish():
+            if (
+                packer_scan
+                and packer_scan.finish()
+                and (not diff or match_path in packer_paths)
+                # A bare Packer variable reference may trigger only the generic
+                # password-assignment pattern. Preserve every token-specific
+                # match so a token embedded in an identifier is still rejected.
+                and not flags & ~PACKER_PASSWORD_ASSIGNMENT_MASK
+                and not packer_token_scan.finish()
+            ):
                 mask = True
             if mask:
                 yield "DOCUMENTED_SYNTHETIC_FIXTURE\n"
@@ -771,6 +808,9 @@ def filtered_scan_chunks(
             pending = False
             line_scan = content_scanner()
             packer_scan = packer_machine.scanner() if packer_machine else None
+            packer_token_scan = (
+                packer_token_machine.scanner() if packer_token_machine else None
+            )
 
 
 def scan_chunks(chunks):
@@ -778,6 +818,97 @@ def scan_chunks(chunks):
     for chunk in chunks:
         scanner.feed(chunk)
     return scanner.finish()
+
+
+def planned_packer_attribute_names(name, *, max_bytes, max_triples):
+    """Read one exact check-attr record stream within the shared budget."""
+    fields = []
+    pending = b""
+    names = set()
+    byte_count = 0
+    triple_count = 0
+    for chunk in stream_git("check-attr", "-z", "--all", "--", name):
+        byte_count += len(chunk)
+        if byte_count > max_bytes:
+            raise RuntimeError(
+                "planned Packer attribute scan exceeds its "
+                f"{MAX_PLANNED_PACKER_ATTRIBUTE_BYTES}-byte resource budget"
+            )
+        parts = (pending + chunk).split(b"\0")
+        pending = parts.pop()
+        for part in parts:
+            fields.append(part.decode("utf-8", "surrogateescape"))
+            if len(fields) != 3:
+                continue
+            reported_name, attribute, _value = fields
+            if reported_name != name:
+                raise RuntimeError(
+                    "planned Packer attribute scan returned an unexpected path"
+                )
+            triple_count += 1
+            if triple_count > max_triples:
+                raise RuntimeError(
+                    "planned Packer attribute scan exceeds its "
+                    f"{MAX_PLANNED_PACKER_ATTRIBUTE_TRIPLES}-triple resource budget"
+                )
+            names.add(attribute)
+            fields.clear()
+    if pending or fields:
+        raise RuntimeError("planned Packer attribute scan returned malformed output")
+    return names, byte_count, triple_count
+
+
+def planned_packer_paths(paths):
+    """Return changed Packer files whose complete snapshot has no block marker."""
+    candidates = [name for name in paths if name.endswith(".pkr.hcl")]
+    if len(candidates) > MAX_PLANNED_PACKER_PATHS:
+        raise RuntimeError(
+            f"planned Packer scan exceeds its {MAX_PLANNED_PACKER_PATHS}-path resource budget"
+        )
+    allowed = set()
+    total = 0
+    attribute_bytes = 0
+    attribute_triples = 0
+    for name in candidates:
+        present_attributes, used_bytes, used_triples = (
+            planned_packer_attribute_names(
+                name,
+                max_bytes=MAX_PLANNED_PACKER_ATTRIBUTE_BYTES - attribute_bytes,
+                max_triples=(
+                    MAX_PLANNED_PACKER_ATTRIBUTE_TRIPLES - attribute_triples
+                ),
+            )
+        )
+        attribute_bytes += used_bytes
+        attribute_triples += used_triples
+        if present_attributes & {"working-tree-encoding", "filter"}:
+            # The exception is defined for the exact bytes inspected below.
+            # Encoded or filtered worktrees are scanned without masking.
+            continue
+        candidate = ROOT / name
+        if not candidate.exists():
+            continue
+        descriptor = open_repository_regular(
+            name, purpose="Planned Packer exception"
+        )
+        marker_found = False
+        tail = b""
+        with os.fdopen(descriptor, "rb") as stream:
+            while True:
+                chunk = stream.read(CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_TRACKED_WORKSPACE_SCAN_BYTES:
+                    raise RuntimeError(
+                        "planned Packer scan exceeds its 500000000-byte resource budget"
+                    )
+                if any(marker in tail + chunk for marker in (b"/*", b"*/", b"<<")):
+                    marker_found = True
+                tail = chunk[-1:]
+        if not marker_found:
+            allowed.add(name)
+    return frozenset(allowed)
 
 
 def streaming_review_safe(change, documented, *, redact=False):
@@ -796,7 +927,11 @@ def streaming_review_safe(change, documented, *, redact=False):
         )
     scanned = scan_chunks(
         filtered_scan_chunks(
-            patch_chunks(change.patch), documented, diff=True, redact=redact
+            patch_chunks(change.patch),
+            documented,
+            diff=True,
+            redact=redact,
+            packer_paths=planned_packer_paths(change.paths),
         )
     )
     secret_mask = (1 << len(SECRET_CONTENT_PATTERNS)) - 1
@@ -1180,6 +1315,17 @@ def git_output(*args: str) -> str:
     return result.stdout
 
 
+def git_exact_text(*args: str) -> str:
+    """Return UTF-8 Git output without universal-newline path corruption."""
+    return "".join(
+        decoded_git_chunks(
+            *args,
+            errors="surrogateescape",
+            universal_newlines=False,
+        )
+    )
+
+
 def evidence_path() -> Path:
     git_dir = Path(git_output("rev-parse", "--git-dir").strip())
     if not git_dir.is_absolute():
@@ -1271,7 +1417,7 @@ def read_repository_file(
 
 
 def untracked_names() -> list[str]:
-    names = git_output("ls-files", "--others", "--exclude-standard", "-z")
+    names = git_exact_text("ls-files", "--others", "--exclude-standard", "-z")
     return [entry for entry in names.split("\0") if entry]
 
 
@@ -2586,7 +2732,7 @@ def execute_integration_checks(
 
 def quote_diff_path(prefix: str, name: str) -> str:
     value = f"{prefix}/{name}"
-    if re.search(r"[\s\"\\\x00-\x1f\x7f-\xff]", value):
+    if re.search(r'[\s"\\]|[^\x20-\x7e]', value):
         encoded = value.encode("utf-8", errors="surrogateescape")
         escaped: list[str] = []
         for byte in encoded:
@@ -2594,10 +2740,18 @@ def quote_diff_path(prefix: str, name: str) -> str:
                 escaped.append("\\\\")
             elif byte == ord('"'):
                 escaped.append('\\"')
+            elif byte == 0x07:
+                escaped.append("\\a")
+            elif byte == 0x08:
+                escaped.append("\\b")
             elif byte == ord("\t"):
                 escaped.append("\\t")
             elif byte == ord("\n"):
                 escaped.append("\\n")
+            elif byte == 0x0B:
+                escaped.append("\\v")
+            elif byte == 0x0C:
+                escaped.append("\\f")
             elif byte == ord("\r"):
                 escaped.append("\\r")
             elif 0x20 <= byte <= 0x7E:
@@ -2606,6 +2760,28 @@ def quote_diff_path(prefix: str, name: str) -> str:
                 escaped.append(f"\\{byte:03o}")
         return '"' + "".join(escaped) + '"'
     return value
+
+
+def tracked_diff_header_path(prefix: str, name: str) -> str:
+    """Encode one tracked unified-diff header path with core.quotePath=true."""
+    value = f"{prefix}/{name}"
+    if re.search(r'["\\]|[^\x20-\x7e]', value):
+        return quote_diff_path(prefix, name)
+    return value + ("\t" if " " in value else "")
+
+
+def governed_diff_header_paths(prefix: str, paths) -> dict[str, str]:
+    """Index exact tracked and synthetic header encodings for governed paths."""
+    result: dict[str, str] = {}
+    for path in paths:
+        for encoded in {
+            tracked_diff_header_path(prefix, path),
+            quote_diff_path(prefix, path),
+        }:
+            previous = result.setdefault(encoded, path)
+            if previous != path:
+                raise RuntimeError("governed diff path encodings are ambiguous")
+    return result
 
 
 def unquote_diff_path(value: str, prefix: str) -> Optional[str]:
@@ -2786,7 +2962,7 @@ def planned_change(
     initial_tree_fingerprint = tree_fingerprint()
     base_ref, base_tip, base_commit = resolve_base(config, base_override)
     head_commit = git_output("rev-parse", "--verify", "HEAD^{commit}").strip()
-    tracked_names = git_output(
+    tracked_names = git_exact_text(
         "diff", "--name-only", "--no-renames", "-z", base_commit, "--"
     ).split("\0")
     patch = PatchSpool() if include_patch else None
@@ -2795,11 +2971,27 @@ def planned_change(
         if include_patch:
             tail = ""
             for chunk in decoded_git_chunks(
+                "-c",
+                "core.quotePath=true",
+                "-c",
+                "diff.noprefix=false",
+                "-c",
+                "diff.mnemonicPrefix=false",
+                "-c",
+                "diff.srcPrefix=a/",
+                "-c",
+                "diff.dstPrefix=b/",
+                "-c",
+                "diff.suppressBlankEmpty=false",
                 "diff",
+                "--no-color",
                 "--no-ext-diff",
                 "--no-textconv",
                 "--binary",
                 "--no-renames",
+                "--output-indicator-new=+",
+                "--output-indicator-old=-",
+                "--output-indicator-context= ",
                 "--unified=40",
                 base_commit,
                 "--",
@@ -2850,6 +3042,10 @@ def planned_change(
                     change, bootstrap=fixture_manifest_bootstrap
                 ),
             )
+            if tree_fingerprint() != final_tree_fingerprint:
+                raise RuntimeError(
+                    "Git tree changed while scanning the exact planned push patch"
+                )
         return change
     except BaseException:
         if hasattr(patch, "text_chunks"):

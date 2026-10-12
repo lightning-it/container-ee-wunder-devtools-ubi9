@@ -292,6 +292,52 @@ class PushReadySecurityTests(unittest.TestCase):
         self.assertEqual("DOCUMENTED_SYNTHETIC_FIXTURE\n", masked)
         self.assertEqual(0, PUSH_READY.scan_chunks((masked,)))
 
+    def test_planned_packer_attribute_stream_is_bounded_and_exact(self):
+        output = b"image.pkr.hcl\0filter\0unspecified\0"
+        with mock.patch.object(
+            PUSH_READY,
+            "stream_git",
+            return_value=iter((output[:7], output[7:19], output[19:])),
+        ):
+            names, byte_count, triple_count = (
+                PUSH_READY.planned_packer_attribute_names(
+                    "image.pkr.hcl", max_bytes=len(output), max_triples=1
+                )
+            )
+        self.assertEqual({"filter"}, names)
+        self.assertEqual(len(output), byte_count)
+        self.assertEqual(1, triple_count)
+
+        with mock.patch.object(
+            PUSH_READY, "stream_git", return_value=iter((output,))
+        ):
+            with self.assertRaisesRegex(RuntimeError, "byte resource budget"):
+                PUSH_READY.planned_packer_attribute_names(
+                    "image.pkr.hcl", max_bytes=len(output) - 1, max_triples=1
+                )
+
+        two_records = output + b"image.pkr.hcl\0diff\0set\0"
+        with mock.patch.object(
+            PUSH_READY, "stream_git", return_value=iter((two_records,))
+        ):
+            with self.assertRaisesRegex(RuntimeError, "triple resource budget"):
+                PUSH_READY.planned_packer_attribute_names(
+                    "image.pkr.hcl",
+                    max_bytes=len(two_records),
+                    max_triples=1,
+                )
+
+        wrong_path = b"other.pkr.hcl\0filter\0set\0"
+        with mock.patch.object(
+            PUSH_READY, "stream_git", return_value=iter((wrong_path,))
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected path"):
+                PUSH_READY.planned_packer_attribute_names(
+                    "image.pkr.hcl",
+                    max_bytes=len(wrong_path),
+                    max_triples=1,
+                )
+
     def test_packer_masking_is_limited_to_bare_references_in_packer_files(self):
         reference = "password = var.this_is_a_long_variable_name"
 
@@ -317,11 +363,65 @@ class PushReadySecurityTests(unittest.TestCase):
             ("image.pkr.hcl", "value = <<EOF\n" + reference + "\nEOF"),
             ("variables.hcl", reference),
             ("image.pkr.hcl", "password = ghp_" + "a" * 24),
+            ("image.pkr.hcl", "password = var.npm_" + "a" * 24),
+            ("image.pkr.hcl", "password = var.xnpm_" + "a" * 24),
+            ("image.pkr.hcl", "password = var.npm_" + "a" * 24 + "_suffix"),
         )
         for path, content in rejected:
             with self.subTest(path=path, content=content[:24]):
                 with self.assertRaisesRegex(RuntimeError, "secret-like content"):
                     scan(path, content)
+
+    def test_planned_diff_packer_masking_uses_the_complete_file_boundary(self):
+        reference = "password = var.this_is_a_long_variable_name"
+
+        def review(file_content, changed_line=reference):
+            patch = (
+                "diff --git a/image.pkr.hcl b/image.pkr.hcl\n"
+                "--- a/image.pkr.hcl\n"
+                "+++ b/image.pkr.hcl\n"
+                "@@ -0,0 +1 @@\n"
+                f"+{changed_line}\n"
+            )
+            with tempfile.TemporaryFile() as stream:
+                stream.write((file_content + "\n").encode())
+                stream.flush()
+
+                def duplicate_file(*_args, **_kwargs):
+                    stream.seek(0)
+                    return os.dup(stream.fileno())
+
+                with mock.patch.object(
+                    PUSH_READY,
+                    "open_repository_regular",
+                    side_effect=duplicate_file,
+                ), mock.patch.object(Path, "exists", return_value=True):
+                    PUSH_READY.ensure_review_safe(
+                        self.change(diff=patch, paths=("image.pkr.hcl",))
+                    )
+
+        review(reference)
+        rejected = (
+            ("# " + reference, "# " + reference),
+            ("value = <<EOF\n" + reference + "\nEOF", reference),
+            ("password = ghp_" + "a" * 24, "password = ghp_" + "a" * 24),
+            (
+                "password = var.npm_" + "a" * 24,
+                "password = var.npm_" + "a" * 24,
+            ),
+            (
+                "password = var.xnpm_" + "a" * 24,
+                "password = var.xnpm_" + "a" * 24,
+            ),
+            (
+                "password = var.npm_" + "a" * 24 + "_suffix",
+                "password = var.npm_" + "a" * 24 + "_suffix",
+            ),
+        )
+        for file_content, changed_line in rejected:
+            with self.subTest(file_content=file_content[:24]):
+                with self.assertRaisesRegex(RuntimeError, "secret-like content"):
+                    review(file_content, changed_line)
 
     def test_documentation_fixture_authorization_is_path_and_purpose_bound(self):
         line = "password = " + "a" * 20
