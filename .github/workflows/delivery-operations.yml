@@ -1,0 +1,18 @@
+# Managed by lightning-it/shared-assets-lit; render only the trusted native Common SHA.
+# First-policy metadata receiver only; promotion admission is a separate stage.
+# yamllint disable rule:truthy
+---
+name: Protected delivery operations
+on:
+  pull_request_target:
+    types: [edited, labeled, unlabeled, ready_for_review, converted_to_draft]
+  workflow_run:
+    workflows: [Repository review events]
+    types: [completed]
+permissions:
+  contents: read
+  actions: write
+  pull-requests: read
+jobs:
+  delivery:
+    uses: lightning-it/.github/.github/workflows/delivery-operations.yml@b634a997ed0daa541945456f468512f7164c46ca

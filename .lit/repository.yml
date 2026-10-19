@@ -50,5 +50,3 @@ workflows:
   container_build: container-build.yml
   release: container-build-publish.yml
   trivy: container-trivy.yml
-  promote: promote-develop-to-main.yml
-  backmerge: sync-main-to-develop.yml
