@@ -195,12 +195,14 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
         # Source-built Terraform and Packer pin x/net with go.mod replacements
         # before offline module reconciliation; the final binary loop verifies
         # that the selected fixed version is actually linked.
-        self.assertEqual(
-            2,
-            dockerfile.count(
-                '"-replace=golang.org/x/net=golang.org/x/net@v${GO_X_NET_VERSION}"'
-            ),
-        )
+        for tool in ("terraform", "packer"):
+            build = dockerfile.split(
+                f"RUN curl -fsSLo /tmp/{tool}.tar.gz", 1
+            )[1].split("\n\n", 1)[0]
+            self.assertIn(
+                '"-replace=golang.org/x/net=golang.org/x/net@v${GO_X_NET_VERSION}"',
+                build,
+            )
         self.assertIn("CGO_ENABLED=0 GOFLAGS=-mod=mod go build", dockerfile)
         self.assertIn(
             "for binary in terraform tflint terraform-docs gh docker "

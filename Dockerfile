@@ -9,6 +9,11 @@ ARG TARGETARCH
 ARG GO_VERSION=1.26.9
 ARG GO_AMD64_SHA256=42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d
 ARG GO_ARM64_SHA256=4a97373d49fcacdcf3694fea368a500b00ee3e963974f3e7514132717632f052
+ARG GO_X_CRYPTO_VERSION=0.57.0
+ARG GO_X_MOD_VERSION=0.40.0
+ARG GO_X_NET_VERSION=0.60.0
+ARG GO_X_TEXT_VERSION=0.42.0
+ARG GO_GRPC_VERSION=1.83.2
 
 # hadolint ignore=DL3002
 USER 0
@@ -54,8 +59,11 @@ FROM go-toolchain AS cosign-builder
 ARG COSIGN_VERSION=3.0.6
 ARG COSIGN_SOURCE_COMMIT=f1ad3ee952313be5d74a49d67ba0aa8d0d5e351f
 ARG COSIGN_SOURCE_SHA256=8be1ce19a8865baaa7e4aa44fcee27ae6a3247ba9ce05f145c2f3f5b2ed485d9
+ARG COSIGN_FULCIO_VERSION=1.8.6
+ARG COSIGN_REKOR_VERSION=1.5.2
 
-# The upstream signed v3.0.6 tag binds this commit; preserve its module locks.
+# The signed tag binds the unchanged CLI source. Apply explicit security
+# dependency replacements, then bind the resulting locks before offline build.
 RUN curl -fsSLo /tmp/cosign-tag.json \
       https://api.github.com/repos/sigstore/cosign/git/tags/77891cd80a8f2bac1a2bf2f37f2e6005df38e51a && \
     python3 -c 'import json,sys; t=json.load(open(sys.argv[1])); assert t["tag"] == "v"+sys.argv[2] and t["object"]["type"] == "commit" and t["object"]["sha"] == sys.argv[3] and t["verification"]["verified"] is True' \
@@ -66,14 +74,22 @@ RUN curl -fsSLo /tmp/cosign-tag.json \
     mkdir -p /tmp/cosign-source /out && \
     tar -xzf /tmp/cosign.tar.gz --strip-components=1 -C /tmp/cosign-source && \
     cd /tmp/cosign-source && \
-    sha256sum go.mod go.sum > /tmp/cosign-module-locks.sha256 && \
+    go mod edit \
+      "-replace=github.com/sigstore/fulcio=github.com/sigstore/fulcio@v${COSIGN_FULCIO_VERSION}" \
+      "-replace=github.com/sigstore/rekor=github.com/sigstore/rekor@v${COSIGN_REKOR_VERSION}" \
+      "-replace=golang.org/x/crypto=golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
+      "-replace=golang.org/x/mod=golang.org/x/mod@v${GO_X_MOD_VERSION}" \
+      "-replace=golang.org/x/net=golang.org/x/net@v${GO_X_NET_VERSION}" \
+      "-replace=golang.org/x/text=golang.org/x/text@v${GO_X_TEXT_VERSION}" \
+      "-replace=google.golang.org/grpc=google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
     mkdir /tmp/cosign-module-prefetch && \
     cp go.mod go.sum /tmp/cosign-module-prefetch/ && \
     cd /tmp/cosign-module-prefetch && \
     python3 /usr/local/lib/download_go_modules.py && \
     cd /tmp/cosign-source && \
+    GOPROXY=off go mod tidy && \
     GOPROXY=off go mod verify && \
-    sha256sum -c /tmp/cosign-module-locks.sha256 && \
+    sha256sum go.mod go.sum > /tmp/cosign-module-locks.sha256 && \
     rm -rf /tmp/cosign-module-prefetch
 
 RUN --network=none cd /tmp/cosign-source && \
@@ -82,11 +98,27 @@ RUN --network=none cd /tmp/cosign-source && \
       -ldflags="-buildid= -s -w \
         -X sigs.k8s.io/release-utils/version.gitVersion=v${COSIGN_VERSION} \
         -X sigs.k8s.io/release-utils/version.gitCommit=${COSIGN_SOURCE_COMMIT} \
-        -X sigs.k8s.io/release-utils/version.gitTreeState=clean" \
+        -X sigs.k8s.io/release-utils/version.gitTreeState=dirty" \
       -o /out/cosign ./cmd/cosign && \
     sha256sum -c /tmp/cosign-module-locks.sha256 && \
-    /out/cosign version --json | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["gitVersion"] == "v"+sys.argv[1] and v["gitCommit"] == sys.argv[2]' \
+    /out/cosign version --json | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["gitVersion"] == "v"+sys.argv[1] and v["gitCommit"] == sys.argv[2] and v["gitTreeState"] == "dirty"' \
       "${COSIGN_VERSION}" "${COSIGN_SOURCE_COMMIT}" && \
+    for coordinate in \
+      "github.com/sigstore/fulcio@v${COSIGN_FULCIO_VERSION}" \
+      "github.com/sigstore/rekor@v${COSIGN_REKOR_VERSION}" \
+      "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
+      "golang.org/x/mod@v${GO_X_MOD_VERSION}" \
+      "golang.org/x/net@v${GO_X_NET_VERSION}" \
+      "golang.org/x/text@v${GO_X_TEXT_VERSION}" \
+      "google.golang.org/grpc@v${GO_GRPC_VERSION}"; do \
+        module="${coordinate%@*}"; expected="${coordinate##*@}"; \
+        effective="$(go version -m /out/cosign | awk -v module="$module" \
+          '$1 == "dep" && $2 == module { version = $3 } $1 == "=>" && $2 == module { version = $3 } END { print version }')"; \
+        if [ "$effective" != "$expected" ]; then \
+          printf 'ERROR: cosign links %s %s, expected %s\n' "$module" "${effective:-<missing>}" "$expected" >&2; \
+          exit 1; \
+        fi; \
+    done && \
     cd / && rm -rf /tmp/cosign-source /tmp/cosign.tar.gz \
       /tmp/cosign-tag.json /tmp/cosign-module-locks.sha256
 
@@ -136,11 +168,6 @@ ARG MOBY_V2_VERSION=2.0.0-beta.21
 ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
 ARG NODE_VERSION=24.19.0
 ARG WEBSITE_NODE_VERSION=24.18.0
-ARG GO_X_CRYPTO_VERSION=0.57.0
-ARG GO_X_MOD_VERSION=0.40.0
-ARG GO_X_NET_VERSION=0.60.0
-ARG GO_X_TEXT_VERSION=0.42.0
-ARG GO_GRPC_VERSION=1.83.2
 ARG ORAS_GO_VERSION=2.6.2
 
 RUN mkdir -p /out && \
