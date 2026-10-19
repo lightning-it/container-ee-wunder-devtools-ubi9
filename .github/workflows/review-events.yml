@@ -1,0 +1,20 @@
+# Unprivileged signal only. The protected default-branch receiver independently
+# verifies the native run and current review state. No candidate checkout.
+# yamllint disable rule:truthy
+---
+name: Repository review events
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+permissions: {}
+jobs:
+  signal:
+    name: Record review event
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Signal protected receiver
+        run: echo 'Review metadata event recorded; protected receiver verifies current state.'

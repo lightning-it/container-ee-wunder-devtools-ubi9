@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "repository": "lightning-it/container-ee-wunder-devtools-ubi9",
+  "mode": "reference",
+  "quality": [
+    {"workflow": ".github/workflows/semantic-release.yml", "job": "Lint"},
+    {"workflow": ".github/workflows/semantic-release.yml", "job": "Semantic Release (dry run)"},
+    {"workflow": ".github/workflows/container-ci.yml", "job": "Validate container repository"},
+    {"workflow": ".github/workflows/container-trivy.yml", "job": "Trivy"}
+  ],
+  "accepted_sources": [],
+  "distribution_sources": [],
+  "artifact_publication": true
+}

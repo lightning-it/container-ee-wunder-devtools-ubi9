@@ -13,7 +13,7 @@ overrides:
   adm-zip: 0.6.1
   brace-expansion: 5.0.11
   handlebars: 4.7.10
-  ip-address: 10.5.0
+  ip-address: 10.7.1
   js-yaml: 4.3.2
   simple-git: 4.0.2
   '@simple-git/argv-parser': 2.0.1
@@ -21,3 +21,6 @@ overrides:
   smol-toml: 1.7.1
   tar: 7.5.22
   undici: 6.28.1
+minimumReleaseAgeExclude:
+  # Renovate security update: ip-address@10.7.1
+  - ip-address@10.7.1

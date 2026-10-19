@@ -75,8 +75,6 @@ termination is tracked in LI-204.
   - `scripts/lit-ci-profile.sh`
   - `.github/workflows/container-ci.yml`
   - `.github/workflows/container-build-publish.yml`
-  - `.github/workflows/renovate-guarded-automerge.yml`
-  - `.github/workflows/shared-assets-guarded-automerge.yml`
   - `.github/workflows/semantic-release.yml`
   - `scripts/devtools-container-ci.sh`
   - `scripts/devtools-container-release-verify.sh`
@@ -97,8 +95,10 @@ termination is tracked in LI-204.
   Security branches and does not bypass any required check or branch rule.
 - Merging `develop` into `main` is the container release trigger.
 - Use merge commits for `develop` to `main` promotion PRs so branch ancestry remains clear.
-- After `main` changes, the shared `sync-main-to-develop` workflow must open a back-sync PR from `main` to `develop` so
-  the next promotion PR can be opened without branch drift.
+- Main preparation and ancestry convergence use the independently admitted
+  Common/Management route for this repository. A real protected Main change
+  must be reconciled through an ordinary reviewed PR before another promotion;
+  no retired local back-sync workflow is reinstalled or assumed to run.
 - Repository settings, default branches, branch protection, and workflow permissions belong in `github-management-lit`.
 - Container repository cleanup and policy changes must be configured through `github-management-lit` first. Do not
   directly adjust downstream container repository settings or branch enforcement unless the matching desired state is
@@ -225,104 +225,48 @@ termination is tracked in LI-204.
   require an actual Copilot review of the current head. Only explicitly
   allowlisted Renovate and shared-assets changes may use a documented
   deterministic, evidence-bound exception; unknown bots fail closed.
-- The existing Renovate exception is valid only for the exact
+- The Common Renovate route is valid only for the exact
   `renovate[bot]` author, a same-repository `renovate/*` head, protected
   `develop` base, all three `renovate`, `dependencies`, and `safe-automerge`
-  labels, no `breaking-update` label, and a null AI review ID. Its producer
-  publishes only the bound deterministic result and exits; the independent
-  Required Workflow verifies that completed producer directly and MUST NOT be
-  raced by a producer-authored rerun. No other Renovate or dependency exception
-  exists.
+  labels and no `breaking-update` label. The independently selected Common
+  Required Workflow verifies the exact native identity and label/commit
+  provenance; labels or a candidate-authored result alone grant no exemption.
+  No other Renovate or dependency exception exists.
 - Automated GitHub Copilot requests funded by Lightning IT are restricted to
   pull requests whose exact author login is `litroc`. Every other human or
   external contributor must supply a valid current-head review under their own
   entitlement; Lightning IT automation verifies that review but never requests
   or funds it. Personal tokens and personal provider keys never enter Actions.
-- Every exact same-repository PR authored by
-  `lightning-it-release-automation[bot]` uses only the ADR-defined, protected
-  MLX-90 §7.2 Exact-Revision Codex review, except for an exact, exhaustively
-  verified ancestry-only `main` to `develop` backmerge. That one REP-60 case
-  uses the deterministic evidence-bound zero-AI exception and never dispatches
-  Codex or Copilot. No other deterministic release exemption and no GitHub
-  Copilot fallback is permitted. The §7.2 review binds the live base,
-  head, unique merge base, integration tree, and SHA-256 of the complete binary
-  Git-object diff. It MUST run from the protected base copy of
-  `.github/workflows/release-bot-exact-head-review.yml`, receive no checkout,
-  history, or credentials, and emit only the neutral `Current revision review`
-  check on the exact head. It MUST never emit or synthesize `Successful Copilot
-  review`. The built-in `:read-only` permission profile technically denies
-  writes and command network access. This path never applies to human,
-  community, or other automation authors.
-- A protected Exact-Revision bootstrap is one dependency-closed trust surface.
-  It MUST install `.github/workflows/copilot-review.yml`,
-  `.github/workflows/release-bot-exact-head-review.yml`,
-  `.github/workflows/current-revision-rerun.yml`,
-  `scripts/materialize-exact-revision-review.py`,
-  `.github/codex/prompts/review-exact-head.md`, and
-  `.github/codex/schemas/exact-head-review.schema.json` byte-identically and
-  atomically. A partial bootstrap fails closed.
-- Reusable `pull_request_target` re-evaluation binds its executed controller
-  SHA and ref to the live protected default branch, even when the PR base is
-  different; PR base and head remain separately exact. A `workflow_run`
-  finalizer separately re-reads that controller and its runner-backed guard
-  job while binding the triggering helper to the exact protected PR base.
-  One trust-boundary SHA never substitutes for another.
-- Exactly the Shared-Assets-App `ready_for_review` run may dispatch one
-  standalone protected `current-revision-rerun.yml` after a unique successful
-  `managed-sync:v6` neutral result binds PR, source run, base, head and
-  protected default-branch controller. The successful helper `workflow_run`
-  is the only automatic guarded-finalizer re-entry after slower native checks
-  finish. Other events never dispatch it; it never requests AI or mutates a
-  check, and missing or duplicate handoff evidence fails closed.
-- A first immutable main trust-root bootstrap whose organization Required
-  Workflow attempt one failed before creating a verifier reservation may use
-  the protected default-branch refresh with `review_id=0` only after the
-  external verifier advanced. It requires the exact same-repository `litroc`
-  PR targeting `main`, the canonical title/head-ref, no current-head Copilot
-  review or request marker, no reservation, and the exact first-attempt run
-  whose sole runner-backed failure is bootstrap classification. It may rerun
-  only that job once, must observe attempt two as `github-actions[bot]`, and
-  never requests AI or mutates a check. The ordinary controller still owns
-  the one final Pipeline-Copilot request and result.
-- After the controller publishes one exact neutral PASS, the protected rerun
-  helper discovers exactly one organization Required Workflow run through its
-  non-local `actions/required_workflows` URL and complete PR/base/head/repo
-  binding. That lookup is never PASS evidence. A reservation is optional only
-  if attempt one ended before publishing it; if present, it must identify the
-  same run. Only the one failed verifier job may be rerun once, and attempt two
-  must execute the full ordinary verification before it can pass.
-- A deterministic ancestry-backmerge retry MUST exhaustively read the open and
-  closed pull-request history for its exact repository-owned branch, base and
-  head before it creates a pull request. Any closed exact match, unexpected
-  response shape, or ambiguous inventory fails before PR creation and before
-  review dispatch. One already-open exact match may be identity- and
-  revision-validated, but the controller MUST exit without redispatching AI or
-  re-enabling a failed workflow path. Recovery after terminal evidence uses a
-  fresh revision through the normal correction, promotion and backmerge chain;
-  it never attaches the same commit to a successor PR.
-- When the one authorized final Copilot review arrives only after the bounded
-  verifier has failed, recovery is allowed only through an explicit dispatch
-  of the live protected default-branch refresh. Review-authored refreshes are
-  forbidden because they execute from `refs/pull/*/merge`. The dispatch binds
-  the controller to the live protected default-branch ref and SHA; binds the
-  exact PR, base, head and unique current-head review; and for a correction
-  re-review proves the immutable consumed one-time-remediation marker, its
-  protected run and runner-backed job, plus exactly one request event. A
-  resolved finding also requires an immutable write-authorized maintainer
-  reply and a fully paginated resolved thread set. The evidence-reply author
-  and protected-dispatch actor are independent authorities and may differ;
-  equality MUST NOT be required. Both must independently retain live
-  `push=true` plus `write`, `maintain`, or `admin`, and both permissions must be
-  rechecked immediately before mutation. The refresh has Checks read-only and
-  never invalidates a neutral check itself. Before it discards invalid neutral
-  evidence, it must prove the latest exact-head organization Required Workflow
-  through its `actions/required_workflows` URL, its exact current run attempt
-  (a positive integer), the original PR author as run actor, that same author
-  as the attempt-one triggering actor or exactly `github-actions[bot]` as the
-  triggering actor of a later protected rerun, the runner-backed failed job,
-  and the exact failed v3 reservation binding for PR, base and head. The refresh
-  never requests AI or creates/updates checks, and may mutate only the exact
-  failed verifier job through one job-level rerun.
+- For `lightning-it/container-ee-wunder-devtools-ubi9` only, the independently
+  selected native Common Required source owns review and final acceptance.
+  A policy file, descriptor, candidate instruction, installed adapter or active
+  legacy producer cannot activate a scope or choose its verifier.
+- The first human Develop policy bootstrap requires the source-owned exact
+  repository/base/tree/file descriptor and actual external native admission.
+  It still requires a genuine current-head Copilot review, durable one-request
+  funding reservation, complete native result and resolved findings. Product
+  quality/security checks and the exact live base/head remain mandatory.
+  No unadmitted POC Main workaround or neutral bootstrap PASS is authorized.
+- Normal same-repository Release App `develop` to `main` promotion verifies
+  every applicable accepted ingress proof through Common and requests no new
+  cumulative AI review. It requires genuine one-person native approval of the
+  exact current promotion; self-approval is allowed, fabricated approval is not.
+  Other App changes receive only their independently admitted Common route;
+  neither App identity nor this normal-promotion rule exempts them from review.
+- First Main convergence may retain only the independently source-reviewed
+  exact pre-admission metadata baseline. Historical PR780 is not a Common
+  pass and cannot satisfy the reviewed-change requirement. The new bootstrap
+  and every later ingress still require their actual native acceptance proofs.
+  Unknown history, product deltas or changed protected tips fail closed.
+- Review signals and the protected delivery receiver are locators only. They
+  authenticate the current native run, exact subject and defining source before
+  any existing permitted verifier refresh; they never fund another review or
+  synthesize a successful check. Unknown request outcomes remain read-only.
+- The retired local copilot, exact-review, rerun, repair, automerge, promotion
+  and back-sync workflow owners are not reinstalled. Their historical runs and
+  consumed funding remain historical. Generic distribution must deny this
+  target before partial regeneration until its complete Common-aware adoption
+  path has been independently implemented and accepted.
 - `pre-commit` may provide fast feedback, but it is optional and never
   authorizes a push or substitutes for push-ready evidence.
 
@@ -355,19 +299,21 @@ termination is tracked in LI-204.
   Renovate manager must land in that canonical unit together. Make those
   changes in `shared-assets-lit` first; never hand-edit the downstream managed
   copies.
-- When any managed container repository's installed push-ready engine or
-  `.github/workflows/current-revision-rerun.yml` differs from the protected
-  canonical blob, the shared-assets App first opens a policy-only bootstrap
-  containing exactly the engine, `.lit/push-ready.json`, this `AGENTS.md`, the
-  rebound Copilot instructions, and the exact protected-rerun helper. When the
-  Devtools native gate would otherwise test the new engine against stale
-  target-owned companions, that bootstrap may additionally carry only the
-  exact pair `tests/test_lit_push_ready.py` and
-  `tests/test_current_revision_rerun_contract.py`. A later
-  protected source run performs the full runtime sync only after the bootstrap
-  is part of the target base; a newer full-sync head must never depend on its
-  own unmerged helper, and the two phases must never be collapsed past the
-  200,000-byte fail-closed review limit.
+- This Devtools target adopts complete canonical policy/toolchain changes
+  through the explicitly approved ordinary Git/PR route. The one-time human
+  method exception grants neither App identity nor weaker source provenance,
+  native review, product/security checks, protected merge or runtime admission.
+  Canonical instruction sources are the target-specific Shared Assets
+  `container/overrides/container-ee-wunder-devtools-ubi9/AGENTS.md` and
+  `CONTRIBUTING.md`; the canonical default Copilot body is rebound to these
+  exact AGENTS bytes in the same Git tree. Those sources and their actual
+  adoption/classification bindings must be accepted before target delivery;
+  an unregistered override alone is insufficient.
+- Preserve the dependency-closed engine, schema/configuration and actual
+  validation companions when those governed files change. No bootstrap may
+  trust its own unmerged check policy. Source must classify the exact approved
+  unit before a complete target PR; it must not reinstall the retired rerun
+  helper or legacy review closure. Runtime/image adoption is a separate stage.
 - The owner-authorized Devtools recovery PR 775 has one bounded exception to
   that path set. It may also carry `Dockerfile` only when the protected
   canonical override contains exactly
@@ -411,7 +357,7 @@ termination is tracked in LI-204.
   only the separately proven immutable-image-repin exception may resume
   directly with full sync. This phase applies only to
   `container-ee-wunder-ansible-ubi9` and grants no other exception.
-- A protected container bootstrap source run remains bound to its exact source
+- An App-authored container bootstrap using legacy distribution remains bound to its exact source
   SHA, run and first attempt until its exact App-authored target PR has merged
   normally. It then dispatches exactly one continuation for that same source
   SHA and only that target repository. The continuation re-proves the protected
@@ -534,6 +480,10 @@ the authenticated receipt lifecycle. Controller and imported runtime assets
 must remain bound to the protected workflow/base Git blobs; candidate code is
 review data and must never be imported or executed.
 
+For this Devtools repository, only an independently admitted Common-owned
+protected controller may use that existing narrow exception. It does not
+authorize reinstalling a retired local workflow or widening host execution.
+
 These narrowly admitted controller checks are not generic host acceptance
 evidence or native review acceptance. Lint, test, build, package and unrelated
 validators remain in pinned Devtools. The deterministic receipt collector must
@@ -550,18 +500,20 @@ runs a model invocation.
 
 ## At-most-once review funding
 
-The owner-authorized 2026-10-06 amendment requires a durable, exact-head
-reservation before the one review-request POST. Enabled pilot requests confirm
-the protected Git CAS claim before the effect; disabled/default and non-pilot
-requests confirm the durable UNCERTAIN comment reservation without CAS.
-Reservation proves consumption only, never delivery, review quality, or acceptance.
-After an unknown POST outcome, observe review delivery only through GET reads;
-do not repeat the same-head AI request. Base drift, a new run, or missing pending
-state never restores that consumed opportunity. Every completed same-head review
-from the trusted Copilot bot consumes the funding opportunity, including failed,
-quota-blocked, changes-requested, and dismissed reviews, regardless of body or
-inline content. The separate policy/evidence gate must still reject unusable
-content and unresolved findings. This amendment grants no bypass or weaker
-platform, protected-source, actor, Required-Workflow, or merge authority.
+For this Devtools repository, the independently selected native Common source
+must reserve the exact current-head request in its durable native funding-step
+history before the one review-request POST. The authenticated original run,
+attempt, repository, PR, base and head remain bound across verifier-only
+refreshes and source upgrades. Only the finalized nondraft head may spend the
+slot; synchronization alone does not finalize it. Existing consumed or unknown
+allocations remain recorded and block another equivalent request.
+Reservation proves consumption only, never delivery, review quality or acceptance.
+After an unknown POST outcome, observe actual delivery through read-only native
+evidence; do not repeat the same-head request. Base drift, a new run or missing
+pending state never restores that opportunity. Every completed same-head review
+from the trusted Copilot bot consumes its slot, including failed, quota-blocked,
+changes-requested and dismissed results. Unusable content and unresolved findings
+still fail acceptance. No extra retry, provider, release or merge authority is
+granted by this reconciliation; genuine new exceptions require explicit approval.
 
 <!-- LIT at-most-once review funding: end -->
