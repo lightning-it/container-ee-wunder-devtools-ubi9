@@ -15,4 +15,4 @@ permissions:
   pull-requests: read
 jobs:
   delivery:
-    uses: lightning-it/.github/.github/workflows/delivery-operations.yml@b634a997ed0daa541945456f468512f7164c46ca
+    uses: lightning-it/.github/.github/workflows/delivery-operations.yml@1e48bd0b8fab9605558d747615f60696f2deb819
