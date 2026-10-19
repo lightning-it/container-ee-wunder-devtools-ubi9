@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Managed by lightning-it/shared-assets-lit; edit the central container override.
 """Load and verify the immutable Galaxy collection inventory in Devtools."""
 
 from __future__ import annotations
@@ -18,6 +19,35 @@ FQCN_PATTERN = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
+
+
+class UniqueSafeLoader(yaml.SafeLoader):
+    """Reject ambiguous mappings without SafeLoader's merge flattening."""
+
+    def construct_mapping(self, node, deep=False):
+        if not isinstance(node, yaml.MappingNode):
+            raise yaml.constructor.ConstructorError(
+                None, None, "Expected a mapping node", node.start_mark
+            )
+        mapping = {}
+        for key_node, value_node in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                raise yaml.constructor.ConstructorError(
+                    None, None, "YAML merge keys are forbidden", key_node.start_mark
+                )
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in mapping
+            except TypeError as error:
+                raise yaml.constructor.ConstructorError(
+                    None, None, "Unhashable mapping key", key_node.start_mark
+                ) from error
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"Duplicate mapping key: {key!r}", key_node.start_mark
+                )
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
 
 
 @dataclass(frozen=True)
@@ -63,7 +93,9 @@ def expected_artifact_url(name: str, version: str) -> str:
 def load_lock(lock_path: Path) -> dict[str, CollectionArtifact]:
     require_regular_file(lock_path, "collection lock")
     try:
-        payload = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+        payload = yaml.load(
+            lock_path.read_text(encoding="utf-8"), Loader=UniqueSafeLoader
+        )
     except (OSError, UnicodeError, yaml.YAMLError) as error:
         fail(f"Unable to parse collection lock: {error}")
     if not isinstance(payload, dict) or set(payload) != {"collections"}:

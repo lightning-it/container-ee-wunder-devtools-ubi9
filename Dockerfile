@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/python-311:9.8-1779945715@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c AS tools
+FROM registry.access.redhat.com/ubi9/python-311:9.8-1779945715@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c AS go-toolchain
 
 LABEL maintainer="Lightning IT"
 LABEL org.opencontainers.image.title="ee-wunder-devtools-ubi9"
@@ -9,28 +9,6 @@ ARG TARGETARCH
 ARG GO_VERSION=1.26.9
 ARG GO_AMD64_SHA256=42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d
 ARG GO_ARM64_SHA256=4a97373d49fcacdcf3694fea368a500b00ee3e963974f3e7514132717632f052
-ARG TF_VERSION=1.15.9
-ARG TF_SOURCE_COMMIT=87488977e32a400445e0c0b4d95c0713a5eee941
-ARG TF_SOURCE_SHA256=b4036b35e69a57e4a4b83bafba337a5c8e3ab2c0b1812df92528dec0958ed61e
-ARG TFLINT_VERSION=0.64.0
-ARG TF_DOCS_VERSION=0.24.0
-ARG HELM_VERSION=4.2.4
-ARG GH_VERSION=2.98.0
-ARG ACTIONLINT_VERSION=1.7.12
-ARG DOCKER_SOURCE_COMMIT=a7dcaa6fdb6ed04aacbfdc76357fdae01605609e
-ARG DOCKER_SOURCE_SHA256=6e5c91d3a5a79db78cf989d07727d00e757aa0da4d135a3ce4b86061b83fb511
-ARG COMPOSE_VERSION=5.5.1
-ARG BUILDX_VERSION=0.36.1
-ARG MOBY_V2_VERSION=2.0.0-beta.21
-ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
-ARG NODE_VERSION=24.19.0
-ARG WEBSITE_NODE_VERSION=24.18.0
-ARG GO_X_CRYPTO_VERSION=0.57.0
-ARG GO_X_MOD_VERSION=0.40.0
-ARG GO_X_NET_VERSION=0.60.0
-ARG GO_X_TEXT_VERSION=0.42.0
-ARG GO_GRPC_VERSION=1.83.2
-ARG ORAS_GO_VERSION=2.6.2
 
 # hadolint ignore=DL3002
 USER 0
@@ -39,11 +17,13 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 COPY scripts/container-download-verified.sh /usr/local/lib/container-download-verified.sh
 COPY scripts/container-build-go-tool.sh /usr/local/lib/container-build-go-tool.sh
 COPY scripts/container-build-compose.sh /usr/local/lib/container-build-compose.sh
+COPY scripts/download_go_modules.py /usr/local/lib/download_go_modules.py
 COPY container-toolchain/package.json container-toolchain/pnpm-lock.yaml container-toolchain/pnpm-workspace.yaml /opt/node-toolchain/
+COPY scripts/verify-renovate-git-runtime.mjs /usr/local/lib/verify-renovate-git-runtime.mjs
 
-RUN dnf -y update && \
-    dnf -y install --allowerasing ca-certificates curl tar xz && \
-    dnf clean all && rm -rf /var/cache/dnf /var/cache/yum
+RUN dnf --setopt=retries=2 -y update && \
+    dnf --setopt=retries=2 -y install --allowerasing ca-certificates curl tar unzip xz && \
+    dnf --setopt=retries=2 clean all && rm -rf /var/cache/dnf /var/cache/yum
 
 # Install the official patched Go compiler with architecture-specific hashes
 # published by go.dev. Every shipped Go CLI is rebuilt below so Trivy binds
@@ -69,6 +49,100 @@ ENV PATH=/usr/local/go/bin:$PATH \
     GOSUMDB=sum.golang.org \
     CGO_ENABLED=0
 
+FROM go-toolchain AS cosign-builder
+
+ARG COSIGN_VERSION=3.0.6
+ARG COSIGN_SOURCE_COMMIT=f1ad3ee952313be5d74a49d67ba0aa8d0d5e351f
+ARG COSIGN_SOURCE_SHA256=8be1ce19a8865baaa7e4aa44fcee27ae6a3247ba9ce05f145c2f3f5b2ed485d9
+
+# The upstream signed v3.0.6 tag binds this commit; preserve its module locks.
+RUN curl -fsSLo /tmp/cosign-tag.json \
+      https://api.github.com/repos/sigstore/cosign/git/tags/77891cd80a8f2bac1a2bf2f37f2e6005df38e51a && \
+    python3 -c 'import json,sys; t=json.load(open(sys.argv[1])); assert t["tag"] == "v"+sys.argv[2] and t["object"]["type"] == "commit" and t["object"]["sha"] == sys.argv[3] and t["verification"]["verified"] is True' \
+      /tmp/cosign-tag.json "${COSIGN_VERSION}" "${COSIGN_SOURCE_COMMIT}" && \
+    curl -fsSLo /tmp/cosign.tar.gz \
+      "https://github.com/sigstore/cosign/archive/${COSIGN_SOURCE_COMMIT}.tar.gz" && \
+    printf '%s  %s\n' "${COSIGN_SOURCE_SHA256}" /tmp/cosign.tar.gz | sha256sum -c - && \
+    mkdir -p /tmp/cosign-source /out && \
+    tar -xzf /tmp/cosign.tar.gz --strip-components=1 -C /tmp/cosign-source && \
+    cd /tmp/cosign-source && \
+    sha256sum go.mod go.sum > /tmp/cosign-module-locks.sha256 && \
+    mkdir /tmp/cosign-module-prefetch && \
+    cp go.mod go.sum /tmp/cosign-module-prefetch/ && \
+    cd /tmp/cosign-module-prefetch && \
+    python3 /usr/local/lib/download_go_modules.py && \
+    cd /tmp/cosign-source && \
+    GOPROXY=off go mod verify && \
+    sha256sum -c /tmp/cosign-module-locks.sha256 && \
+    rm -rf /tmp/cosign-module-prefetch
+
+RUN --network=none cd /tmp/cosign-source && \
+    CGO_ENABLED=0 GOPROXY=off go build \
+      -mod=readonly -trimpath -buildvcs=false \
+      -ldflags="-buildid= -s -w \
+        -X sigs.k8s.io/release-utils/version.gitVersion=v${COSIGN_VERSION} \
+        -X sigs.k8s.io/release-utils/version.gitCommit=${COSIGN_SOURCE_COMMIT} \
+        -X sigs.k8s.io/release-utils/version.gitTreeState=clean" \
+      -o /out/cosign ./cmd/cosign && \
+    sha256sum -c /tmp/cosign-module-locks.sha256 && \
+    /out/cosign version --json | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["gitVersion"] == "v"+sys.argv[1] and v["gitCommit"] == sys.argv[2]' \
+      "${COSIGN_VERSION}" "${COSIGN_SOURCE_COMMIT}" && \
+    cd / && rm -rf /tmp/cosign-source /tmp/cosign.tar.gz \
+      /tmp/cosign-tag.json /tmp/cosign-module-locks.sha256
+
+FROM go-toolchain AS incus-client
+
+ARG INCUS_VERSION=7.0.2
+ARG INCUS_SOURCE_COMMIT=01f81e5e607bbb5818410318e4b3496ad1820824
+ARG INCUS_SOURCE_SHA256=f2319b13151c3b4181b025a55e4199d60a1c829a24e422d8c6448a63da8a0ed9
+
+# Build only the Incus client with its unchanged upstream module lock.
+# This supplies no daemon, connection configuration, socket or credentials.
+RUN mkdir -p /out && \
+    curl -fsSLo /tmp/incus.tar.gz \
+      "https://github.com/lxc/incus/archive/${INCUS_SOURCE_COMMIT}.tar.gz" && \
+    printf '%s  %s\n' "${INCUS_SOURCE_SHA256}" /tmp/incus.tar.gz | sha256sum -c - && \
+    mkdir -p /tmp/incus-source && \
+    tar -xzf /tmp/incus.tar.gz --strip-components=1 -C /tmp/incus-source && \
+    cd /tmp/incus-source && \
+    grep -Fx "var Version = \"${INCUS_VERSION}\"" internal/version/flex.go && \
+    python3 /usr/local/lib/download_go_modules.py && \
+    GOPROXY=off go mod verify && \
+    CGO_ENABLED=0 GOPROXY=off go build \
+      -mod=readonly -trimpath -buildvcs=false -ldflags="-s -w" \
+      -o /out/incus ./cmd/incus && \
+    test "$(/out/incus --version)" = "${INCUS_VERSION}" && \
+    cd / && \
+    rm -rf /tmp/incus.tar.gz /tmp/incus-source
+
+FROM incus-client AS tools
+
+ARG TF_VERSION=1.15.9
+ARG TF_SOURCE_COMMIT=87488977e32a400445e0c0b4d95c0713a5eee941
+ARG TF_SOURCE_SHA256=b4036b35e69a57e4a4b83bafba337a5c8e3ab2c0b1812df92528dec0958ed61e
+ARG PACKER_VERSION=1.16.1
+ARG PACKER_SOURCE_COMMIT=8d3617fc870d5f08a598806a43d49ed6ee4d08ab
+ARG PACKER_SOURCE_SHA256=8d704ef397531cb29ce5f7e9b4b0754be2ddffaaa3a52bd84fefdc75caa20aa6
+ARG TFLINT_VERSION=0.64.0
+ARG TF_DOCS_VERSION=0.24.0
+ARG HELM_VERSION=4.2.4
+ARG GH_VERSION=2.98.0
+ARG ACTIONLINT_VERSION=1.7.12
+ARG DOCKER_SOURCE_COMMIT=a7dcaa6fdb6ed04aacbfdc76357fdae01605609e
+ARG DOCKER_SOURCE_SHA256=6e5c91d3a5a79db78cf989d07727d00e757aa0da4d135a3ce4b86061b83fb511
+ARG COMPOSE_VERSION=5.5.1
+ARG BUILDX_VERSION=0.36.1
+ARG MOBY_V2_VERSION=2.0.0-beta.21
+ARG MOBY_NAMESGENERATOR_SHA256=79ed19fb5afd19ccb3284213961335ec2f22ac9e8181971cab377de740361bbb
+ARG NODE_VERSION=24.19.0
+ARG WEBSITE_NODE_VERSION=24.18.0
+ARG GO_X_CRYPTO_VERSION=0.57.0
+ARG GO_X_MOD_VERSION=0.40.0
+ARG GO_X_NET_VERSION=0.60.0
+ARG GO_X_TEXT_VERSION=0.42.0
+ARG GO_GRPC_VERSION=1.83.2
+ARG ORAS_GO_VERSION=2.6.2
+
 RUN mkdir -p /out && \
     /usr/local/lib/container-build-go-tool.sh \
       github.com/rhysd/actionlint "v${ACTIONLINT_VERSION}" ./cmd/actionlint actionlint
@@ -79,22 +153,46 @@ RUN curl -fsSLo /tmp/terraform.tar.gz \
     mkdir -p /tmp/terraform-source && \
     tar -xzf /tmp/terraform.tar.gz --strip-components=1 -C /tmp/terraform-source && \
     cd /tmp/terraform-source && \
-    go get \
-      "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
-      "golang.org/x/net@v${GO_X_NET_VERSION}" \
-      "golang.org/x/text@v${GO_X_TEXT_VERSION}" \
-      "google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
-    test "$(go list -m -f '{{.Version}}' golang.org/x/net)" = \
-      "v${GO_X_NET_VERSION}" && \
-    test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = \
+    go mod edit "-require=google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
+    go mod edit \
+      "-replace=golang.org/x/crypto=golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
+      "-replace=golang.org/x/net=golang.org/x/net@v${GO_X_NET_VERSION}" \
+      "-replace=golang.org/x/text=golang.org/x/text@v${GO_X_TEXT_VERSION}" && \
+    python3 /usr/local/lib/download_go_modules.py && \
+    GOPROXY=off go get "google.golang.org/grpc@v${GO_GRPC_VERSION}" && \
+    test "$(GOPROXY=off go list -m -f '{{.Version}}' google.golang.org/grpc)" = \
       "v${GO_GRPC_VERSION}" && \
-    CGO_ENABLED=0 go build \
+    GOPROXY=off go mod verify && \
+    CGO_ENABLED=0 GOPROXY=off go build \
       -trimpath -buildvcs=false \
       -ldflags="-s -w -X github.com/hashicorp/terraform/version.dev=no" \
       -o /out/terraform . && \
     test "$(/out/terraform version | head -n 1)" = "Terraform v${TF_VERSION}" && \
     cd / && \
     rm -rf /tmp/terraform.tar.gz /tmp/terraform-source
+
+# Build the same Packer release from its immutable source commit so the
+# shipped binary uses the patched Go standard library and x/net module.
+RUN curl -fsSLo /tmp/packer.tar.gz \
+      "https://github.com/hashicorp/packer/archive/${PACKER_SOURCE_COMMIT}.tar.gz" && \
+    printf '%s  %s\n' "${PACKER_SOURCE_SHA256}" /tmp/packer.tar.gz | sha256sum -c - && \
+    mkdir -p /tmp/packer-source && \
+    tar -xzf /tmp/packer.tar.gz --strip-components=1 -C /tmp/packer-source && \
+    cd /tmp/packer-source && \
+    go mod edit \
+      "-replace=golang.org/x/crypto=golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
+      "-replace=golang.org/x/net=golang.org/x/net@v${GO_X_NET_VERSION}" \
+      "-replace=golang.org/x/text=golang.org/x/text@v${GO_X_TEXT_VERSION}" && \
+    python3 /usr/local/lib/download_go_modules.py && \
+    GOPROXY=off go mod tidy && \
+    CGO_ENABLED=0 GOPROXY=off go build \
+      -trimpath -buildvcs=false \
+      -ldflags="-s -w -X github.com/hashicorp/packer/version.GitCommit=${PACKER_SOURCE_COMMIT}" \
+      -o /out/packer . && \
+    test "$(CHECKPOINT_DISABLE=1 /out/packer version | head -n 1)" = \
+      "Packer v${PACKER_VERSION}" && \
+    cd / && \
+    rm -rf /tmp/packer.tar.gz /tmp/packer-source
 
 RUN /usr/local/lib/container-build-go-tool.sh \
       github.com/terraform-linters/tflint "v${TFLINT_VERSION}" . tflint \
@@ -177,7 +275,7 @@ RUN set -euo pipefail; \
     done
 
 RUN set -euo pipefail; \
-    for binary in terraform tflint terraform-docs helm gh docker docker-compose; do \
+    for binary in packer terraform tflint terraform-docs helm gh docker docker-compose; do \
       effective_version="$( \
         go version -m "/out/${binary}" | \
           awk -v module='golang.org/x/net' ' \
@@ -194,7 +292,7 @@ RUN set -euo pipefail; \
     done
 
 # Keep repository configuration changes out of the expensive DNF and Go build
-# cache boundary while validating it with the exact shipped Renovate runtime.
+# cache boundary while validating them with the exact shipped Renovate runtime.
 COPY renovate.json /tmp/renovate.json
 
 # Node.js LTS plus deterministic repository validators. The independently
@@ -285,6 +383,7 @@ RUN source /usr/local/lib/container-download-verified.sh && \
     /opt/node/bin/npm --version && \
     /opt/node/bin/pnpm --version && \
     /opt/node/bin/renovate-config-validator --version && \
+    /opt/node/bin/node /usr/local/lib/verify-renovate-git-runtime.mjs && \
     /opt/node/bin/renovate-config-validator --strict --no-global /tmp/renovate.json && \
     /opt/node/bin/markdownlint-cli2 --version && \
     /opt/node/bin/prettier --version && \
@@ -319,9 +418,9 @@ ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e4304779
 USER 0
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN dnf -y install --allowerasing --setopt=install_weak_deps=False \
+RUN dnf --setopt=retries=2 -y install --allowerasing --setopt=install_weak_deps=False \
       ca-certificates curl gzip patch tar unzip xz && \
-    dnf clean all && rm -rf /var/cache/dnf /var/cache/yum
+    dnf --setopt=retries=2 clean all && rm -rf /var/cache/dnf /var/cache/yum
 
 RUN test -n "${TARGETARCH}" && \
     case "${TARGETARCH}" in \
@@ -335,7 +434,7 @@ RUN test -n "${TARGETARCH}" && \
         ;; \
       *) exit 1 ;; \
     esac && \
-    curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
+    curl --fail --show-error --silent --location --retry 2 --retry-delay 2 \
       --output /tmp/vnu-jdk.tar.gz \
       "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-${VNU_JDK_VERSION/_/%2B}/OpenJDK17U-jdk_${VNU_JDK_ARCH}_linux_hotspot_${VNU_JDK_VERSION}.tar.gz" && \
     printf '%s  %s\n' "${VNU_JDK_SHA256}" /tmp/vnu-jdk.tar.gz | \
@@ -349,7 +448,7 @@ RUN test -n "${TARGETARCH}" && \
     grep -Fq "JAVA_RUNTIME_VERSION=\"${VNU_JDK_VERSION/_/+}\"" /opt/jdk/release && \
     rm -f /tmp/vnu-jdk.tar.gz
 
-RUN curl --fail --show-error --location --retry 5 --retry-delay 2 \
+RUN curl --fail --show-error --location --retry 2 --retry-delay 2 \
       --output /tmp/apache-maven.tar.gz \
       "https://archive.apache.org/dist/maven/maven-3/${VNU_MAVEN_VERSION}/binaries/apache-maven-${VNU_MAVEN_VERSION}-bin.tar.gz" && \
     printf '%s  %s\n' "${VNU_MAVEN_SHA512}" /tmp/apache-maven.tar.gz | \
@@ -359,7 +458,7 @@ RUN curl --fail --show-error --location --retry 5 --retry-delay 2 \
     JAVA_HOME=/opt/jdk /opt/maven/bin/mvn --version | \
       grep -Fq "Apache Maven ${VNU_MAVEN_VERSION}" && \
     rm -f /tmp/apache-maven.tar.gz && \
-    curl --fail --show-error --location --retry 5 --retry-delay 2 \
+    curl --fail --show-error --location --retry 2 --retry-delay 2 \
       --output /tmp/apache-ant.tar.xz \
       "https://archive.apache.org/dist/ant/binaries/apache-ant-${VNU_ANT_VERSION}-bin.tar.xz" && \
     printf '%s  %s\n' "${VNU_ANT_SHA256}" /tmp/apache-ant.tar.xz | \
@@ -381,7 +480,7 @@ COPY patches/vnu-secure-dependencies.patch /tmp/vnu-secure-dependencies.patch
 COPY scripts/normalize-vnu-jar.py /tmp/normalize-vnu-jar.py
 RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
     [[ "${VNU_SOURCE_COMMIT}" =~ ^[a-f0-9]{40}$ ]] && \
-    curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
+    curl --fail --show-error --silent --location --retry 2 --retry-delay 2 \
       --output /tmp/vnu-source.tar.gz \
       "https://codeload.github.com/validator/validator/tar.gz/${VNU_SOURCE_COMMIT}" && \
     printf '%s  %s\n' "${VNU_SOURCE_SHA256}" /tmp/vnu-source.tar.gz | \
@@ -436,7 +535,7 @@ RUN test "${#VNU_SOURCE_COMMIT}" -eq 40 && \
         ;; \
       *) exit 1 ;; \
     esac && \
-    curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
+    curl --fail --show-error --silent --location --retry 2 --retry-delay 2 \
       --output /tmp/vnu-jre.tar.gz \
       "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-${VNU_JRE_VERSION/_/%2B}/OpenJDK17U-jre_${VNU_JRE_ARCH}_linux_hotspot_${VNU_JRE_VERSION}.tar.gz" && \
     printf '%s  %s\n' "${VNU_JRE_SHA256}" /tmp/vnu-jre.tar.gz | \
@@ -470,7 +569,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # official CentOS Stream 9 production compose only for VM image tooling so
 # public GitHub builds neither depend on RHEL host entitlement nor race mutable
 # mirror metadata.
-RUN dnf -y update && \
+RUN dnf --setopt=retries=2 -y update && \
     printf '%s\n' \
       "[centos-stream-compose-baseos]" \
       "name=CentOS Stream 9 immutable production compose BaseOS" \
@@ -493,10 +592,10 @@ RUN dnf -y update && \
       "gpgcheck=1" \
       "gpgkey=https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official" \
       > /etc/yum.repos.d/centos-stream-vm-image-tools.repo && \
-    dnf -y install --allowerasing --setopt=install_weak_deps=False \
+    dnf --setopt=retries=2 -y install --allowerasing --setopt=install_weak_deps=False \
       bash git openssh-clients rsync which findutils ca-certificates \
       rpm-build && \
-    dnf -y install --allowerasing --setopt=install_weak_deps=False \
+    dnf --setopt=retries=2 -y install --allowerasing --setopt=install_weak_deps=False \
       --enablerepo="centos-stream-compose-baseos" \
       --enablerepo="centos-stream-compose-appstream" \
       --enablerepo="centos-stream-compose-crb" \
@@ -505,12 +604,15 @@ RUN dnf -y update && \
     for package in nodejs nodejs-docs nodejs-full-i18n nodejs-libs npm; do \
       if rpm -q "$package" >/dev/null 2>&1; then old_node_rpms+=("$package"); fi; \
     done && \
-    if [ "${#old_node_rpms[@]}" -gt 0 ]; then dnf -y remove "${old_node_rpms[@]}"; fi && \
+    if [ "${#old_node_rpms[@]}" -gt 0 ]; then dnf --setopt=retries=2 -y remove "${old_node_rpms[@]}"; fi && \
     rm -f /etc/yum.repos.d/centos-stream-vm-image-tools.repo && \
-    dnf clean all && rm -rf /var/cache/dnf /var/cache/yum
+    dnf --setopt=retries=2 clean all && rm -rf /var/cache/dnf /var/cache/yum
 
 # Copy toolchain from builder (no curl/unzip in final image)
 COPY --from=tools /out/terraform /usr/local/bin/terraform
+COPY --from=tools /out/packer /usr/local/bin/packer
+COPY --from=tools /out/incus /usr/local/bin/incus
+COPY --from=cosign-builder /out/cosign /usr/local/bin/cosign
 COPY --from=tools /out/tflint /usr/local/bin/tflint
 COPY --from=tools /out/terraform-docs /usr/local/bin/terraform-docs
 COPY --from=tools /out/helm /usr/local/bin/helm
@@ -534,8 +636,8 @@ COPY requirements.lock /tmp/requirements.lock
 COPY collections/offline-requirements.lock.yml /usr/local/share/wunder-devtools/collections.lock.yml
 COPY scripts/devtools_collection_inventory.py /usr/local/bin/devtools_collection_inventory.py
 COPY scripts/install_devtools_collections.py /usr/local/bin/install_devtools_collections.py
-RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
-    python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
+RUN python -m pip install --retries 2 --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
+    python -m pip install --retries 2 --resume-retries 0 --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
     rm -f /tmp/requirements.txt /tmp/requirements.lock && \
     python /usr/local/bin/install_devtools_collections.py \
       --lock /usr/local/share/wunder-devtools/collections.lock.yml \
@@ -550,6 +652,7 @@ RUN python -m pip install --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     markdownlint-cli2 --version && prettier --version && pnpm --version && \
     java -version && vnu --version && \
     helm version --short && gh --version && \
+    CHECKPOINT_DISABLE=1 packer version && \
     copr-cli --version && rpmspec --version && qemu-img --version && \
     virt-customize --version && virt-sysprep --version && guestfish --version
 
