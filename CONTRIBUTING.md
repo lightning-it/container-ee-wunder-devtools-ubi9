@@ -22,11 +22,15 @@ This project follows our community standards described in `CODE_OF_CONDUCT.md`. 
 
 - Open normal PRs against `develop`.
 - Renovate and shared-assets sync PRs also target `develop`.
-- `main` is the production release branch and should only receive changes through the automated `develop` to `main`
-  promotion PR.
+- `main` is the production release branch and receives normal promotions through
+  the independently admitted Release App preparer and an ordinary `develop` to
+  `main` PR. Common verifies accepted ingress without a duplicate cumulative AI
+  review; the exact promotion still needs genuine one-person native approval.
 - Merging the promotion PR into `main` runs semantic-release.
-- After `main` changes, automation opens a `main` back to `develop` PR so future promotion PRs start from a clean branch
-  ancestry.
+- After `main` changes, reconcile real Main content and ancestry through the
+  independently admitted ordinary PR path before the next promotion. Do not
+  reinstall or assume a retired local back-sync workflow. Missing admission or
+  unknown content stops preparation rather than discarding that content.
 - semantic-release calculates the next version, creates the Git tag, and publishes GitHub Release notes.
 - Container images are built from the exact release tag and published with immutable version/SHA tags plus the moving
   production tag.
@@ -37,6 +41,24 @@ This project follows our community standards described in `CODE_OF_CONDUCT.md`. 
 - Shared helper logic, entrypoints, and repeated download/Galaxy install behavior should live in `shared-assets-lit`
   and be rolled out to downstream container repositories.
 - Container repositories do not maintain a committed `CHANGELOG.md`; use GitHub Releases as the changelog.
+
+For this Devtools repository only, review and promotion authority comes from the
+actual externally selected native Common scope. Candidate instructions, a policy
+file, a descriptor, or an installed adapter activate nothing. The first human
+Develop policy bootstrap must match the independently source-owned exact
+descriptor and receive a genuine current-head Copilot review with durable
+one-request funding, normal product/security checks and resolved findings.
+The exact pre-admission Main metadata baseline is retained only when the
+protected source validates it; historical PR780 is not a Common acceptance
+proof. The new bootstrap and every later ingress need their own real native
+proof. There is no unadmitted POC Main workaround or neutral replacement PASS.
+
+These instruction changes must first be owned by the target-specific Shared
+Assets source and its accepted adoption bindings. Preserve the canonical
+Copilot body and rebind its AGENTS_SHA256 to the exact reconciled AGENTS bytes
+in the same Git tree. The approved one-time human Git/PR method changes neither
+source ownership nor native admission; generic legacy distribution must not
+partially recreate the retired workflow owners.
 
 ### 1) Open an Issue (recommended for non-trivial changes)
 

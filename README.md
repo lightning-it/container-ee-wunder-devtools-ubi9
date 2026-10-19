@@ -128,7 +128,7 @@ docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtoo
 ```
 
 ```bash
-docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.12.0 ansible-playbook -i <inventory.yml> <playbook.yml>
+docker run --rm -v "$PWD":/workspace -w /workspace quay.io/l-it/ee-wunder-devtools-ubi9:v1.12.0 ansible-playbook -i "<inventory.yml>" "<playbook.yml>"
 ```
 
 ### Run Terraform tooling
