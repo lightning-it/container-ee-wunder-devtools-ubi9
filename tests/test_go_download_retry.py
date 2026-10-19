@@ -164,8 +164,27 @@ class GoDownloadTests(unittest.TestCase):
             self.assertEqual([], helper.interrupted_downloads(json.dumps(item), ""))
 
     def test_go_failure_signal_is_not_retried(self) -> None:
-        with mock.patch.object(helper.subprocess, "run", return_value=process(-9, "")):
-            self.assertEqual(1, helper.download())
+        for signal in (-9, -15):
+            for output in ("", failure()):
+                with (
+                    self.subTest(signal=signal, output=output),
+                    mock.patch.object(
+                        helper.subprocess,
+                        "run",
+                        side_effect=[process(signal, output), process(0, "{}")],
+                    ) as run,
+                    mock.patch.object(helper.time, "sleep") as sleep,
+                    mock.patch.object(helper.sys, "stdout"),
+                    mock.patch.object(helper.sys, "stderr"),
+                ):
+                    self.assertEqual(1, helper.download())
+                    run.assert_called_once_with(
+                        ["go", "mod", "download", "-json", "all"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    sleep.assert_not_called()
 
     def test_terraform_build_is_offline_after_verified_prefetch(self) -> None:
         dockerfile = SCRIPT.parents[1].joinpath("Dockerfile").read_text()

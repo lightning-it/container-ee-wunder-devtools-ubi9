@@ -102,6 +102,10 @@ def download() -> int:
         )
         if result.returncode == 0:
             return 0
+        if result.returncode < 0:
+            sys.stdout.write(result.stdout)
+            sys.stderr.write(result.stderr)
+            return 1
         coordinates = interrupted_downloads(result.stdout, result.stderr)
         if not coordinates or attempt == 2:
             sys.stdout.write(result.stdout)
