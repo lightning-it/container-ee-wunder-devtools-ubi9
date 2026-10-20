@@ -30,18 +30,18 @@ case "$target_arch" in
   amd64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7"
     renovate_default="docker.io/renovate/renovate:43.288.0@sha256:bcde7a061ab42d1ae6d4500769d80727e5694bb889dbcbf1005e9f4e741ab76d"
-    trivy_default="docker.io/aquasec/trivy:0.74.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9"
+    trivy_default="docker.io/aquasec/trivy:0.76.0@sha256:166061a4a15c64a94a3aab430659e2c166dc0815fbc54a222c6d56d64132f552"
     hadolint_image="docker.io/hadolint/hadolint:v2.15.1@sha256:fdf19d026b54834f88c62774fdf2a61ff3b586a42632e5070674d41a796bfdf3"
-    docker_cli_image="docker.io/library/docker:29-cli@sha256:6602978e2be3c20e530e33773b8cadcef5fe998a71a534ee24516f1176973cdf"
-    node_image="docker.io/library/node:24-bookworm@sha256:5a750d3be5e5c80275f8c9a5367c3aed99c2875656590c8d0701c7ee687f5f0a"
+    docker_cli_image="docker.io/library/docker:29-cli@sha256:4caa52207e95c68c3087006eefb3a5f6ca48ad1c0ba3aa3e6843549a0720b7bb"
+    node_image="docker.io/library/node:24-bookworm@sha256:7f7f17f773027e7f0475fa829fc0d793d75918fda85b9e517c9cc5aa46200406"
     ;;
   arm64)
     actionlint_default="docker.io/rhysd/actionlint:1.7.12@sha256:33ffa3f1ad576165ea9c26f726884defdc411fb1fcb9ccc6a117b2f554ba1723"
     renovate_default="docker.io/renovate/renovate:43.288.0@sha256:63067f15fdb44df7a55a1e65e34df93c8c8dab930677d0a46de8086c6d5b0703"
-    trivy_default="docker.io/aquasec/trivy:0.74.0@sha256:55ad20f8a239a3e95427e60b8aaea38788550c18a3f1772976bebf732e6ae166"
+    trivy_default="docker.io/aquasec/trivy:0.76.0@sha256:81cfe3e41d0be0627c0ba873b7880aea7b9f77435fd77d6dd504e4b78e1f4740"
     hadolint_image="docker.io/hadolint/hadolint:v2.15.1@sha256:84179f01a1034d34ea470f1808f055f0a02195ba0e0038d097f8384ae878383f"
-    docker_cli_image="docker.io/library/docker:29-cli@sha256:f22a431fe849b5cf84d972490b088ccfde70e190af8dae693f8fd0f533fd40fa"
-    node_image="docker.io/library/node:24-bookworm@sha256:91882e0e5959240d4413fc42c180022bbdd09c5491e00e75faa6c100d8d7751b"
+    docker_cli_image="docker.io/library/docker:29-cli@sha256:b840c948ec2a78bf90a99e713f7ad711c0dea887a86723fba3d47703dfe43506"
+    node_image="docker.io/library/node:24-bookworm@sha256:56c5d272cd7214c7f8b076c25146e79f75f7fcf951757511143dba0ce5b90140"
     ;;
 esac
 actionlint_image="${ACTIONLINT_IMAGE:-$actionlint_default}"
@@ -365,6 +365,16 @@ run_yaml_checks() {
   yamllint .
 }
 
+run_timeout_policy() {
+  local policy_path=".lit/workflow-timeouts.json"
+
+  if [ ! -f "$policy_path" ] || [ -L "$policy_path" ]; then
+    echo "ERROR: required Devtools workflow timeout policy is not a regular file: ${policy_path}" >&2
+    return 1
+  fi
+  python3 "$script_dir/validate-workflow-timeouts.py"
+}
+
 run_shellcheck() {
   if compgen -G "scripts/*.sh" >/dev/null; then
     shellcheck scripts/*.sh
@@ -471,6 +481,9 @@ run_contract_tests() {
         export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/.cache}"
         mkdir -p "$XDG_CACHE_HOME"
         terraform -version
+        CHECKPOINT_DISABLE=1 packer version
+        incus --version
+        cosign version
         tflint --version
         terraform-docs --version
         helm version --short
@@ -487,6 +500,15 @@ run_contract_tests() {
         docker --version
         antsibull-changelog --version
       '
+      # Only this public Sigstore trust probe may fetch standard TUF metadata.
+      # No host home, credentials, socket or writable source enters the image.
+      docker run --rm --read-only --network bridge --cap-drop ALL \
+        --security-opt no-new-privileges=true --pids-limit 128 \
+        --user 65532:65532 \
+        --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777" \
+        -v "${workspace_host}/tests/fixtures/cosign:/cosign-fixtures:ro" \
+        -v "${workspace_host}/tests/verify-cosign-bundle.sh:/verify-cosign-bundle.sh:ro" \
+        "$image" bash /verify-cosign-bundle.sh /cosign-fixtures
       ;;
     container-ee-wunder-ansible-ubi9)
       docker run --rm "${validation_container_args[@]}" "$image" bash -lc '
@@ -539,14 +561,20 @@ run_vulnerability_scan() {
     trivy_ignore_args=(--ignorefile .trivyignore)
   fi
 
+  # Keep databases between local clean rebuilds. Repository and architecture
+  # identities are validated above; Trivy still performs its normal freshness
+  # checks and updates. Keep analysis results in process-local memory so parallel
+  # scans do not contend for the filesystem analysis-cache lock. Hosted runners
+  # start with an empty engine-local volume.
   docker run --rm \
     "${engine_container_args[@]}" \
-    --mount "type=volume,destination=/var/cache/trivy" \
+    --mount "type=volume,source=lit-trivy-${repo_name}-${target_arch},destination=/var/cache/trivy" \
     --env TMPDIR=/var/cache/trivy \
     "${readonly_workspace_args[@]}" \
     "${nested_socket_args[@]}" \
     "$trivy_image" image \
       --cache-dir /var/cache/trivy \
+      --cache-backend memory \
       --timeout 15m0s \
       --scanners vuln \
       --ignore-unfixed \
@@ -662,6 +690,9 @@ JS
 run_ci() {
   load_container_inputs
   run_yaml_checks
+  if [ -e .lit/workflow-timeouts.json ] || [ -L .lit/workflow-timeouts.json ]; then
+    run_timeout_policy
+  fi
   run_shellcheck
   run_actionlint
   run_hadolint
@@ -683,8 +714,11 @@ case "$mode" in
   semantic-release-dry-run)
     run_semantic_release_dry_run
     ;;
+  timeout-policy)
+    run_timeout_policy
+    ;;
   *)
-    echo "Usage: $0 [all|ci|semantic-release-dry-run]" >&2
+    echo "Usage: $0 [all|ci|semantic-release-dry-run|timeout-policy]" >&2
     exit 2
     ;;
 esac

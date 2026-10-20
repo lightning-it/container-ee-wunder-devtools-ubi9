@@ -1,0 +1,27 @@
+{
+  "authenticated_checksums": {
+    "attestation_bundle": "checksums.github-attestation.json",
+    "name": "SHA256SUMS",
+    "sha256": "9533b87cef6af65bd017b9377eef653ac3d8dc76919b9e7df1c820a888b7ac9e",
+    "signature_bundle": "SHA256SUMS.sigstore.json"
+  },
+  "commit_sha": "8f862e7ff7d20992735078274b5af2d88ff415f5",
+  "gates": {
+    "complete_bundle_checksum_verified": true,
+    "long_term_archive_policy_satisfied": true,
+    "publication_eligibility": true
+  },
+  "generated_at": "2026-10-14T19:17:03.523955+00:00",
+  "long_term_archive": {
+    "bundle": "collection-release-evidence-8f862e7ff7d20992735078274b5af2d88ff415f5.tar.gz",
+    "object_prefix": null,
+    "sha256": "8bdab11a9a47a19cdc8bbc1c7ea0dc33dee9df23c63f1bf09f2f3b161055e4ef",
+    "status": "not-configured"
+  },
+  "ref": "refs/heads/main",
+  "release_eligible": true,
+  "repository": "lightning-it/ansible-collection-supplementary",
+  "schema_version": 1,
+  "workflow_attempt": "1",
+  "workflow_run_id": "38613837224"
+}
