@@ -492,6 +492,8 @@ run_contract_tests() {
         ruff --version
         mypy --version
         uv --version
+        bandit --version
+        python3 /usr/local/bin/verify-bandit-runtime.py
         renovate-config-validator --version
         markdownlint-cli2 --version
         prettier --version
