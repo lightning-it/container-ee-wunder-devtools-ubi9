@@ -67,3 +67,6 @@ pyvmomi==9.1.0.0
 # COPR CLI (needed to configure/build COPR packages from inside the container)
 # ---------------------------------------------------------------------------
 copr-cli==2.6
+
+# Source scanning selected by LTN-388; no optional scanner extras.
+bandit==1.9.4

@@ -660,11 +660,13 @@ ENV JAVA_HOME=/opt/java \
 # Python deps: this *is* the right place for pip
 COPY requirements.txt /tmp/requirements.txt
 COPY requirements.lock /tmp/requirements.lock
+COPY scripts/verify-bandit-runtime.py /usr/local/bin/verify-bandit-runtime.py
 COPY collections/offline-requirements.lock.yml /usr/local/share/wunder-devtools/collections.lock.yml
 COPY scripts/devtools_collection_inventory.py /usr/local/bin/devtools_collection_inventory.py
 COPY scripts/install_devtools_collections.py /usr/local/bin/install_devtools_collections.py
 RUN python -m pip install --retries 2 --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --retries 2 --resume-retries 0 --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
+    python /usr/local/bin/verify-bandit-runtime.py && \
     rm -f /tmp/requirements.txt /tmp/requirements.lock && \
     python /usr/local/bin/install_devtools_collections.py \
       --lock /usr/local/share/wunder-devtools/collections.lock.yml \
