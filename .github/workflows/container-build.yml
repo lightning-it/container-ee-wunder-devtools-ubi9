@@ -1,3 +1,4 @@
+# Managed by lightning-it/shared-assets-lit; Devtools-specific restore-only cache.
 # yamllint disable rule:truthy rule:line-length
 ---
 name: Container Build
@@ -11,6 +12,9 @@ on:
       - ".dockerignore"
       - "bindep.txt"
       - "requirements*.txt"
+      - "requirements.lock"
+      - "container-toolchain/**"
+      - "renovate.json"
       - "rpm-packages.txt"
       - "rpm-security-updates.lock"
       - "copr-packages.txt"
@@ -26,6 +30,9 @@ on:
       - ".dockerignore"
       - "bindep.txt"
       - "requirements*.txt"
+      - "requirements.lock"
+      - "container-toolchain/**"
+      - "renovate.json"
       - "rpm-packages.txt"
       - "rpm-security-updates.lock"
       - "copr-packages.txt"
@@ -40,6 +47,7 @@ permissions:
 
 jobs:
   build:
+    timeout-minutes: 60
     name: Build container image
     runs-on: ubuntu-latest
     permissions:
@@ -76,6 +84,8 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
+          # Public release cache is restore-only: PR code receives no Quay credentials.
+          cache-from: type=registry,ref=quay.io/${{ vars.QUAY_NAMESPACE || 'l-it' }}/ee-wunder-devtools-ubi9:buildcache-v1-amd64
           load: true
           platforms: linux/amd64
           build-args: |
