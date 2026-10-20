@@ -14,6 +14,7 @@ ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.60.0
 ARG GO_X_TEXT_VERSION=0.42.0
 ARG GO_GRPC_VERSION=1.83.2
+ARG GO_KLAUSPOST_COMPRESS_VERSION=1.18.7
 
 # hadolint ignore=DL3002
 USER 0
@@ -77,6 +78,7 @@ RUN curl -fsSLo /tmp/cosign-tag.json \
     go mod edit \
       "-replace=github.com/sigstore/fulcio=github.com/sigstore/fulcio@v${COSIGN_FULCIO_VERSION}" \
       "-replace=github.com/sigstore/rekor=github.com/sigstore/rekor@v${COSIGN_REKOR_VERSION}" \
+      "-replace=github.com/klauspost/compress=github.com/klauspost/compress@v${GO_KLAUSPOST_COMPRESS_VERSION}" \
       "-replace=golang.org/x/crypto=golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
       "-replace=golang.org/x/mod=golang.org/x/mod@v${GO_X_MOD_VERSION}" \
       "-replace=golang.org/x/net=golang.org/x/net@v${GO_X_NET_VERSION}" \
@@ -106,6 +108,7 @@ RUN --network=none cd /tmp/cosign-source && \
     for coordinate in \
       "github.com/sigstore/fulcio@v${COSIGN_FULCIO_VERSION}" \
       "github.com/sigstore/rekor@v${COSIGN_REKOR_VERSION}" \
+      "github.com/klauspost/compress@v${GO_KLAUSPOST_COMPRESS_VERSION}" \
       "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
       "golang.org/x/mod@v${GO_X_MOD_VERSION}" \
       "golang.org/x/net@v${GO_X_NET_VERSION}" \
@@ -225,7 +228,12 @@ RUN /usr/local/lib/container-build-go-tool.sh \
       github.com/terraform-linters/tflint "v${TFLINT_VERSION}" . tflint \
       "golang.org/x/mod@v${GO_X_MOD_VERSION}" \
       "golang.org/x/net@v${GO_X_NET_VERSION}" \
-      "google.golang.org/grpc@v${GO_GRPC_VERSION}"
+      "google.golang.org/grpc@v${GO_GRPC_VERSION}" \
+      "github.com/klauspost/compress@v${GO_KLAUSPOST_COMPRESS_VERSION}" && \
+    test "$(go version -m /out/tflint | awk \
+      '$1 == "dep" && $2 == "github.com/klauspost/compress" { version = $3 } \
+       $1 == "=>" && $2 == "github.com/klauspost/compress" { version = $3 } \
+       END { print version }')" = "v${GO_KLAUSPOST_COMPRESS_VERSION}"
 
 RUN /usr/local/lib/container-build-go-tool.sh \
       github.com/terraform-docs/terraform-docs "v${TF_DOCS_VERSION}" . terraform-docs \

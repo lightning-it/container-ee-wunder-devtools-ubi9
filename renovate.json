@@ -22,6 +22,20 @@
   "customManagers": [
     {
       "customType": "regex",
+      "description": "klauspost/compress security dependency pin in Dockerfile",
+      "managerFilePatterns": [
+        "/^Dockerfile$/"
+      ],
+      "matchStrings": [
+        "ARG\\s+GO_KLAUSPOST_COMPRESS_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"
+      ],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "github.com/klauspost/compress",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
       "description": "Fulcio security replacement in the source-built Cosign CLI",
       "managerFilePatterns": ["/^Dockerfile$/"],
       "matchStrings": ["ARG\\s+COSIGN_FULCIO_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
