@@ -36,9 +36,9 @@ EXPECTED = {
         807257,
     ),
     "community.crypto": (
-        "3.3.0",
-        "b17e3fe14fb934a38213204d8fe70c52fd63aabf6ea8ffd56e8fbaef70b69f18",
-        596994,
+        "3.5.0",
+        "41e1ef1d3b9e0b8b1d3ef61ee0a3b0cab304593aebe1ad89b1eaced0cfb3aad0",
+        603754,
     ),
     "community.docker": (
         "5.2.2",
