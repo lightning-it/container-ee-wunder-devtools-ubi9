@@ -190,8 +190,19 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
         )
         self.assertGreaterEqual(
             dockerfile.count('"golang.org/x/net@v${GO_X_NET_VERSION}"'),
-            6,
+            5,
         )
+        # Source-built Terraform and Packer pin x/net with go.mod replacements
+        # before offline module reconciliation; the final binary loop verifies
+        # that the selected fixed version is actually linked.
+        for tool in ("terraform", "packer"):
+            build = dockerfile.split(
+                f"RUN curl -fsSLo /tmp/{tool}.tar.gz", 1
+            )[1].split("\n\n", 1)[0]
+            self.assertIn(
+                '"-replace=golang.org/x/net=golang.org/x/net@v${GO_X_NET_VERSION}"',
+                build,
+            )
         self.assertIn("CGO_ENABLED=0 GOFLAGS=-mod=mod go build", dockerfile)
         self.assertIn(
             "for binary in terraform tflint terraform-docs gh docker "
@@ -199,7 +210,7 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
             dockerfile,
         )
         self.assertIn(
-            "for binary in terraform tflint terraform-docs helm gh docker "
+            "for binary in packer terraform tflint terraform-docs helm gh docker "
             "docker-compose",
             dockerfile,
         )
@@ -306,7 +317,7 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
                 ),
             ):
                 installer.download_artifact(artifact, destination)
-            self.assertEqual(installer.DOWNLOAD_ATTEMPTS, urlopen.call_count)
+            self.assertEqual(1, urlopen.call_count)
             self.assertFalse(destination.exists())
 
     def test_verified_download_reports_declared_and_expected_size(self) -> None:
@@ -335,7 +346,7 @@ class DevtoolsCollectionInventoryTests(unittest.TestCase):
                 ),
             ):
                 installer.download_artifact(artifact, destination)
-            self.assertEqual(installer.DOWNLOAD_ATTEMPTS, urlopen.call_count)
+            self.assertEqual(1, urlopen.call_count)
             self.assertFalse(destination.exists())
 
 

@@ -47,9 +47,9 @@ download_verified() {
   fi
 
   checksum_file="$(mktemp)"
-  curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
+  curl --fail --show-error --silent --location --retry 2 --retry-delay 2 \
     --output "$output_path" "$url"
-  curl --fail --show-error --silent --location --retry 5 --retry-delay 2 \
+  curl --fail --show-error --silent --location --retry 2 --retry-delay 2 \
     --output "$checksum_file" "$checksum_url"
 
   expected="$(

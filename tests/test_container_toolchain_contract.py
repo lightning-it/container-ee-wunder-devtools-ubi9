@@ -341,7 +341,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             dockerfile,
         )
         self.assertIn('"Docker version ${docker_source_version},"*', dockerfile)
-        self.assertIn("dnf -y remove", dockerfile)
+        self.assertIn("dnf --setopt=retries=2 -y remove", dockerfile)
         self.assertNotIn("COPILOT_VERSION", dockerfile)
         self.assertNotIn("@github/copilot", dockerfile)
         for command in (
@@ -365,7 +365,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertEqual(1, dockerfile.count(renovate_copy))
         self.assertGreater(
             dockerfile.index(renovate_copy),
-            dockerfile.index("for binary in terraform tflint terraform-docs helm gh"),
+            dockerfile.index("for binary in packer terraform tflint terraform-docs helm gh"),
         )
         self.assertLess(
             dockerfile.index(renovate_copy),

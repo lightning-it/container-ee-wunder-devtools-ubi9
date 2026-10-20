@@ -22,6 +22,36 @@
   "customManagers": [
     {
       "customType": "regex",
+      "description": "Fulcio security replacement in the source-built Cosign CLI",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+COSIGN_FULCIO_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "github.com/sigstore/fulcio",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Rekor security replacement in the source-built Cosign CLI",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+COSIGN_REKOR_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\n"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "github.com/sigstore/rekor",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Cosign source tuple; signed tag, immutable commit and archive checksum require reviewed manual updates",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+COSIGN_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\nARG\\s+COSIGN_SOURCE_COMMIT=[a-f0-9]{40}\\s*\\nARG\\s+COSIGN_SOURCE_SHA256=[a-f0-9]{64}\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "sigstore/cosign",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
       "description": "CentOS Stream 9 production compose pin in Dockerfile",
       "managerFilePatterns": ["/^Dockerfile$/"],
       "matchStrings": ["ARG\\s+CENTOS_STREAM_COMPOSE=CentOS-Stream-9-(?<currentValue>[0-9]{8}\\.[0-9]+)\\s*\\n"],
@@ -37,6 +67,26 @@
       "depNameTemplate": "pip",
       "datasourceTemplate": "pypi",
       "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "description": "Packer source tuple in Dockerfile; updates require an immutable commit and archive checksum",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+PACKER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\nARG\\s+PACKER_SOURCE_COMMIT=[a-f0-9]{40}\\s*\\nARG\\s+PACKER_SOURCE_SHA256=[a-f0-9]{64}\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "hashicorp/packer",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Incus client source tuple in Dockerfile; updates require an immutable commit and archive checksum",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["ARG\\s+INCUS_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s*\\nARG\\s+INCUS_SOURCE_COMMIT=[a-f0-9]{40}\\s*\\nARG\\s+INCUS_SOURCE_SHA256=[a-f0-9]{64}\\s*\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "lxc/incus",
+      "extractVersionTemplate": "^v(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
     },
     {
       "customType": "regex",
@@ -205,6 +255,20 @@
   ],
   "packageRules": [
     {
+      "description": "Update Cosign signed tag, source commit, version and archive SHA-256 together in a reviewed manual change",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["sigstore/cosign"],
+      "enabled": false,
+      "automerge": false
+    },
+    {
+      "description": "Use the upstream Renovate runtime with native simple-git 4 support; no version-specific compatibility patch",
+      "matchManagers": ["npm"],
+      "matchFileNames": ["container-toolchain/package.json"],
+      "matchPackageNames": ["renovate"],
+      "allowedVersions": ">=44.145.2"
+    },
+    {
       "description": "Extract dated CentOS Stream 9 production compose versions",
       "matchDatasources": ["custom.centosStream9ProductionCompose"],
       "extractVersion": "^CentOS-Stream-9-(?<version>[0-9]{8}\\.[0-9]+)/$",
@@ -240,6 +304,20 @@
       "addLabels": ["breaking-update"],
       "automerge": false,
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Update Packer version, immutable source commit and source archive SHA-256 together in a reviewed manual change",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["hashicorp/packer"],
+      "enabled": false,
+      "automerge": false
+    },
+    {
+      "description": "Update Incus client version, immutable source commit and source archive SHA-256 together in a reviewed manual change",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["lxc/incus"],
+      "enabled": false,
+      "automerge": false
     },
     {
       "description": "Keep the conventional-commits preset compatible with writer 8",
