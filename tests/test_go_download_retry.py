@@ -49,6 +49,45 @@ class GoDownloadTests(unittest.TestCase):
         )
         sleep.assert_called_once_with(1)
 
+    def test_sumdb_http2_failure_retries_only_the_failed_pin(self) -> None:
+        coordinate = "go.uber.org/multierr@v1.9.0"
+        error = (
+            f"{coordinate}: verifying go.mod: {coordinate}/go.mod: reading "
+            "https://sum.golang.org/tile/8/0/x056/058: stream error: "
+            "stream ID 669; INTERNAL_ERROR; received from peer"
+        )
+        output = json.dumps({"Path": "go.uber.org/multierr", "Version": "v1.9.0", "Error": error})
+        with (
+            mock.patch.object(helper.subprocess, "run", side_effect=[process(1, output), process(0, "{}")]) as run,
+            mock.patch.object(helper.time, "sleep") as sleep,
+            mock.patch.object(helper.sys, "stdout"),
+        ):
+            self.assertEqual(0, helper.download())
+        self.assertEqual(["go", "mod", "download", "-json", coordinate], run.call_args_list[1].args[0])
+        sleep.assert_called_once_with(1)
+        for old, new in [
+            ("sum.golang.org", "evil.example"),
+            ("tile/8/0/x056/058", "tile/8/0/x056/058?x=1"),
+            ("tile/8/0/x056/058", "tile/8/0/../058"),
+            ("INTERNAL_ERROR", "PROTOCOL_ERROR"),
+            ("stream ID 669", "stream ID 0"),
+            ("verifying go.mod", "verifying zip"),
+            ("received from peer", "checksum mismatch"),
+        ]:
+            with self.subTest(replacement=new):
+                malformed = json.dumps({"Path": "go.uber.org/multierr", "Version": "v1.9.0", "Error": error.replace(old, new)})
+                self.assertEqual([], helper.interrupted_downloads(malformed, ""))
+        self.assertEqual([], helper.interrupted_downloads(output + failure("SECURITY ERROR"), ""))
+        self.assertEqual([], helper.interrupted_downloads(output, "SECURITY ERROR"))
+        with (
+            mock.patch.object(helper.subprocess, "run", return_value=process(1, output)) as run,
+            mock.patch.object(helper.time, "sleep") as sleep,
+            mock.patch.object(helper.sys, "stdout"),
+        ):
+            self.assertEqual(1, helper.download())
+        self.assertEqual(3, run.call_count)
+        self.assertEqual([mock.call(1), mock.call(2)], sleep.call_args_list)
+
     def test_three_attempt_ceiling_and_one_two_second_delays(self) -> None:
         with (
             mock.patch.object(

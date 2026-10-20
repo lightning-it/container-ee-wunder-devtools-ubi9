@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prefetch Go modules; retry only bounded public-proxy ZIP transport errors.
+"""Prefetch Go modules; retry only bounded public Go service transport errors.
 
 Go owns cache cleanup, go.sum and sumdb verification. No build/get/tidy command
 is retried. Successful modules stay cached; retries address only failed pins.
@@ -55,6 +55,21 @@ def retryable_transport_error(error: str, coordinate: str, url: str) -> bool:
     return False
 
 
+def retryable_sumdb_transport_error(error: str, coordinate: str) -> bool:
+    """Recognize the observed official sumdb tile HTTP/2 stream interruption."""
+    prefix = (
+        f"{coordinate}: verifying go.mod: {coordinate}/go.mod: reading "
+        "https://sum.golang.org/"
+    )
+    if not error.startswith(prefix):
+        return False
+    return re.fullmatch(
+        r"tile/8/[0-9]+/(?:x[0-9]{3}/)*[0-9]{3}: stream error: "
+        r"stream ID [1-9][0-9]*; INTERNAL_ERROR; received from peer",
+        error[len(prefix) :],
+    ) is not None
+
+
 def interrupted_downloads(output: str, stderr: str) -> list[str]:
     """Fail closed on mixed, integrity, local, malformed or unknown errors."""
     if stderr.strip():
@@ -81,7 +96,8 @@ def interrupted_downloads(output: str, stderr: str) -> list[str]:
                 f"{proxy_escape(version)}.zip"
             )
             coordinate = f"{path}@{version}"
-            if not retryable_transport_error(error, coordinate, url):
+            if not (retryable_transport_error(error, coordinate, url)
+                    or retryable_sumdb_transport_error(error, coordinate)):
                 return []
             failed.append(coordinate)
     except (ValueError, TypeError):
@@ -112,7 +128,7 @@ def download() -> int:
             sys.stderr.write(result.stderr)
             return result.returncode if result.returncode > 0 else 1
         print(
-            f"Go module ZIP transport interrupted; retry {attempt + 1}/2 "
+            f"Go module transport interrupted; retry {attempt + 1}/2 "
             f"for {len(coordinates)} pinned module(s)",
             file=sys.stderr,
         )
