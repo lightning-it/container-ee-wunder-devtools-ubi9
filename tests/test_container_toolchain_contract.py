@@ -195,9 +195,9 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn('corepack "pnpm@${pnpm_version}" install', dockerfile)
         expected_security_versions = {
             "adm-zip": "0.6.1",
-            "brace-expansion": "5.0.11",
+            "brace-expansion": "5.0.12",
             "js-yaml": "4.3.2",
-            "smol-toml": "1.7.1",
+            "smol-toml": "1.9.0",
             "undici": "6.28.1",
         }
         for package, version in expected_security_versions.items():

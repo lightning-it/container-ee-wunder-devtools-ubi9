@@ -12,16 +12,20 @@ strictStorePkgContentCheck: true
 overrides:
   'markdown-it@^14': 14.3.2
   adm-zip: 0.6.1
-  brace-expansion: 5.0.11
+  brace-expansion: 5.0.12
   handlebars: 4.7.10
   ip-address: 10.7.1
   js-yaml: 4.3.2
   simple-git: 4.0.2
   '@simple-git/argv-parser': 2.0.1
   pacote: 21.5.1
-  smol-toml: 1.7.1
+  smol-toml: 1.9.0
   tar: 7.5.22
   undici: 6.28.1
 minimumReleaseAgeExclude:
   # Renovate security update: ip-address@10.7.1
   - ip-address@10.7.1
+  # Renovate security update: brace-expansion@5.0.12
+  - brace-expansion@5.0.12
+  # Renovate security update: smol-toml@1.9.0
+  - smol-toml@1.9.0
