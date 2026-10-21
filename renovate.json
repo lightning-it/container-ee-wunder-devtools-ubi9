@@ -269,6 +269,28 @@
   ],
   "packageRules": [
     {
+      "description": "Keep markdown-it 14 on the patched compatible security line",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepNames": [
+        "markdown-it"
+      ],
+      "matchCurrentVersion": "/^14\\./",
+      "allowedVersions": ">=14.3.3 <15"
+    },
+    {
+      "description": "Keep markdown-it 15 on the patched compatible security line",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepNames": [
+        "markdown-it"
+      ],
+      "matchCurrentVersion": "/^15\\./",
+      "allowedVersions": ">=15.0.3 <16"
+    },
+    {
       "description": "Update Cosign signed tag, source commit, version and archive SHA-256 together in a reviewed manual change",
       "matchManagers": ["custom.regex"],
       "matchDepNames": ["sigstore/cosign"],

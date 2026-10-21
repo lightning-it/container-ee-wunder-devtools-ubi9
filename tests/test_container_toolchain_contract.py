@@ -147,7 +147,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ARG VNU_JRE_VERSION=17.0.20_8",
             "ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27",
             "ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2",
-            "ARG GO_VERSION=1.26.9",
+            "ARG GO_VERSION=1.26.10",
             "ARG GO_X_CRYPTO_VERSION=0.57.0",
             "ARG GO_X_NET_VERSION=0.60.0",
             "ARG GO_X_TEXT_VERSION=0.42.0",
