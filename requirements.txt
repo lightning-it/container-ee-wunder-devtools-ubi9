@@ -77,8 +77,8 @@ bandit==1.9.4
 # Keep collection modules usable without an implicit, unverified pip install.
 boto3>=1.34.0
 botocore>=1.34.0
-paramiko
-azure-identity
-python-dateutil
-vmware-vcenter
-vmware-vapi-common-client
+paramiko==5.1.0
+azure-identity==1.26.0
+python-dateutil==2.9.0.post0
+vmware-vcenter==9.1.1.0
+vmware-vapi-common-client==9.1.1.0
