@@ -47,10 +47,12 @@ def declarations(read):
     ee = read("meta/execution-environment.yml")
     if ee is None:
         ee = read("meta/execution-environment.yaml")
+    dependency = None
     if ee is not None:
         config = yaml.safe_load(ee) or {}
         dependency = (config.get("dependencies") or {}).get("python")
-        paths = [relative_name(dependency)] if dependency else []
+    if dependency:
+        paths = [relative_name(dependency)]
     else:
         paths = ["requirements.txt"] if read("requirements.txt") is not None else []
     seen = set()

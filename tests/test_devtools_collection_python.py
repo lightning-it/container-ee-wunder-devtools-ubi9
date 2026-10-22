@@ -57,6 +57,21 @@ class CollectionPythonTests(unittest.TestCase):
             [r.name for r in checker.declarations(files.get)], ["requests", "hvac"]
         )
 
+    def test_system_only_ee_falls_back_to_root_python_requirements(self):
+        for suffix in ("yml", "yaml"):
+            with self.subTest(suffix=suffix):
+                files = {
+                    f"meta/execution-environment.{suffix}": "dependencies:\n  system: bindep.txt\n",
+                    "requirements.txt": "python-dateutil>=2.9\n",
+                }
+                requirements = checker.declarations(files.get)
+                with self.assertRaisesRegex(ValueError, "python-dateutil"):
+                    checker.validate(requirements, {}.get)
+                self.assertEqual(
+                    len(checker.validate(requirements, {"python-dateutil": "2.9.0.post0"}.get)),
+                    1,
+                )
+
     def test_missing_and_escaping_include_fail_closed(self):
         for value in ["missing.txt", "../outside.txt"]:
             with self.subTest(value=value), self.assertRaises(ValueError):
