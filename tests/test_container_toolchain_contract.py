@@ -49,7 +49,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
 
     def test_language_dependent_repository_checks_are_pinned_in_image(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        requirements = (ROOT / "requirements.in").read_text(encoding="utf-8")
         requirements_lock = (ROOT / "requirements.lock").read_text(encoding="utf-8")
         container_package = json.loads(
             (ROOT / "container-toolchain/package.json").read_text(encoding="utf-8")
@@ -87,7 +87,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             self.assertNotIn(
                 normalized_name,
                 direct_requirements,
-                f"{normalized_name} must occur only once in requirements.txt",
+                f"{normalized_name} must occur only once in requirements.in",
             )
             self.assertTrue(
                 requirement.specifier,
@@ -95,7 +95,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             )
             direct_requirements[normalized_name] = requirement
 
-        self.assertTrue(direct_requirements, "requirements.txt must not be empty")
+        self.assertTrue(direct_requirements, "requirements.in must not be empty")
         for normalized_name, requirement in direct_requirements.items():
             self.assertIn(
                 normalized_name,

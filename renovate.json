@@ -269,6 +269,15 @@
   ],
   "packageRules": [
     {
+      "description": "Maintain Source-owned Python inputs and hash locks in shared-assets-lit only",
+      "matchFileNames": [
+        "requirements.in",
+        "requirements.lock",
+        "requirements.txt"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Keep markdown-it 14 on the patched compatible security line",
       "matchManagers": [
         "npm"

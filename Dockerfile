@@ -666,7 +666,7 @@ ENV JAVA_HOME=/opt/java \
     PATH=/opt/java/bin:/opt/node/bin:$PATH
 
 # Python deps: this *is* the right place for pip
-COPY requirements.txt /tmp/requirements.txt
+COPY requirements.in /tmp/requirements.in
 COPY requirements.lock /tmp/requirements.lock
 COPY scripts/verify-bandit-runtime.py /usr/local/bin/verify-bandit-runtime.py
 COPY collections/offline-requirements.lock.yml /usr/local/share/wunder-devtools/collections.lock.yml
@@ -676,7 +676,7 @@ COPY scripts/verify_devtools_collection_python.py /usr/local/bin/verify_devtools
 RUN python -m pip install --retries 2 --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --retries 2 --resume-retries 0 --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
     python /usr/local/bin/verify-bandit-runtime.py && \
-    rm -f /tmp/requirements.txt /tmp/requirements.lock && \
+    rm -f /tmp/requirements.in /tmp/requirements.lock && \
     python /usr/local/bin/install_devtools_collections.py \
       --lock /usr/local/share/wunder-devtools/collections.lock.yml \
       --collections-path /usr/share/ansible/collections && \
