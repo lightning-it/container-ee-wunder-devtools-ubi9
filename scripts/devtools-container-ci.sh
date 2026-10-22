@@ -409,6 +409,11 @@ run_hadolint() {
 
 run_container_build() {
   load_container_inputs
+  if [ "$repo_name" = container-ee-wunder-devtools-ubi9 ]; then
+    python3 -B scripts/verify_devtools_collection_python.py \
+      --collection-lock collections/offline-requirements.lock.yml \
+      --python-lock requirements.lock
+  fi
   require_docker
   set_nested_socket_args
   docker run --rm \

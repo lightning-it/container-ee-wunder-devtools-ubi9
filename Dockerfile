@@ -672,6 +672,7 @@ COPY scripts/verify-bandit-runtime.py /usr/local/bin/verify-bandit-runtime.py
 COPY collections/offline-requirements.lock.yml /usr/local/share/wunder-devtools/collections.lock.yml
 COPY scripts/devtools_collection_inventory.py /usr/local/bin/devtools_collection_inventory.py
 COPY scripts/install_devtools_collections.py /usr/local/bin/install_devtools_collections.py
+COPY scripts/verify_devtools_collection_python.py /usr/local/bin/verify_devtools_collection_python.py
 RUN python -m pip install --retries 2 --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --retries 2 --resume-retries 0 --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
     python /usr/local/bin/verify-bandit-runtime.py && \
@@ -682,6 +683,12 @@ RUN python -m pip install --retries 2 --no-cache-dir --upgrade "pip==${PIP_VERSI
     python /usr/local/bin/devtools_collection_inventory.py \
       --lock /usr/local/share/wunder-devtools/collections.lock.yml \
       --collections-root /usr/share/ansible/collections/ansible_collections && \
+    python -m pip check && \
+    python /usr/local/bin/verify_devtools_collection_python.py \
+      --collection-lock /usr/local/share/wunder-devtools/collections.lock.yml \
+      --installed-root /usr/share/ansible/collections/ansible_collections && \
+    PYTHONPATH=/usr/share/ansible/collections python -c \
+      "from ansible_collections.hetzner.hcloud.plugins.module_utils._client import client_check_required_lib; client_check_required_lib()" && \
     ansible --version && ansible-galaxy --version && antsibull-changelog --version && \
     shellcheck --version && actionlint --version && pre-commit --version && \
     ruff --version && mypy --version && uv --version && \
