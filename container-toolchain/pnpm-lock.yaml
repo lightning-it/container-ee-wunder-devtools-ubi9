@@ -15,7 +15,7 @@ overrides:
   simple-git: 4.0.2
   '@simple-git/argv-parser': 2.0.1
   pacote: 21.5.1
-  smol-toml: 1.9.0
+  smol-toml: 1.9.1
   tar: 7.5.22
   undici: 6.28.1
 
@@ -57,8 +57,8 @@ importers:
         specifier: 44.145.2
         version: 44.145.2(supports-color@7.2.0)(typanion@3.14.0)
       smol-toml:
-        specifier: 1.9.0
-        version: 1.9.0
+        specifier: 1.9.1
+        version: 1.9.1
       tar:
         specifier: 7.5.22
         version: 7.5.22
@@ -2559,8 +2559,8 @@ packages:
     resolution: {integrity: sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==}
     engines: {node: '>= 6.0.0', npm: '>= 3.0.0'}
 
-  smol-toml@1.9.0:
-    resolution: {integrity: sha512-hpd+HLON7HdZXqYchMM/+LaTTbdK0AU3NngIJ4KVyWbY9bfQqdL9cD+4yf6dUoU2Ap4VsU0JkQi6FxAI1B2mXQ==}
+  smol-toml@1.9.1:
+    resolution: {integrity: sha512-j7WyPdf0CJoutMzMoPLF/bVXHtKZIT9Rb4eGeEbWw8X2t5oirjPgpL+OpaENZrILYaXqYwnVH+qgUwVbl+pUJQ==}
     engines: {node: '>= 18'}
 
   socks-proxy-agent@8.0.5:
@@ -4797,7 +4797,7 @@ snapshots:
       markdownlint: 0.41.1(supports-color@7.2.0)
       markdownlint-cli2-formatter-default: 0.0.6(markdownlint-cli2@0.23.2(supports-color@7.2.0))
       micromatch: 4.0.8
-      smol-toml: 1.9.0
+      smol-toml: 1.9.1
     transitivePeerDependencies:
       - supports-color
 
@@ -5867,7 +5867,7 @@ snapshots:
 
   smart-buffer@4.2.0: {}
 
-  smol-toml@1.9.0: {}
+  smol-toml@1.9.1: {}
 
   socks-proxy-agent@8.0.5(supports-color@7.2.0):
     dependencies:
