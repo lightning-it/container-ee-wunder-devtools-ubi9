@@ -20,7 +20,7 @@ overrides:
   simple-git: 4.0.2
   '@simple-git/argv-parser': 2.0.1
   pacote: 21.5.1
-  smol-toml: 1.9.0
+  smol-toml: 1.9.1
   tar: 7.5.22
   undici: 6.28.1
 minimumReleaseAgeExclude:
