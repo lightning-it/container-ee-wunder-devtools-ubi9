@@ -61,7 +61,7 @@ ARG COSIGN_VERSION=3.0.6
 ARG COSIGN_SOURCE_COMMIT=f1ad3ee952313be5d74a49d67ba0aa8d0d5e351f
 ARG COSIGN_SOURCE_SHA256=8be1ce19a8865baaa7e4aa44fcee27ae6a3247ba9ce05f145c2f3f5b2ed485d9
 ARG COSIGN_FULCIO_VERSION=1.8.6
-ARG COSIGN_REKOR_VERSION=1.5.2
+ARG COSIGN_REKOR_VERSION=1.5.5
 
 # The signed tag binds the unchanged CLI source. Apply explicit security
 # dependency replacements, then bind the resulting locks before offline build.
