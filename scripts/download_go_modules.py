@@ -70,13 +70,21 @@ def retryable_sumdb_transport_error(error: str, coordinate: str) -> bool:
     ) is not None
 
 
+def retryable_proxy_mod_transport_error(error: str, coordinate: str, url: str) -> bool:
+    """Bind the observed official .mod stream failure to its exact pin."""
+    prefix = f'{coordinate}: read "{url}": '
+    return error.startswith(prefix) and re.fullmatch(
+        r"stream error: stream ID [1-9][0-9]*; INTERNAL_ERROR; received from peer",
+        error[len(prefix) :],
+    ) is not None
+
+
 def interrupted_downloads(output: str, stderr: str) -> list[str]:
     """Fail closed on mixed, integrity, local, malformed or unknown errors."""
-    if stderr.strip():
-        return []
     decoder = json.JSONDecoder()
     remaining = output.strip()
     failed = []
+    mod_diagnostics = []
     try:
         while remaining:
             item, end = decoder.raw_decode(remaining)
@@ -96,11 +104,17 @@ def interrupted_downloads(output: str, stderr: str) -> list[str]:
                 f"{proxy_escape(version)}.zip"
             )
             coordinate = f"{path}@{version}"
-            if not (retryable_transport_error(error, coordinate, url)
-                    or retryable_sumdb_transport_error(error, coordinate)):
+            if retryable_proxy_mod_transport_error(error, coordinate, url[:-4] + ".mod"):
+                mod_diagnostics.append(f"go: {error}\n")
+            elif not (retryable_transport_error(error, coordinate, url)
+                      or retryable_sumdb_transport_error(error, coordinate)):
                 return []
             failed.append(coordinate)
     except (ValueError, TypeError):
+        return []
+    # The observed .mod failure emits both JSON and the identical Go diagnostic.
+    # Admit only that paired form; JSON-only or extra/reordered stderr is unknown.
+    if stderr != "".join(mod_diagnostics):
         return []
     return list(dict.fromkeys(failed))
 

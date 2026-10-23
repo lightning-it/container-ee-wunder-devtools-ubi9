@@ -56,9 +56,9 @@ EXPECTED = {
         267852,
     ),
     "community.hrobot": (
-        "2.7.2",
-        "6cc374ebede982027b9f6533100a2f624d3f3b7c961781cb54a5c3803f30063d",
-        134752,
+        "2.8.0",
+        "39957c6bb314b5183e06a852098dc3d194de0336ab0dac1923ed40901b137396",
+        135319,
     ),
     "community.library_inventory_filtering_v1": (
         "1.1.5",
@@ -71,9 +71,9 @@ EXPECTED = {
         658480,
     ),
     "hetzner.hcloud": (
-        "6.10.0",
-        "f91f6f4761cce1cdea052a5e64e22beabb04dcc8f213729d0bc1c2835ab12ebd",
-        268821,
+        "6.12.0",
+        "f8d5740018742f6f819c42cdac72a7d2b56a3e8ae3853eb7798e0e349b2ce6ce",
+        270451,
     ),
     "lit.foundational": (
         "1.35.0",
