@@ -51,8 +51,8 @@ importers:
         specifier: 11.23.0
         version: 11.23.0
       prettier:
-        specifier: 3.9.6
-        version: 3.9.6
+        specifier: 3.9.10
+        version: 3.9.10
       renovate:
         specifier: 44.145.2
         version: 44.145.2(supports-color@7.2.0)(typanion@3.14.0)
@@ -2341,8 +2341,8 @@ packages:
     engines: {node: '>=22.13'}
     hasBin: true
 
-  prettier@3.9.6:
-    resolution: {integrity: sha512-OpN0zzVdiaiAhxpuuj5efpIS4sY9j7bY6uR5mnj5yPzGkdkjNKSJeUThPb60Jw29QuAZgA4o+/iB49kFiaBX6g==}
+  prettier@3.9.10:
+    resolution: {integrity: sha512-skGHTH1Yb9QvaTC4hWnRTzEYtCpApF0UMBPz+t/0ZPzP8ihefo/btKd+QA7pUE0fEwA1SbS/NmhyEcstdXOIdA==}
     engines: {node: '>=14'}
     hasBin: true
 
@@ -5485,7 +5485,7 @@ snapshots:
 
   pnpm@11.23.0: {}
 
-  prettier@3.9.6: {}
+  prettier@3.9.10: {}
 
   prettier@3.9.9: {}
 
