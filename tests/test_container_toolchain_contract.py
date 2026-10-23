@@ -49,7 +49,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
 
     def test_language_dependent_repository_checks_are_pinned_in_image(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        requirements = (ROOT / "requirements.in").read_text(encoding="utf-8")
         requirements_lock = (ROOT / "requirements.lock").read_text(encoding="utf-8")
         container_package = json.loads(
             (ROOT / "container-toolchain/package.json").read_text(encoding="utf-8")
@@ -87,7 +87,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             self.assertNotIn(
                 normalized_name,
                 direct_requirements,
-                f"{normalized_name} must occur only once in requirements.txt",
+                f"{normalized_name} must occur only once in requirements.in",
             )
             self.assertTrue(
                 requirement.specifier,
@@ -95,7 +95,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             )
             direct_requirements[normalized_name] = requirement
 
-        self.assertTrue(direct_requirements, "requirements.txt must not be empty")
+        self.assertTrue(direct_requirements, "requirements.in must not be empty")
         for normalized_name, requirement in direct_requirements.items():
             self.assertIn(
                 normalized_name,
@@ -147,7 +147,7 @@ class ContainerToolchainContractTests(unittest.TestCase):
             "ARG VNU_JRE_VERSION=17.0.20_8",
             "ARG VNU_JRE_AMD64_SHA256=ef491a51a46ef90cc47fbc4abb219fde32483ff91be5ec66ddc896df43524b27",
             "ARG VNU_JRE_ARM64_SHA256=9d14a95e07c44bc48666625162baf40db9da4dcb192bfc3e43047790693061a2",
-            "ARG GO_VERSION=1.26.9",
+            "ARG GO_VERSION=1.26.10",
             "ARG GO_X_CRYPTO_VERSION=0.57.0",
             "ARG GO_X_NET_VERSION=0.60.0",
             "ARG GO_X_TEXT_VERSION=0.42.0",
@@ -195,9 +195,9 @@ class ContainerToolchainContractTests(unittest.TestCase):
         self.assertIn('corepack "pnpm@${pnpm_version}" install', dockerfile)
         expected_security_versions = {
             "adm-zip": "0.6.1",
-            "brace-expansion": "5.0.11",
+            "brace-expansion": "5.0.12",
             "js-yaml": "4.3.2",
-            "smol-toml": "1.7.1",
+            "smol-toml": "1.9.0",
             "undici": "6.28.1",
         }
         for package, version in expected_security_versions.items():

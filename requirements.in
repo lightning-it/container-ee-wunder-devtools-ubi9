@@ -28,12 +28,16 @@ hvac==2.4.0
 pyyaml==6.0.3
 yamllint>=1.35.0,<2.0.0
 pre-commit==4.6.2
-# Security fixes for activation-path, seed-wheel and prompt handling.
-virtualenv==21.14.5
+# Central test runner; Python >=3.10, validated against the image Python 3.11.
+pytest==9.1.1
+# Security fixes for activation paths, interpreter launchers and seed wheels.
+virtualenv==21.14.12
+# Fix CVE-2026-114134 in the transitive Black formatter dependency.
+black==26.10.1
 mypy==2.3.1
 ruff==0.16.4
 types-PyYAML==6.0.12.20260815
-uv==0.12.5
+uv==0.13.4
 
 # ---------------------------------------------------------------------------
 # Shell linting
@@ -70,3 +74,13 @@ copr-cli==2.6
 
 # Source scanning selected by LTN-388; no optional scanner extras.
 bandit==1.9.4
+
+# Python runtime requirements declared by the pinned Galaxy collection inventory.
+# Keep collection modules usable without an implicit, unverified pip install.
+boto3>=1.34.0
+botocore>=1.34.0
+paramiko==5.1.0
+azure-identity==1.26.0
+python-dateutil==2.9.0.post0
+vmware-vcenter==9.1.1.0
+vmware-vapi-common-client==9.1.1.0

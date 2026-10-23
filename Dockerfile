@@ -6,14 +6,15 @@ LABEL org.opencontainers.image.description="Devtools Execution Environment (UBI 
 LABEL org.opencontainers.image.source="https://github.com/lightning-it/container-ee-wunder-devtools-ubi9"
 
 ARG TARGETARCH
-ARG GO_VERSION=1.26.9
-ARG GO_AMD64_SHA256=42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d
-ARG GO_ARM64_SHA256=4a97373d49fcacdcf3694fea368a500b00ee3e963974f3e7514132717632f052
+ARG GO_VERSION=1.26.10
+ARG GO_AMD64_SHA256=ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5
+ARG GO_ARM64_SHA256=3f4227ce7b206a513e794f1393adb473a07b46e94d18bd15d1c684bbb7319797
 ARG GO_X_CRYPTO_VERSION=0.57.0
 ARG GO_X_MOD_VERSION=0.40.0
 ARG GO_X_NET_VERSION=0.60.0
 ARG GO_X_TEXT_VERSION=0.42.0
 ARG GO_GRPC_VERSION=1.83.2
+ARG GO_KLAUSPOST_COMPRESS_VERSION=1.18.7
 
 # hadolint ignore=DL3002
 USER 0
@@ -77,6 +78,7 @@ RUN curl -fsSLo /tmp/cosign-tag.json \
     go mod edit \
       "-replace=github.com/sigstore/fulcio=github.com/sigstore/fulcio@v${COSIGN_FULCIO_VERSION}" \
       "-replace=github.com/sigstore/rekor=github.com/sigstore/rekor@v${COSIGN_REKOR_VERSION}" \
+      "-replace=github.com/klauspost/compress=github.com/klauspost/compress@v${GO_KLAUSPOST_COMPRESS_VERSION}" \
       "-replace=golang.org/x/crypto=golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
       "-replace=golang.org/x/mod=golang.org/x/mod@v${GO_X_MOD_VERSION}" \
       "-replace=golang.org/x/net=golang.org/x/net@v${GO_X_NET_VERSION}" \
@@ -106,6 +108,7 @@ RUN --network=none cd /tmp/cosign-source && \
     for coordinate in \
       "github.com/sigstore/fulcio@v${COSIGN_FULCIO_VERSION}" \
       "github.com/sigstore/rekor@v${COSIGN_REKOR_VERSION}" \
+      "github.com/klauspost/compress@v${GO_KLAUSPOST_COMPRESS_VERSION}" \
       "golang.org/x/crypto@v${GO_X_CRYPTO_VERSION}" \
       "golang.org/x/mod@v${GO_X_MOD_VERSION}" \
       "golang.org/x/net@v${GO_X_NET_VERSION}" \
@@ -225,7 +228,12 @@ RUN /usr/local/lib/container-build-go-tool.sh \
       github.com/terraform-linters/tflint "v${TFLINT_VERSION}" . tflint \
       "golang.org/x/mod@v${GO_X_MOD_VERSION}" \
       "golang.org/x/net@v${GO_X_NET_VERSION}" \
-      "google.golang.org/grpc@v${GO_GRPC_VERSION}"
+      "google.golang.org/grpc@v${GO_GRPC_VERSION}" \
+      "github.com/klauspost/compress@v${GO_KLAUSPOST_COMPRESS_VERSION}" && \
+    test "$(go version -m /out/tflint | awk \
+      '$1 == "dep" && $2 == "github.com/klauspost/compress" { version = $3 } \
+       $1 == "=>" && $2 == "github.com/klauspost/compress" { version = $3 } \
+       END { print version }')" = "v${GO_KLAUSPOST_COMPRESS_VERSION}"
 
 RUN /usr/local/lib/container-build-go-tool.sh \
       github.com/terraform-docs/terraform-docs "v${TF_DOCS_VERSION}" . terraform-docs \
@@ -658,22 +666,29 @@ ENV JAVA_HOME=/opt/java \
     PATH=/opt/java/bin:/opt/node/bin:$PATH
 
 # Python deps: this *is* the right place for pip
-COPY requirements.txt /tmp/requirements.txt
+COPY requirements.in /tmp/requirements.in
 COPY requirements.lock /tmp/requirements.lock
 COPY scripts/verify-bandit-runtime.py /usr/local/bin/verify-bandit-runtime.py
 COPY collections/offline-requirements.lock.yml /usr/local/share/wunder-devtools/collections.lock.yml
 COPY scripts/devtools_collection_inventory.py /usr/local/bin/devtools_collection_inventory.py
 COPY scripts/install_devtools_collections.py /usr/local/bin/install_devtools_collections.py
+COPY scripts/verify_devtools_collection_python.py /usr/local/bin/verify_devtools_collection_python.py
 RUN python -m pip install --retries 2 --no-cache-dir --upgrade "pip==${PIP_VERSION}" && \
     python -m pip install --retries 2 --resume-retries 0 --no-cache-dir --require-hashes -r /tmp/requirements.lock && \
     python /usr/local/bin/verify-bandit-runtime.py && \
-    rm -f /tmp/requirements.txt /tmp/requirements.lock && \
+    rm -f /tmp/requirements.in /tmp/requirements.lock && \
     python /usr/local/bin/install_devtools_collections.py \
       --lock /usr/local/share/wunder-devtools/collections.lock.yml \
       --collections-path /usr/share/ansible/collections && \
     python /usr/local/bin/devtools_collection_inventory.py \
       --lock /usr/local/share/wunder-devtools/collections.lock.yml \
       --collections-root /usr/share/ansible/collections/ansible_collections && \
+    python -m pip check && \
+    python /usr/local/bin/verify_devtools_collection_python.py \
+      --collection-lock /usr/local/share/wunder-devtools/collections.lock.yml \
+      --installed-root /usr/share/ansible/collections/ansible_collections && \
+    PYTHONPATH=/usr/share/ansible/collections python -c \
+      "from ansible_collections.hetzner.hcloud.plugins.module_utils._client import client_check_required_lib; client_check_required_lib()" && \
     ansible --version && ansible-galaxy --version && antsibull-changelog --version && \
     shellcheck --version && actionlint --version && pre-commit --version && \
     ruff --version && mypy --version && uv --version && \

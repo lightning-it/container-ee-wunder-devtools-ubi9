@@ -38,10 +38,10 @@ collections:
     sha256: "090e1b52f2889887baa3792abc4284f700200ae0359f534a14d0a34951db8e57"
     size: 267852
   - name: community.hrobot
-    version: "2.7.2"
-    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-hrobot-2.7.2.tar.gz"
-    sha256: "6cc374ebede982027b9f6533100a2f624d3f3b7c961781cb54a5c3803f30063d"
-    size: 134752
+    version: "2.8.0"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-hrobot-2.8.0.tar.gz"
+    sha256: "39957c6bb314b5183e06a852098dc3d194de0336ab0dac1923ed40901b137396"
+    size: 135319
   - name: community.library_inventory_filtering_v1
     version: "1.1.5"
     url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-library_inventory_filtering_v1-1.1.5.tar.gz"
@@ -53,10 +53,10 @@ collections:
     sha256: "80910a58c552973d23ec3ecbdeaad181bcce140ffe244db658079bf695a22c0f"
     size: 658480
   - name: hetzner.hcloud
-    version: "6.10.0"
-    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/hetzner-hcloud-6.10.0.tar.gz"
-    sha256: "f91f6f4761cce1cdea052a5e64e22beabb04dcc8f213729d0bc1c2835ab12ebd"
-    size: 268821
+    version: "6.12.0"
+    url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/hetzner-hcloud-6.12.0.tar.gz"
+    sha256: "f8d5740018742f6f819c42cdac72a7d2b56a3e8ae3853eb7798e0e349b2ce6ce"
+    size: 270451
   - name: lit.foundational
     version: "1.35.0"
     url: "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/lit-foundational-1.35.0.tar.gz"

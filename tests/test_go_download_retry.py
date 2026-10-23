@@ -29,6 +29,74 @@ def process(code: int, output: str, error: str = "") -> subprocess.CompletedProc
 
 
 class GoDownloadTests(unittest.TestCase):
+    def test_proxy_mod_rejects_unknown_or_unpaired_diagnostics(self) -> None:
+        coordinate = f"{PATH}@{VERSION}"
+        error = (f'{coordinate}: read "{URL[:-4]}.mod": '
+                 "stream error: stream ID 171; INTERNAL_ERROR; received from peer")
+        output, mirror = failure(error), f"go: {error}\n"
+        # JSON-only is deliberately outside the observed paired .mod contract.
+        for stderr in ("", mirror * 2, mirror + "\n", "SECURITY ERROR\n" + mirror,
+                       mirror + "SECURITY ERROR\n", mirror.replace("171", "172")):
+            with self.subTest(stderr=stderr):
+                self.assertEqual([], helper.interrupted_downloads(output, stderr))
+        self.assertEqual([], helper.interrupted_downloads("{}", mirror))
+        for old, new in (
+            ("proxy.golang.org/", "proxy.golang.org.evil.example/"),
+            ("https://", "http://"), (".mod", ".zip"), (".mod", ".info"),
+            (".mod", ".mod?x=1"), (".mod", ".mod#x"),
+            ("stream ID 171", "stream ID 0"), ("INTERNAL_ERROR", "PROTOCOL_ERROR"),
+            ("received from peer", "checksum mismatch"), ("read ", "Get "),
+            ("v2.36.1.mod", "v2.36.2.mod"),
+        ):
+            changed = error.replace(old, new)
+            with self.subTest(change=(old, new)):
+                self.assertEqual([], helper.interrupted_downloads(
+                    failure(changed), f"go: {changed}\n"))
+        for mixed in (output + failure("checksum mismatch"), output + "garbage"):
+            self.assertEqual([], helper.interrupted_downloads(mixed, mirror))
+        with (
+            mock.patch.object(helper.subprocess, "run", return_value=process(1, output, mirror)) as run,
+            mock.patch.object(helper.time, "sleep") as sleep,
+            mock.patch.object(helper.sys, "stdout"), mock.patch.object(helper.sys, "stderr"),
+        ):
+            self.assertEqual(1, helper.download())
+        self.assertEqual(3, run.call_count)
+        self.assertEqual([mock.call(1), mock.call(2)], sleep.call_args_list)
+
+    def test_proxy_mod_exact_order_and_other_known_errors(self) -> None:
+        def mod_error(path: str) -> tuple[str, str]:
+            error = (f'{path}@v1.0.0: read "https://proxy.golang.org/'
+                     f'{helper.proxy_escape(path)}/@v/v1.0.0.mod": '
+                     "stream error: stream ID 171; INTERNAL_ERROR; received from peer")
+            return json.dumps({"Path": path, "Version": "v1.0.0", "Error": error}), f"go: {error}\n"
+        first, err1 = mod_error("github.com/Example/One")
+        second, err2 = mod_error("example.org/two")
+        output = first + second + failure()
+        self.assertEqual(["github.com/Example/One@v1.0.0", "example.org/two@v1.0.0",
+                          f"{PATH}@{VERSION}"], helper.interrupted_downloads(output, err1 + err2))
+        self.assertEqual([], helper.interrupted_downloads(output, err2 + err1))
+        self.assertEqual([], helper.interrupted_downloads(output, err1))
+        self.assertEqual([], helper.interrupted_downloads(failure(), err1))
+
+    def test_observed_proxy_mod_http2_with_exact_stderr_mirror(self) -> None:
+        path = "github.com/lxc/incus-os/incus-osd"
+        version = "v0.0.0-20261016011649-0835c666d48c"
+        coordinate = f"{path}@{version}"
+        error = (f'{coordinate}: read "https://proxy.golang.org/{path}/@v/{version}.mod": '
+                 "stream error: stream ID 171; INTERNAL_ERROR; received from peer")
+        output = json.dumps({"Path": path, "Version": version, "Error": error})
+        stderr = f"go: {error}\n"
+        self.assertEqual([coordinate], helper.interrupted_downloads(output, stderr))
+        with (
+            mock.patch.object(helper.subprocess, "run", side_effect=[
+                process(1, output, stderr), process(0, "{}")]) as run,
+            mock.patch.object(helper.time, "sleep") as sleep,
+        ):
+            self.assertEqual(0, helper.download())
+        self.assertEqual(["go", "mod", "download", "-json", coordinate],
+                         run.call_args_list[1].args[0])
+        sleep.assert_called_once_with(1)
+
     def test_retries_failed_pin_only_and_preserves_successful_cache(self) -> None:
         output = json.dumps({"Path": "example.org/ok", "Version": "v1.0.0"})
         with (
@@ -48,6 +116,45 @@ class GoDownloadTests(unittest.TestCase):
             run.call_args_list[1].args[0],
         )
         sleep.assert_called_once_with(1)
+
+    def test_sumdb_http2_failure_retries_only_the_failed_pin(self) -> None:
+        coordinate = "go.uber.org/multierr@v1.9.0"
+        error = (
+            f"{coordinate}: verifying go.mod: {coordinate}/go.mod: reading "
+            "https://sum.golang.org/tile/8/0/x056/058: stream error: "
+            "stream ID 669; INTERNAL_ERROR; received from peer"
+        )
+        output = json.dumps({"Path": "go.uber.org/multierr", "Version": "v1.9.0", "Error": error})
+        with (
+            mock.patch.object(helper.subprocess, "run", side_effect=[process(1, output), process(0, "{}")]) as run,
+            mock.patch.object(helper.time, "sleep") as sleep,
+            mock.patch.object(helper.sys, "stdout"),
+        ):
+            self.assertEqual(0, helper.download())
+        self.assertEqual(["go", "mod", "download", "-json", coordinate], run.call_args_list[1].args[0])
+        sleep.assert_called_once_with(1)
+        for old, new in [
+            ("sum.golang.org", "evil.example"),
+            ("tile/8/0/x056/058", "tile/8/0/x056/058?x=1"),
+            ("tile/8/0/x056/058", "tile/8/0/../058"),
+            ("INTERNAL_ERROR", "PROTOCOL_ERROR"),
+            ("stream ID 669", "stream ID 0"),
+            ("verifying go.mod", "verifying zip"),
+            ("received from peer", "checksum mismatch"),
+        ]:
+            with self.subTest(replacement=new):
+                malformed = json.dumps({"Path": "go.uber.org/multierr", "Version": "v1.9.0", "Error": error.replace(old, new)})
+                self.assertEqual([], helper.interrupted_downloads(malformed, ""))
+        self.assertEqual([], helper.interrupted_downloads(output + failure("SECURITY ERROR"), ""))
+        self.assertEqual([], helper.interrupted_downloads(output, "SECURITY ERROR"))
+        with (
+            mock.patch.object(helper.subprocess, "run", return_value=process(1, output)) as run,
+            mock.patch.object(helper.time, "sleep") as sleep,
+            mock.patch.object(helper.sys, "stdout"),
+        ):
+            self.assertEqual(1, helper.download())
+        self.assertEqual(3, run.call_count)
+        self.assertEqual([mock.call(1), mock.call(2)], sleep.call_args_list)
 
     def test_three_attempt_ceiling_and_one_two_second_delays(self) -> None:
         with (
